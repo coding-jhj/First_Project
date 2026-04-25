@@ -41,13 +41,15 @@ class YoloDetector(context: Context) {
 
         val output = session.run(mapOf(inputName to tensor))
         val outputTensor = output[0] as ai.onnxruntime.OnnxTensor
-        // 출력: [1, 84, 8400] → flat FloatBuffer (크기 = 705,600)
+        val shape      = outputTensor.info.shape  // [1, numFeatures, 8400]
+        val numFeatures = shape[1].toInt()         // 84(COCO) or 85(indoor)
+        val numDet      = shape[2].toInt()         // 8400
         val flatBuf = outputTensor.floatBuffer
 
         tensor.close()
         output.close()
 
-        return postProcess(flatBuf, 84, 8400)
+        return postProcess(flatBuf, numFeatures, numDet)
     }
 
     private fun bitmapToNCHW(bitmap: Bitmap): FloatBuffer {
@@ -71,14 +73,15 @@ class YoloDetector(context: Context) {
     }
 
     private fun postProcess(buf: java.nio.FloatBuffer, numFeatures: Int, numDet: Int): List<Detection> {
-        // buf layout: [feature_0 * 8400, feature_1 * 8400, ..., feature_83 * 8400]
-        // buf[j * numDet + i] = feature j for detection i
+        // buf layout: [feature_0 * 8400, ..., feature_(numFeatures-1) * 8400]
+        // numFeatures = 4(bbox) + numClasses (84 for COCO80, 85 for indoor81)
+        val numClasses = numFeatures - 4
         val candidates = mutableListOf<Detection>()
 
         for (i in 0 until numDet) {
             var maxScore = confThreshold
             var maxClass = -1
-            for (c in 0 until 80) {
+            for (c in 0 until numClasses) {
                 val s = buf.get((4 + c) * numDet + i)
                 if (s > maxScore) { maxScore = s; maxClass = c }
             }

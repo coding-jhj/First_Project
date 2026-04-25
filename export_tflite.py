@@ -6,7 +6,10 @@ yolo11m.pt → ONNX 변환 스크립트
 from ultralytics import YOLO
 import shutil, os
 
-model = YOLO("yolo11m.pt")
+import os
+_src = "yolo11m_indoor.pt" if os.path.exists("yolo11m_indoor.pt") else "yolo11m.pt"
+print(f"내보낼 모델: {_src}")
+model = YOLO(_src)
 model.export(format="onnx", imgsz=640, half=False, simplify=True)
 
 src = "yolo11m.onnx"
