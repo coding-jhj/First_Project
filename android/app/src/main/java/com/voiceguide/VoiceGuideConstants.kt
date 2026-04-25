@@ -2,6 +2,8 @@ package com.voiceguide
 
 val COCO_KO = mapOf(
     0 to "사람", 1 to "자전거", 2 to "자동차", 3 to "오토바이",
+    // 파인튜닝 추가 클래스
+    80 to "계단",
     4 to "비행기", 5 to "버스", 6 to "기차", 7 to "트럭",
     8 to "보트", 9 to "신호등", 10 to "소화전", 11 to "정지 표지판",
     12 to "주차 미터기", 13 to "벤치", 14 to "새", 15 to "고양이",

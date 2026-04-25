@@ -7,6 +7,13 @@ object SentenceBuilder {
     fun build(detections: List<Detection>): String {
         if (detections.isEmpty()) return "주변에 장애물이 없어요."
 
+        // 계단이 있으면 최우선 경고
+        val stairs = detections.firstOrNull { it.classKo == "계단" }
+        if (stairs != null) {
+            val action = DIRECTION_ACTION[getDirection(stairs.cx)] ?: "조심하세요"
+            return "조심! 앞에 계단이 있어요. $action."
+        }
+
         val parts = detections.take(2).mapIndexed { idx, det ->
             val direction = getDirection(det.cx)
             val distStr   = formatDist(det.w, det.h)
