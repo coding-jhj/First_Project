@@ -40,11 +40,12 @@
             (한국어 문장 생성)             │
                     │                      │
                     └──────────┬───────────┘
-                               │ sentence: "왼쪽 앞에 의자가 있어요. 가까이. 오른쪽으로 피해가세요."
-                               │ beep: false  ← alert_level이 info면 true
+                               │ sentence: "왼쪽 앞에 의자가 있어요. 가까이. 오른쪽으로 피하세요."
+                               │ alert_mode: "critical" | "beep" | "silent"
                                ▼
-                    [Android TTS 음성 출력]
-                     또는 비프음 (beep=true일 때)
+                    [Android TTS 음성 출력]  ← critical: 1.25× 속도로 즉각
+                     또는 비프음             ← beep: 짧은 비프음만
+                     또는 무음              ← silent: UI만 업데이트
 ```
 
 ---

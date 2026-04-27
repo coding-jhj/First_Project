@@ -78,7 +78,7 @@
 | bbox 중심 깊이값 추출 | `depth_map[cy][cx]` → 가까이/보통/멀리 분류 |
 | depth 임계값 튜닝 | 실내 환경 기준으로 실험 조정 |
 | `detect_and_depth()` 완성 | 김재현의 detect + depth 통합 함수 |
-| gTTS 설치 + 음성 출력 확인 | 한국어 TTS 기본 작동 |
+| ElevenLabs TTS 설치 + 음성 출력 확인 | Anna Kim 보이스, eleven_multilingual_v2 |
 | STT 연결 (Google Speech API) | 한국어 음성 → 텍스트 |
 | 키워드 매칭 | "앞에 뭐 있어" / "핸드폰 찾아줘" / "이거 뭐야" |
 | 소음 환경 테스트 | 카페/지하철 수준 소음 인식률 기록 |
