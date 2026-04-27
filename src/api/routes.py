@@ -234,22 +234,16 @@ def _extract_find_target(text: str) -> str:
 @router.post("/tts")
 async def tts_endpoint(text: str = Form("")):
     """ElevenLabs TTS — 텍스트를 음성 파일로 변환해 Android 앱에 반환."""
-    from src.voice.tts import _cache_path, client, _VOICE_ID, _MODEL_ID, _api_key
+    from src.voice.tts import _cache_path, _generate, _api_key
     import os
     if not text:
         return {"error": "text is empty"}
     if not _api_key:
-        return {"error": "no api key"}
+        return {"error": "ELEVENLABS_API_KEY not set"}
     path = _cache_path(text)
     if not os.path.exists(path):
-        try:
-            audio = client.text_to_speech.convert(
-                voice_id=_VOICE_ID, text=text, model_id=_MODEL_ID)
-            with open(path, "wb") as f:
-                for chunk in audio:
-                    f.write(chunk)
-        except Exception as e:
-            return {"error": str(e)}
+        if not _generate(text, path):
+            return {"error": "TTS generation failed"}
     return FileResponse(path, media_type="audio/mpeg")
 
 
