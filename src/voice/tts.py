@@ -32,10 +32,12 @@ import os
 import hashlib
 import pygame
 from elevenlabs.client import ElevenLabs
-from elevenlabs import save
 
 _api_key = os.environ.get("ELEVENLABS_API_KEY", "")
 client = ElevenLabs(api_key=_api_key)
+
+_VOICE_ID  = "uyVNoMrnUku1dZyVEXwD"       # Anna Kim (한국어)
+_MODEL_ID  = "eleven_multilingual_v2"
 
 _CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "__tts_cache__")
 os.makedirs(_CACHE_DIR, exist_ok=True)
@@ -45,22 +47,24 @@ def _cache_path(text: str) -> str:
     return os.path.join(_CACHE_DIR, f"{key}.mp3")
 
 def speak(text: str):
-    """ElevenLabs TTS를 사용하여 한국어 음성 재생. 캐싱 로직 포함."""
+    """ElevenLabs TTS로 한국어 음성 재생. 동일 문장은 캐시에서 즉시 재생."""
     path = _cache_path(text)
-    
+
     if not os.path.exists(path):
         try:
-            print(f"ElevenLabs 생성 중: {text}")
-            audio = client.generate(
+            print(f"[TTS] 생성 중: {text}")
+            audio = client.text_to_speech.convert(
+                voice_id=_VOICE_ID,
                 text=text,
-                voice="uyVNoMrnUku1dZyVEXwD",  # 원하는 Voice ID 또는 이름 (예: Adam, Bella) 현재는 anna kim으로 설정
-                model="eleven_multilingual_v2"  # 한국어 지원 모델
+                model_id=_MODEL_ID,
             )
-            save(audio, path)
+            with open(path, "wb") as f:
+                for chunk in audio:
+                    f.write(chunk)
         except Exception as e:
-            print(f"ElevenLabs 오류 발생: {e}")
-            # 만약 ElevenLabs 실패 시 백업으로 기존 gTTS를 쓰게 하려면 여기에 로직을 추가할 수 있습니다.
+            print(f"[TTS] ElevenLabs 오류: {e}")
             return
+
     try:
         pygame.mixer.init()
         pygame.mixer.music.load(path)
@@ -69,7 +73,7 @@ def speak(text: str):
             pygame.time.Clock().tick(10)
         pygame.mixer.music.unload()
     except Exception as e:
-        print(f"재생 오류 발생: {e}")
+        print(f"[TTS] 재생 오류: {e}")
 
 # 테스트 실행
 if __name__ == "__main__":
