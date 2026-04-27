@@ -53,27 +53,14 @@ def intro(pdf, text):
 
 
 def question(pdf, num, q, note=None):
+    # Q번호 + 질문 전체를 하나의 multi_cell로 출력 (레이아웃 꼬임 방지)
     pdf.set_font("KR", "B", 10)
-    pdf.set_text_color(30, 80, 160)
-    pdf.multi_cell(0, 7, f"Q{num}. {q[:1]}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     pdf.set_text_color(0, 0, 0)
-    pdf.set_font("KR", "", 10)
-    # 첫 글자는 번호 셀에서 썼으니 나머지만 이어씀
-    # → 사실 아래처럼 전부 한 multi_cell로 쓰는 게 더 안전
-    # 번호 + 질문을 한 줄로 합쳐서 bold 처리
-    pdf.set_y(pdf.get_y() - 7)  # 위로 올려서 덮어쓰기
-    pdf.set_font("KR", "B", 10)
-    pdf.set_text_color(30, 80, 160)
-    pdf.cell(12, 7, f"Q{num}.", new_x=XPos.RIGHT, new_y=YPos.TOP)
-    pdf.set_font("KR", "", 10)
-    pdf.set_text_color(0, 0, 0)
-    w = pdf.epw - 12  # 남은 너비
-    pdf.multi_cell(w, 7, q, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.multi_cell(0, 7, f"Q{num}.  {q}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     if note:
-        pdf.set_x(pdf.l_margin + 4)
         pdf.set_font("KR", "", 8)
         pdf.set_text_color(110, 110, 110)
-        pdf.multi_cell(pdf.epw - 4, 5.5, f"* {note}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.multi_cell(0, 5.5, f"       * {note}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_text_color(0, 0, 0)
     pdf.ln(2)
 
