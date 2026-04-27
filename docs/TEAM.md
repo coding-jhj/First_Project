@@ -170,12 +170,13 @@ def build_sentence(objects: list, changes: list) -> str:
 | 4/24 ✅ | Android 개발환경 + 카메라 캡처 / FastAPI + Gradio MVP / YOLO11m 9구역 방향 판단 / gTTS TTS / 문장 템플릿 설계 |
 | 4/25 ✅ | CameraX 1초 + ONNX 온디바이스 / EMA 추적기 + SQLite 공간 DB + /detect API / **계단 파인튜닝 mAP50=0.992** / **Depth V2 서버 통합** + 계단·낙차 감지 / NLG 긴박도 4단계 + 조사 자동화 |
 | **4/26 ✅🔥** | **Android 독립 앱 완성** (서버 없이 동작) / **개인 네비게이팅** (API + SharedPreferences) / **COCO80→81 전체** + YOLO-World / **STT 5모드** + 키워드 15개+ + fallback / 안전경로·군중 경고 / docs 전체 |
+| **4/27 ✅** | 팀원 브랜치 merge + 선택 반영 / **API 키 보안** (.env + git 히스토리 제거) / requirements 보완 / **alert_mode** Android 완전 반영 (critical·beep·silent 3단계) / TTS 속도 분기 / 캐시 워밍업 / 문서 업데이트 |
 
 ### 팀원별 담당 예정 일정
 
 | 날짜 | 신유득 (서버 검증) | 김재현 (YOLO 검증) | 문수찬 (음성 검증) | 임명광 (발표) |
 |---|---|---|---|---|
-| 4/27 (월) | 서버 동작 직접 확인 | 테스트 이미지 수집 시작 | STT 소음 환경 테스트 | PPT 초안 작성 |
+| **4/27 ✅** | 서버 end-to-end 동작 확인 | 테스트 이미지 수집 시작 | **gTTS → ElevenLabs TTS 교체** (Anna Kim 보이스, eleven_multilingual_v2) | **NLG 개선** — `get_alert_mode()` 경고 피로 방지 / `피해가세요→피하세요` 문구 / 고양이 추가 |
 | 4/28 | 서버 안정화 검증 | 인식률 측정 | Depth 임계값 튜닝 | 경쟁 서비스 비교표 |
 | 4/29 | 공간 기억 연동 테스트 | 위험도 파라미터 검증 | TTS 발음 개선 | 기술 슬라이드 |
 | 4/30 | ngrok 외부 접근 확인 | 이미지 추가 수집 | STT 소음 재테스트 | 데모 스크립트 |

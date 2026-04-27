@@ -1,10 +1,53 @@
-# VoiceGuide 작업 내역 (2026-04-26 최신)
+# VoiceGuide 작업 내역 (2026-04-27 최신)
 
 > 팀원 공유용 — 오늘 추가/수정된 내용 전체 정리
 
 ---
 
-## 요약
+## 2026-04-27 변경 내역
+
+**git pull 후 아래 명령어 실행해주세요.**
+
+```bash
+git pull origin main
+pip install -r requirements.txt
+```
+
+### 팀원 브랜치 반영 (조장 정환주)
+
+| 브랜치 | 팀원 | 반영 내용 |
+|--------|------|---------|
+| `feature/tts` | 문수찬 | gTTS → **ElevenLabs TTS** 교체 (Anna Kim 보이스, eleven_multilingual_v2 모델, 캐시 유지) |
+| `feature/nlg` | 임명광 | `get_alert_mode()` 경고 피로 방지 / `피해가세요→피하세요` 문구 / 고양이 동물 목록 추가 / `_secondary()` 정보 과다 방지 / `build_find_sentence()` 문장 자연스럽게 |
+
+### 보안
+
+- **ElevenLabs API 키** 하드코딩 → `.env` 환경변수로 이동
+- `git filter-repo`로 전체 히스토리에서 키 완전 제거 후 force push
+- `.env.example`에 `ELEVENLABS_API_KEY`, `OPENAI_API_KEY` 항목 추가
+
+### 버그 수정
+
+| 파일 | 수정 내용 |
+|------|---------|
+| `src/voice/tts.py` | `client.generate()` → `client.text_to_speech.convert()` (ElevenLabs SDK v2 호환) |
+| `src/api/routes.py` | `alert_level`/`beep` → `alert_mode` 통일 |
+| `android/.../MainActivity.kt` | `beep` 필드 → `alert_mode` 읽도록 수정 (breaking bug 해결) |
+| `requirements.txt` | `elevenlabs`, `easyocr`, `python-dotenv`, `websockets>=10.0,<13.0` 추가 |
+| `src/api/main.py` | 서버 시작 시 `load_dotenv()` 호출 |
+
+### 기능 강화
+
+| 항목 | 내용 |
+|------|------|
+| **alert_mode 3단계** | `critical` — 말 중이어도 끊고 1.25× 빠르게 즉각 경고 |
+| | `beep` — 비프음만 재생, TTS 없음 (경고 피로 방지) |
+| | `silent` — 무음, UI만 업데이트 |
+| **TTS 캐시 워밍업** | 서버 시작 시 자주 쓰는 문장 10개 미리 생성 (첫 요청 지연 방지) |
+
+---
+
+## 요약 (2026-04-26)
 
 기존 MVP 위에 AI 성능 강화·Android 기능 완성·안전성 개선·문서 전면 업데이트를 진행했습니다.  
 **git pull 후 아래 설치 명령어 실행해주세요.**
