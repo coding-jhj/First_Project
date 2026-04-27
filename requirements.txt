@@ -25,6 +25,7 @@ pyaudio==0.2.14
 # TTS - 음성 합성
 gTTS==2.5.3
 pygame==2.6.1
+elevenlabs
 
 # MVP UI
 # gradio 5.x는 fastapi를 내장해 별도 설치 버전과 충돌
@@ -40,6 +41,12 @@ python-multipart==0.0.12
 # ONNX 내보내기 (export_tflite.py용)
 onnx
 onnxscript
+
+# 버스 번호 OCR (ML Kit 실패 시 서버 fallback)
+easyocr
+
+# 환경변수 로딩 (.env 파일)
+python-dotenv
 
 # 파인튜닝 데이터 수집 (train/prepare_dataset.py용)
 ddgs
