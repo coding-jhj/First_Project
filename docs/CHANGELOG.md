@@ -1,4 +1,185 @@
-# VoiceGuide 작업 내역 (2026-04-26 최신)
+# VoiceGuide 작업 내역 (2026-04-27 최신)
+
+---
+
+## 2026-04-27 후반 수정 Ver2 (조원 임명광)
+
+> Android 앱 바운딩박스 위치 오차 수정 · 계단 탐지 보완 · 크리티컬/비크리티컬 음성 분기 구현 · StairsDetector 오탐 제거
+
+---
+
+### 1. 바운딩박스 위치 오차 수정 (Android)
+
+#### 원인 3가지 모두 수정
+
+| 원인 | 수정 내용 |
+|------|---------|
+| 이미지 비율 왜곡 | 640×640 강제 리사이즈 → **Letterboxing** 방식으로 교체 |
+| EXIF 회전 미적용 | `BitmapFactory.decodeFile()` 단독 사용 → `decodeBitmapUpright()` 추가 |
+| PreviewView 크롭 미보정 | 좌표를 뷰 크기에 직접 곱하던 방식 → **FILL_CENTER 변환** 계산 적용 |
+
+**`YoloDetector.kt` — Letterboxing 도입**
+
+```
+기존: 원본 이미지를 640×640으로 비율 무시 강제 리사이즈
+     → 왜곡된 좌표로 추론 → 바운딩박스 실제 위치와 불일치
+
+수정: scale = min(640/W, 640/H) 으로 비율 유지 축소 후
+     남은 영역을 검정 패딩으로 채워 640×640 완성 (letterbox)
+     → 패딩 오프셋(padX, padY)을 역변환해 원본 좌표로 복원
+```
+
+`postProcess()` 시그니처 변경: `padX, padY, scaledW, scaledH` 추가
+- letterbox 공간의 픽셀 좌표 → 원본 이미지 정규화 [0,1] 좌표로 변환
+- 패딩 영역(검정 바깥)에 중심이 있는 탐지 결과 자동 제거
+
+**`MainActivity.kt` — EXIF 회전 보정**
+
+```kotlin
+// 신규 추가
+private fun decodeBitmapUpright(file: File): Bitmap
+```
+
+- `ExifInterface`로 JPEG 회전 태그 읽기 (90°/180°/270°)
+- `Matrix.postRotate()` 적용 후 바른 방향 비트맵 반환
+- `processOnDevice()`에서 `decodeBitmapUpright()` 호출로 교체
+
+**`BoundingBoxOverlay.kt` — PreviewView FILL_CENTER 보정**
+
+```
+기존: setDetections(detections)
+      → (det.cx * vw, det.cy * vh) 로 단순 변환 → 크롭된 영역 무시
+
+수정: setDetections(detections, imgW, imgH)
+      → fillScale = max(vw/imgW, vh/imgH) 계산
+      → offsetX/offsetY 포함한 실제 화면 픽셀로 변환
+```
+
+---
+
+### 2. 계단 탐지 문제 분석 및 보완 (Android)
+
+#### 근본 원인 파악
+
+`assets/yolo11m.onnx` **파일이 없음** → 앱이 `yolo11n.onnx`(표준 COCO 80클래스)로 자동 fallback  
+→ class 80(계단)이 모델 출력에 아예 존재하지 않아 탐지 불가
+
+**해결 방법 (yolo11m 모델 적용):**
+```bash
+# 학습된 모델을 ONNX로 변환 후 assets에 복사
+python tools/export_onnx.py
+# 생성된 yolo11m.onnx → android/app/src/main/assets/ 에 복사 후 재빌드
+```
+
+#### `StairsDetector.kt` — 신규 파일 (초기 버전)
+
+yolo11m.onnx 없을 때도 계단을 잡기 위한 이미지 분석 기반 보완 탐지기
+
+```
+초기 동작 원리:
+1. 이미지를 320px 너비로 다운샘플 (성능 최적화)
+2. 하단 65% 영역에서 행(row)별 수직 밝기 차이(계단 디딤면 엣지) 계산
+3. 로컬 피크(계단 엣지 라인) 탐지
+4. 피크 3개 이상 & 간격이 규칙적(±55% 이내) → 계단으로 판정
+5. 탐지된 영역을 [0,1] 정규화 좌표로 반환
+```
+
+**`MainActivity.kt` — StairsDetector 통합**
+
+```kotlin
+// YOLO가 계단을 잡지 못했을 때 엣지 분석으로 보완
+if (detections.none { it.classKo == "계단" }) {
+    stairsDetector.detect(bmp)?.let { detections = detections + it }
+}
+```
+
+- `processOnDevice()` fallback 버그도 함께 수정  
+  (기존: 파일 삭제 후 동일 경로로 sendToServer 시도 → 수정: 파일 유지 후 fallback)
+
+---
+
+### 2-1. StairsDetector 오탐 제거 — 전면 재작성 (Android)
+
+#### 문제
+
+초기 버전 기준이 너무 느슨해 **계단이 없는 일반 실내 환경에서도 계단으로 오판**.
+
+| 오탐 원인 | 내용 |
+|---------|------|
+| 최소 엣지 강도 너무 낮음 | `8f` → 실내 거의 모든 장면 통과 |
+| SNR 조건 없음 | 타일·카펫 등 균일 패턴 걸러내지 못함 |
+| 피크 3개로 판정 | 바닥 줄눈·선반·그림자도 3개 이상 발생 |
+| 간격 허용 오차 ±55% | 불규칙해도 계단으로 판정 |
+| 수평 폭 체크 없음 | 가구 다리·좁은 그림자도 통과 |
+
+#### 수정 — 5가지 조건 모두 통과해야 계단 판정
+
+| 조건 | 기존 | 수정 후 |
+|------|------|--------|
+| 절대 엣지 강도 | `≥ 8f` | **`≥ 20f`** |
+| SNR (신호 대 잡음) | 없음 | **`maxEdge ≥ meanEdge × 3.5`** |
+| 최소 피크 수 | 3개 | **4개** |
+| 피크 탐지 임계값 | `maxEdge × 0.35` | **`maxEdge × 0.55`** |
+| 최소 피크 간격 | 3px | **10px** |
+| 간격 편차 허용 | ±55% / 40% 허용 | **±30% / 20% 허용** |
+| 수평 폭 커버리지 | 없음 | **≥ 55% 이상** |
+
+**SNR 조건 (가장 핵심):**
+```
+타일·카펫 → 모든 행에 균일한 엣지 → meanEdge 높음 → maxEdge/meanEdge 낮음 → 탈락
+계단      → 대부분 행은 평탄, 경계 행만 강한 엣지 → meanEdge 낮음 → SNR 높음 → 통과
+```
+
+**수평 폭 커버리지 조건:**
+```
+계단 엣지    → 카메라 화면 가로 전체에 걸쳐 나타남 → 커버리지 높음 → 통과
+가구 다리·그림자 → 좁은 영역에만 엣지 존재 → 커버리지 낮음 → 탈락
+```
+
+---
+
+### 3. 크리티컬/비크리티컬 음성 분기 구현 (Android)
+
+#### 기존 문제
+
+`handleSuccess()` 에서 모든 탐지 결과를 `speak()`(TTS)로만 출력.  
+일반 장애물(의자, 테이블 등)에도 매번 음성 안내 → 청각 피로 유발.
+
+#### 수정 동작
+
+| 상황 | 판정 기준 | 출력 방식 |
+|------|---------|---------|
+| **크리티컬** | 문장이 "위험" 또는 "조심"으로 시작 | **TTS 음성** — 진행 중 음성도 중단하고 즉시 안내 |
+| **일반 장애물** | 그 외 모든 탐지 결과 | **비프음** (250ms) |
+| **장애물 없음** | "주변에 장애물이 없어요." | 무음 (화면 텍스트만 표시) |
+
+**신규 추가 함수 (`MainActivity.kt`)**
+
+```kotlin
+// "위험" / "조심" 시작 문장만 TTS 안내 대상
+private fun isCritical(sentence: String) =
+    sentence.startsWith("위험") || sentence.startsWith("조심")
+
+// ToneGenerator 기반 단음 비프 (AudioManager.STREAM_MUSIC, 볼륨 80)
+private fun beep() {
+    toneGen?.startTone(ToneGenerator.TONE_PROP_BEEP, 250)
+}
+```
+
+크리티컬 상황은 `QUEUE_FLUSH` 모드로 이전 TTS를 중단하고 즉시 새 음성 출력.
+
+---
+
+### 4. 변경 파일 목록
+
+| 파일 | 변경 유형 | 내용 |
+|------|---------|------|
+| `android/.../YoloDetector.kt` | 수정 | Letterboxing 도입, postProcess 좌표 역변환 |
+| `android/.../BoundingBoxOverlay.kt` | 수정 | setDetections 시그니처 변경, FILL_CENTER 보정 |
+| `android/.../MainActivity.kt` | 수정 | EXIF 회전, StairsDetector 통합, 음성 분기, fallback 버그 수정 |
+| `android/.../StairsDetector.kt` | **신규 → 재수정** | 엣지 패턴 기반 계단 탐지기 신규 작성 후 오탐 문제로 5조건 방식으로 전면 재작성 |
+
+---
 
 > 팀원 공유용 — 오늘 추가/수정된 내용 전체 정리
 
