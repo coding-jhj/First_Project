@@ -18,7 +18,8 @@ pip install -r requirements.txt
 | 브랜치 | 팀원 | 반영 내용 |
 |--------|------|---------|
 | `feature/tts` | 문수찬 | gTTS → **ElevenLabs TTS** 교체 (Anna Kim 보이스, eleven_multilingual_v2 모델, 캐시 유지) |
-| `feature/nlg` | 임명광 | `get_alert_mode()` 경고 피로 방지 / `피해가세요→피하세요` 문구 / 고양이 동물 목록 추가 / `_secondary()` 정보 과다 방지 / `build_find_sentence()` 문장 자연스럽게 |
+| `feature/nlg` | 임명광 | `get_alert_mode()` 경고 피로 방지 / `피해가세요→피하세요` 문구 / 고양이 동물 목록 추가 / `_secondary()` 정보 과다 방지 / `build_find_sentence()` 문장 자연스럽게 / **바운딩박스 오버레이** (`BoundingBoxOverlay.kt`) / 차량 경고 문구 "즉시→잠깐" |
+| `feature/api` | 신유득 | **Supabase/PostgreSQL FastAPI 서버** (`서버_DB/`) — items CRUD + DB 저장 엔드포인트 / `.env.example` DB 변수 추가 / `requirements.txt` psycopg 추가 |
 
 ### 보안
 

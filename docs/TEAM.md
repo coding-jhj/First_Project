@@ -176,7 +176,7 @@ def build_sentence(objects: list, changes: list) -> str:
 
 | 날짜 | 신유득 (서버 검증) | 김재현 (YOLO 검증) | 문수찬 (음성 검증) | 임명광 (발표) |
 |---|---|---|---|---|
-| **4/27 ✅** | 서버 end-to-end 동작 확인 | 테스트 이미지 수집 시작 | **gTTS → ElevenLabs TTS 교체** (Anna Kim 보이스, eleven_multilingual_v2) | **NLG 개선** — `get_alert_mode()` 경고 피로 방지 / `피해가세요→피하세요` 문구 / 고양이 추가 |
+| **4/27 ✅** | **Supabase/PostgreSQL FastAPI 서버** (`서버_DB/`) 구현 — items CRUD + DB 저장 엔드포인트 | 테스트 이미지 수집 시작 | **gTTS → ElevenLabs TTS 교체** (Anna Kim 보이스, eleven_multilingual_v2) | **NLG 개선** — `get_alert_mode()` / 바운딩박스 오버레이(`BoundingBoxOverlay.kt`) / 문구 개선 |
 | 4/28 | 서버 안정화 검증 | 인식률 측정 | Depth 임계값 튜닝 | 경쟁 서비스 비교표 |
 | 4/29 | 공간 기억 연동 테스트 | 위험도 파라미터 검증 | TTS 발음 개선 | 기술 슬라이드 |
 | 4/30 | ngrok 외부 접근 확인 | 이미지 추가 수집 | STT 소음 재테스트 | 데모 스크립트 |
