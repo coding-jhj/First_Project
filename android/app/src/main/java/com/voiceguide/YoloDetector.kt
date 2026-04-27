@@ -34,9 +34,25 @@ class YoloDetector(context: Context) {
     }
 
     fun detect(bitmap: Bitmap): List<Detection> {
-        val resized = Bitmap.createScaledBitmap(bitmap, inputSize, inputSize, true)
-        val inputBuffer = bitmapToNCHW(resized)
-        resized.recycle()
+        val origW = bitmap.width
+        val origH = bitmap.height
+
+        // 비율을 유지하며 640x640에 맞추고 나머지는 검정 패딩 (letterboxing)
+        val scale  = minOf(inputSize.toFloat() / origW, inputSize.toFloat() / origH)
+        val scaledW = (origW * scale + 0.5f).toInt()
+        val scaledH = (origH * scale + 0.5f).toInt()
+        val padX   = (inputSize - scaledW) / 2
+        val padY   = (inputSize - scaledH) / 2
+
+        val letterboxed = Bitmap.createBitmap(inputSize, inputSize, Bitmap.Config.ARGB_8888)
+        val lbCanvas = android.graphics.Canvas(letterboxed)
+        lbCanvas.drawARGB(255, 0, 0, 0)
+        val scaled = Bitmap.createScaledBitmap(bitmap, scaledW, scaledH, true)
+        lbCanvas.drawBitmap(scaled, padX.toFloat(), padY.toFloat(), null)
+        scaled.recycle()
+
+        val inputBuffer = bitmapToNCHW(letterboxed)
+        letterboxed.recycle()
 
         val inputName = session.inputNames.iterator().next()
         val tensor = OnnxTensor.createTensor(
@@ -45,15 +61,15 @@ class YoloDetector(context: Context) {
 
         val output = session.run(mapOf(inputName to tensor))
         val outputTensor = output[0] as ai.onnxruntime.OnnxTensor
-        val shape      = outputTensor.info.shape  // [1, numFeatures, 8400]
-        val numFeatures = shape[1].toInt()         // 84(COCO) or 85(indoor)
-        val numDet      = shape[2].toInt()         // 8400
-        val flatBuf = outputTensor.floatBuffer
+        val shape       = outputTensor.info.shape  // [1, numFeatures, 8400]
+        val numFeatures = shape[1].toInt()
+        val numDet      = shape[2].toInt()
+        val flatBuf     = outputTensor.floatBuffer
 
         tensor.close()
         output.close()
 
-        return postProcess(flatBuf, numFeatures, numDet)
+        return postProcess(flatBuf, numFeatures, numDet, padX, padY, scaledW, scaledH)
     }
 
     private fun bitmapToNCHW(bitmap: Bitmap): FloatBuffer {
@@ -76,9 +92,13 @@ class YoloDetector(context: Context) {
         return buf
     }
 
-    private fun postProcess(buf: java.nio.FloatBuffer, numFeatures: Int, numDet: Int): List<Detection> {
+    private fun postProcess(
+        buf: java.nio.FloatBuffer,
+        numFeatures: Int, numDet: Int,
+        padX: Int, padY: Int, scaledW: Int, scaledH: Int
+    ): List<Detection> {
         // buf layout: [feature_0 * 8400, ..., feature_(numFeatures-1) * 8400]
-        // numFeatures = 4(bbox) + numClasses (84 for COCO80, 85 for indoor81)
+        // numFeatures = 4(bbox) + numClasses (84 for COCO80, 85 for fine-tuned 81)
         val numClasses = numFeatures - 4
         val candidates = mutableListOf<Detection>()
 
@@ -92,13 +112,25 @@ class YoloDetector(context: Context) {
             if (maxClass < 0) continue
             val name = COCO_KO[maxClass] ?: continue
 
+            // YOLO 출력 좌표는 letterbox된 640x640 공간의 픽셀값
+            // → 패딩 제거 후 원본 이미지 [0,1] 비율로 변환
+            val cxPx = buf.get(0 * numDet + i)
+            val cyPx = buf.get(1 * numDet + i)
+            val wPx  = buf.get(2 * numDet + i)
+            val hPx  = buf.get(3 * numDet + i)
+
+            val cx = (cxPx - padX) / scaledW
+            val cy = (cyPx - padY) / scaledH
+            val w  = wPx / scaledW
+            val h  = hPx / scaledH
+
+            // 패딩 영역(검정 바깥)에 중심이 있으면 무시
+            if (cx < 0f || cx > 1f || cy < 0f || cy > 1f) continue
+
             candidates.add(Detection(
                 classKo    = name,
                 confidence = maxScore,
-                cx = buf.get(0 * numDet + i) / inputSize,
-                cy = buf.get(1 * numDet + i) / inputSize,
-                w  = buf.get(2 * numDet + i) / inputSize,
-                h  = buf.get(3 * numDet + i) / inputSize
+                cx = cx, cy = cy, w = w, h = h
             ))
         }
 

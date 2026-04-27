@@ -82,6 +82,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     // ── ONNX 온디바이스 추론 ────────────────────────────────────────────
     private var yoloDetector: YoloDetector? = null
+    private val stairsDetector = StairsDetector()
+    private var toneGen: android.media.ToneGenerator? = null
 
     companion object {
         private const val PERM_CODE        = 100
@@ -116,6 +118,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
         initSpeechRecognizer()
         tryInitYoloDetector()
+        try { toneGen = android.media.ToneGenerator(AudioManager.STREAM_MUSIC, 80) } catch (_: Exception) {}
 
         // 서버 URL 유무와 관계없이 바로 시작 가능
         btnToggle.setOnClickListener {
@@ -149,6 +152,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         tts.shutdown()
         speechRecognizer.destroy()
         yoloDetector?.close()
+        toneGen?.release()
         cameraExecutor.shutdown()
         handler.removeCallbacksAndMessages(null)
         super.onDestroy()
@@ -359,14 +363,24 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     private fun processOnDevice(imageFile: File) {
         Thread {
+            var bmp: android.graphics.Bitmap? = null
             try {
-                val bmp        = android.graphics.BitmapFactory.decodeFile(imageFile.absolutePath)
-                val detections = yoloDetector!!.detect(bmp)
-                bmp.recycle()
+                // EXIF 회전 정보를 반영해 바른 방향의 비트맵으로 디코딩
+                bmp = decodeBitmapUpright(imageFile)
+                val imgW = bmp.width
+                val imgH = bmp.height
+
+                var detections = yoloDetector!!.detect(bmp)
+
+                // YOLO가 계단을 잡지 못했을 때 엣지 패턴 분석으로 보완
+                if (detections.none { it.classKo == "계단" }) {
+                    stairsDetector.detect(bmp)?.let { detections = detections + it }
+                }
+
+                bmp.recycle(); bmp = null
                 imageFile.delete()
 
-                // 디버그: 탐지된 물체의 바운드박스를 프리뷰 위에 표시
-                runOnUiThread { boundingBoxOverlay.setDetections(detections) }
+                runOnUiThread { boundingBoxOverlay.setDetections(detections, imgW, imgH) }
 
                 val sentence = when (currentMode) {
                     "찾기"  -> SentenceBuilder.buildFind(findTarget, detections)
@@ -374,16 +388,31 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 }
                 handleSuccess(sentence)
             } catch (_: Exception) {
-                imageFile.delete()
-                // 온디바이스 실패 → 서버로 fallback
-                val file2 = File.createTempFile("vg_fb_", ".jpg", cacheDir)
-                try {
-                    sendToServer(File(imageFile.absolutePath))
-                } catch (_: Exception) {
-                    handleFail()
-                }
+                bmp?.recycle()
+                // 온디바이스 실패 → 파일은 삭제하지 않고 서버로 fallback
+                sendToServer(imageFile)
             }
         }.start()
+    }
+
+    /** JPEG 파일의 EXIF 회전 태그를 읽어 실제 화면 방향으로 비트맵을 회전한다. */
+    private fun decodeBitmapUpright(file: File): android.graphics.Bitmap {
+        val exif = android.media.ExifInterface(file.absolutePath)
+        val degrees = when (exif.getAttributeInt(
+            android.media.ExifInterface.TAG_ORIENTATION,
+            android.media.ExifInterface.ORIENTATION_NORMAL
+        )) {
+            android.media.ExifInterface.ORIENTATION_ROTATE_90  -> 90f
+            android.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+            android.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+            else -> 0f
+        }
+        val raw = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
+        if (degrees == 0f) return raw
+        val matrix = android.graphics.Matrix().apply { postRotate(degrees) }
+        val rotated = android.graphics.Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, matrix, true)
+        raw.recycle()
+        return rotated
     }
 
     // ── 서버 전송 (선택 — URL 입력 시 Depth V2 정확도 향상) ──────────────
@@ -432,12 +461,26 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         runOnUiThread {
             if (sentence == "주변에 장애물이 없어요.") {
                 tvStatus.text = "장애물 없음"
-            } else if (sentence != lastSentence && !tts.isSpeaking) {
-                lastSentence = sentence
-                tvStatus.text = sentence
-                speak(sentence)
+                return@runOnUiThread
+            }
+            tvStatus.text = sentence
+            val isNew = sentence != lastSentence
+            if (isCritical(sentence)) {
+                // 위험·주의 상황: 이전 음성을 끊고 즉시 TTS 안내
+                if (isNew) { lastSentence = sentence; speak(sentence) }
+            } else if (isNew && !tts.isSpeaking) {
+                // 일반 장애물: TTS 대신 비프음으로 "뭔가 있어요" 신호
+                lastSentence = sentence; beep()
             }
         }
+    }
+
+    /** "위험" 또는 "조심"으로 시작하는 문장 → 즉각 TTS 안내 대상 */
+    private fun isCritical(sentence: String) =
+        sentence.startsWith("위험") || sentence.startsWith("조심")
+
+    private fun beep() {
+        toneGen?.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 250)
     }
 
     private fun handleFail() {
