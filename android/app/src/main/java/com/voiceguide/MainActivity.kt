@@ -339,6 +339,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 currentMode = "신호등"
                 captureAndProcess()
             }
+            "버스번호" -> {
+                speak("버스 번호를 확인할게요.")
+                captureForBusNumber()
+            }
             else -> {
                 currentMode = mode
                 speak("$mode 모드.")
@@ -408,6 +412,63 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                                 }
                                 .addOnFailureListener { speak("바코드 인식에 실패했어요."); file.delete() }
                         } catch (_: Exception) { speak("바코드 인식에 실패했어요."); file.delete() }
+                    }.start()
+                }
+                override fun onError(e: ImageCaptureException) { speak("사진을 찍지 못했어요.") }
+            })
+    }
+
+    /**
+     * "버스 번호 알려줘" 명령 처리.
+     *
+     * 접근 방식:
+     *   1. 사진 촬영
+     *   2. ML Kit OCR로 전체 이미지의 텍스트 인식
+     *   3. 숫자만 추출 (버스 번호는 1~4자리 숫자)
+     *   4. 가장 큰 글씨(=가장 잘 보이는) 숫자를 버스 번호로 판단해서 안내
+     *
+     * 왜 YOLO bus_crop 안 쓰나?
+     *   서버 응답 후 이미지 파일이 이미 삭제되어 crop이 불가능.
+     *   대신 전체 이미지 OCR에서 숫자 패턴만 필터링하는 방식 사용.
+     */
+    private fun captureForBusNumber() {
+        val file = File.createTempFile("vg_bus_", ".jpg", cacheDir)
+        imageCapture?.takePicture(
+            ImageCapture.OutputFileOptions.Builder(file).build(),
+            cameraExecutor,
+            object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                    Thread {
+                        try {
+                            val bmp = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
+                            val recognizer = com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions.Builder().build()
+                                .let { com.google.mlkit.vision.text.TextRecognition.getClient(it) }
+                            val image = com.google.mlkit.vision.common.InputImage.fromBitmap(bmp, 0)
+                            recognizer.process(image)
+                                .addOnSuccessListener { result ->
+                                    // OCR 결과에서 버스 번호 패턴 추출 (1~4자리 숫자)
+                                    val numbers = result.textBlocks
+                                        .flatMap { it.lines }
+                                        .mapNotNull { line ->
+                                            val clean = line.text.trim()
+                                            // 순수 숫자이고 4자리 이하인 것만
+                                            if (clean.matches(Regex("\\d{1,4}"))) clean else null
+                                        }
+                                        .distinct()
+
+                                    when {
+                                        numbers.isEmpty() -> speak("버스 번호를 읽지 못했어요. 버스 번호판 가까이 대보세요.")
+                                        numbers.size == 1 -> speak("${numbers[0]}번 버스예요.")
+                                        else -> {
+                                            // 여러 숫자 감지 시 가장 짧은 것 (노선 번호 가능성 높음)
+                                            val best = numbers.minByOrNull { it.length } ?: numbers[0]
+                                            speak("${best}번 버스인 것 같아요.")
+                                        }
+                                    }
+                                    file.delete()
+                                }
+                                .addOnFailureListener { speak("버스 번호 인식에 실패했어요."); file.delete() }
+                        } catch (_: Exception) { speak("버스 번호 인식에 실패했어요."); file.delete() }
                     }.start()
                 }
                 override fun onError(e: ImageCaptureException) { speak("사진을 찍지 못했어요.") }
