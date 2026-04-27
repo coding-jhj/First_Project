@@ -104,6 +104,24 @@ def detect_floor_hazards(depth_map: np.ndarray) -> list[dict]:
             })
             break
 
+    # ── 울퉁불퉁한 길 감지 (낙차·턱 없을 때만) ──────────────────────────
+    # 계단처럼 급격한 변화는 없지만 바닥 깊이가 전체적으로 들쭉날쭉한 경우
+    # 분산(variance)이 크면 바닥이 고르지 않은 것
+    if not hazards and len(band_depths) >= 4:
+        import statistics
+        variance = statistics.variance(band_depths)
+        # variance > 0.3이면 바닥 깊이 편차가 0.55m 이상 → 울퉁불퉁한 수준
+        # 단, 먼 거리 차이가 큰 것은 정상이므로 가까운 4개 밴드만 분석
+        near_depths = band_depths[:4]  # 발 바로 앞 4개 밴드
+        near_variance = statistics.variance(near_depths)
+        if near_variance > 0.15 and band_depths[0] < 3.0:
+            hazards.append({
+                "type":       "uneven",
+                "distance_m": round(band_depths[0], 1),
+                "message":    "바닥이 고르지 않아요. 천천히 걸으세요.",
+                "risk":       0.35,
+            })
+
     # ── 좁은 통로 감지 (낙차·턱 없을 때만) ──────────────────────────────
     # 좌우 벽이 중앙보다 훨씬 가까우면 좁은 통로로 판단
     if not hazards:
