@@ -8,7 +8,7 @@
 |------|----------|------|------|
 | 객체 탐지 | Ultralytics YOLO11m | 8.4.x | yolo11m.pt 사전 학습 모델 |
 | 깊이 추정 | Depth Anything V2 | vits | ✅ GPU 활성화 (depth_anything_v2_vits.pth 필요) |
-| 음성 합성 (서버) | gTTS + pygame | 2.5.3 / 2.6.1 | 한국어(ko) |
+| 음성 합성 (서버) | ElevenLabs + pygame | >=2.0.0 / 2.6.1 | Anna Kim 보이스, Gradio 데모용 |
 | 음성 합성 (앱) | Android TTS | 내장 | 미디어 볼륨 스트림 |
 | 음성 인식 | SpeechRecognition | 3.10.4 | Google Speech API |
 | 딥러닝 | PyTorch | 2.4.1 | CPU 실행 |
@@ -64,12 +64,12 @@ conda install pyaudio
 
 ---
 
-### 5. gTTS 음성 재생 안 됨
+### 5. ElevenLabs 음성 재생 안 됨
 ```
 pygame.error: No available audio device
 ```
 **원인**: 서버/헤드리스 환경에서 오디오 장치 없음  
-**해결**: 로컬 실행 환경에서만 TTS 동작. Android 앱은 기본 TTS 사용으로 해결
+**해결**: 로컬 실행 환경에서만 TTS 동작. Android 앱은 기기 내장 TTS 사용으로 해결
 
 ---
 

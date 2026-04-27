@@ -70,14 +70,19 @@ risk = 1.0 × 0.8 × 1.0 × 3.0 = 2.4 → min(2.4, 1.0) = 1.0  # 최고 위험
 - 개 1.8 / 말 2.5 (돌발 행동 동물)
 - 칼 2.5 / 가위 2.0 (날카로운 물체)
 
-### 경고 레벨 분류 (신규)
+### 경고 모드 분류 (alert_mode)
 
-탐지된 물체를 세 단계로 분류해서, Android에서 음성 또는 비프음으로 처리해요.
+탐지된 물체를 3단계로 분류해서, Android에서 음성·비프음·무음으로 처리해요.
+`get_alert_mode()` 함수 (`src/nlg/sentence.py`)가 담당.
 
 ```python
-if is_vehicle and dist < 8.0:   alert_level = "danger"   # 음성 즉시
-elif risk > 0.35 or dist < 1.5: alert_level = "warning"  # 음성
-else:                            alert_level = "info"     # 비프음 (조용히)
+# critical — 계단/차량/코앞 장애물 → 말 중이어도 끊고 1.25× 빠르게
+# beep     — 1m 이내 일반 장애물 → 비프음만 (경고 피로 방지)
+# silent   — 1m 이상 → 무음 (사용자가 물어볼 때만 안내)
+if is_hazard or (is_vehicle and dist < 8.0): return "critical"
+if dist < 0.5:  return "critical"
+if dist < 1.0:  return "beep"
+return "silent"
 ```
 
 ### 신호등 빨강/초록 감지 (신규)
@@ -231,14 +236,14 @@ if delta >= 0.8 and smooth_d < 3.0:
   "objects":     [...],
   "hazards":     [...],
   "scene":       { "safe_direction": "...", "traffic_light_msg": "..." },
-  "alert_level": "warning",
-  "beep":        false,
+  "alert_mode":  "critical",
   "changes":     ["의자가 생겼어요"]
 }
 ```
 
-`beep: true` 이면 Android에서 TTS 대신 짧은 비프음만 냄.
-`alert_level: "danger"` 이면 즉시 음성 출력.
+`alert_mode: "critical"` 이면 말 중이어도 끊고 1.25× 속도로 즉각 음성 출력.
+`alert_mode: "beep"` 이면 TTS 대신 짧은 비프음만.
+`alert_mode: "silent"` 이면 무음 (UI만 업데이트).
 
 ### 공간 기억 — 재방문 시 달라진 것만 안내
 
@@ -274,16 +279,15 @@ if (lastLux >= 10f && lux < 10f) {
 }
 ```
 
-### 경고 계층 — 비프음 vs 음성 (신규)
+### 경고 계층 — alert_mode 3단계 (신규)
 
-서버에서 `beep: true` 가 오면 TTS 대신 짧은 비프음만 내요.
-정보성 알림(멀리 있는 물체)은 굳이 말 안 해도 됨.
+서버 응답의 `alert_mode` 값에 따라 Android가 음성·비프음·무음을 선택해요.
 
 ```kotlin
-if (beep) {
-    toneGen.startTone(ToneGenerator.TONE_PROP_BEEP, 120)  // 120ms 비프음
-} else {
-    speak(sentence)
+when (alertMode) {
+    "critical" -> { tts.setSpeechRate(1.25f); speak(sentence) }  // 즉각 경고
+    "beep"     -> toneGen.startTone(ToneGenerator.TONE_PROP_BEEP, 120)
+    "silent"   -> { /* 무음 — UI만 업데이트 */ }
 }
 ```
 

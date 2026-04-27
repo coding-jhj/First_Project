@@ -287,7 +287,7 @@ Android 앱 TTS 출력
 | 딥러닝 | PyTorch | 2.x | CUDA (RTX 5060) |
 | 이미지 처리 | OpenCV (headless) | 4.10.0.84 | 서버 환경용 |
 | 수치 연산 | NumPy | 1.26.4 | **반드시 1.x** |
-| 음성 합성 (서버) | gTTS + pygame | 2.5.3 / 2.6.1 | 한국어(ko) |
+| 음성 합성 (서버) | ElevenLabs + pygame | >=2.0.0 / 2.6.1 | Anna Kim 보이스, Gradio 데모용 |
 | 음성 합성 (앱) | Android TTS | 내장 | 미디어 볼륨 스트림 |
 | 음성 인식 | SpeechRecognition | 3.10.4 | Google Speech API |
 | API 서버 | FastAPI + Uvicorn | 0.115.5 / 0.32.1 | |
@@ -381,12 +381,12 @@ conda install pyaudio
 
 ---
 
-### 7. gTTS 음성 재생 안 됨
+### 7. ElevenLabs 음성 재생 안 됨
 ```
 pygame.error: No available audio device
 ```
 **원인**: 서버/헤드리스 환경에서 오디오 장치 없음  
-**해결**: 로컬 실행 환경에서만 TTS 동작. Android 앱은 기본 TTS 사용으로 해결
+**해결**: 로컬 실행 환경에서만 TTS 동작. Android 앱은 기기 내장 TTS 사용으로 해결
 
 ---
 
