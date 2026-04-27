@@ -114,6 +114,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // ── 음성 자동 시작 ─────────────────────────────────────────────────
     private var awaitingStartConfirm = false
 
+    // ── ElevenLabs MediaPlayer (겹침 방지용 단일 인스턴스) ───────────────
+    private var currentMediaPlayer: android.media.MediaPlayer? = null
+    @Volatile private var isElevenLabsSpeaking = false
+
     // ── 특정 버스 대기 ──────────────────────────────────────────────────
     @Volatile private var waitingBusNumber = ""  // 기다리는 버스 번호 ("37", "N37")
 
@@ -981,7 +985,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         // tts.isSpeaking 체크: 이미 말 중이면 경고 안 함 (겹침 방지)
         handler.postDelayed({
             if (!isAnalyzing.get()) return@postDelayed
-            if (System.currentTimeMillis() - lastSuccessTime >= SILENCE_WARN_MS && !tts.isSpeaking) {
+            if (System.currentTimeMillis() - lastSuccessTime >= SILENCE_WARN_MS && !isSpeaking()) {
                 speak("분석이 중단됐어요. 주의해서 이동하세요.")
                 runOnUiThread { tvStatus.text = "⚠ 분석 중단 — 주의하세요" }
             }
@@ -1127,7 +1131,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     // 무음 — UI만 업데이트
                 }
                 else -> {
-                    if (sentence != lastSentence && !tts.isSpeaking) {
+                    if (sentence != lastSentence && !isSpeaking()) {
                         lastSentence = sentence
                         tts.setSpeechRate(1.1f)
                         speak(sentence)
@@ -1143,7 +1147,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         if (fails == FAIL_WARN_COUNT) {
             runOnUiThread {
                 tvStatus.text = "⚠ 분석 실패 — 주의하세요"
-                if (!tts.isSpeaking) speak("분석에 문제가 생겼어요. 주의해서 이동하세요.")
+                if (!isSpeaking()) speak("분석에 문제가 생겼어요. 주의해서 이동하세요.")
             }
         }
     }
@@ -1201,31 +1205,37 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     }
 
     private fun speakElevenLabs(text: String, serverUrl: String) {
-        val mediaPlayer = android.media.MediaPlayer()
+        currentMediaPlayer?.let { if (it.isPlaying) it.stop(); it.release() }
+        currentMediaPlayer = null
+        isElevenLabsSpeaking = true
         Thread {
             try {
                 val body = okhttp3.FormBody.Builder().add("text", text).build()
-                val req = okhttp3.Request.Builder()
-                    .url("$serverUrl/tts")
-                    .post(body)
-                    .build()
+                val req = okhttp3.Request.Builder().url("$serverUrl/tts").post(body).build()
                 val resp = httpClient.newCall(req).execute()
-                if (!resp.isSuccessful) { speakBuiltIn(text); return@Thread }
+                if (!resp.isSuccessful) { isElevenLabsSpeaking = false; speakBuiltIn(text); return@Thread }
                 val tmpFile = File(cacheDir, "tts_${System.currentTimeMillis()}.mp3")
                 tmpFile.writeBytes(resp.body!!.bytes())
-                mediaPlayer.apply {
+                val mp = android.media.MediaPlayer()
+                mp.apply {
                     setDataSource(tmpFile.absolutePath)
                     setAudioAttributes(android.media.AudioAttributes.Builder()
                         .setUsage(android.media.AudioAttributes.USAGE_MEDIA).build())
                     prepare()
                     start()
-                    setOnCompletionListener { tmpFile.delete(); release() }
+                    setOnCompletionListener { isElevenLabsSpeaking = false; tmpFile.delete(); release() }
                 }
+                currentMediaPlayer = mp
             } catch (_: Exception) {
+                isElevenLabsSpeaking = false
                 speakBuiltIn(text)
             }
         }.start()
     }
+
+    private fun isSpeaking(): Boolean =
+        if (etServerUrl.text.toString().trim().isNotEmpty()) isElevenLabsSpeaking
+        else tts.isSpeaking
 
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
