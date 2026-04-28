@@ -1171,7 +1171,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 when {
                     voiceDetections.isNotEmpty() -> {
                         markClassesSpoken(voiceDetections)
-                        val mode = if (voiceDetections.any { it.classKo in ALWAYS_PASS }) "critical" else "normal"
+                        val mode = when {
+                            currentMode == "찾기"                              -> "critical"
+                            voiceDetections.any { it.classKo in ALWAYS_PASS } -> "critical"
+                            else                                               -> "normal"
+                        }
                         handleSuccess(sentence, mode)
                     }
                     shouldBeep -> handleSuccess(sentence, "beep")
