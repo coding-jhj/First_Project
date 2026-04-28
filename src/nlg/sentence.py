@@ -51,10 +51,8 @@ def get_alert_mode(obj: dict, is_hazard: bool = False) -> str:
         return "critical"
     if is_animal and dist_m < 3.0:         # 동물 — 돌발 행동 위험
         return "critical"
-    if dist_m < 0.5:                       # 코앞 장애물 — 충돌 직전
+    if dist_m < 2.5:                       # 2.5m 이내 — 음성 안내 (인터뷰 Q11: 비프보다 말 선호)
         return "critical"
-    if dist_m < 1.0:                       # 1m 이내 — 위험하지만 비프음으로 피로 줄임
-        return "beep"
     return "silent"
 
 
@@ -110,11 +108,11 @@ def _format_dist(dist_m: float) -> str:
       → 사용자가 판단하기 쉬운 상대 표현이 더 안전하고 정직합니다.
     """
     dist_m = max(0.1, min(dist_m, 15.0))  # 유효 범위 클리핑
-    if dist_m < 0.5:  return "바로 코앞"    # 즉각 위험 — 0.5m 미만
-    if dist_m < 1.0:  return "매우 가까운 곳"  # 주의 필요 — 1m 미만
-    if dist_m < 2.5:  return "가까운 곳"       # 경계 — 2.5m 미만
-    if dist_m < 5.0:  return "조금 멀 곳"    # 정보성 — 5m 미만
-    return "멀리"                            # 참고용 — 5m 이상
+    if dist_m < 0.5:  return "바로 코앞"      # 즉각 위험 — 0.5m 미만
+    if dist_m < 1.0:  return "매우 가까이"    # 주의 필요 — 1m 미만 (Android 동일)
+    if dist_m < 2.5:  return "가까이"         # 경계 — 2.5m 미만 (Android 동일)
+    if dist_m < 5.0:  return "조금 멀리"      # 정보성 — 5m 미만 (Android 동일)
+    return "멀리"                             # 참고용 — 5m 이상
 
 
 # ── 주요 물체 문장 생성 (위험도 1순위) ────────────────────────────────────────

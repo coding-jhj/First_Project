@@ -45,3 +45,8 @@ voiceguide.db
 android/app/build/
 android/.gradle/
 android/local.properties
+서버_DB_수정/__pycache__/
+서버_DB_수정/%s
+서버_DB_수정/ConnectionPool
+서버_DB_수정/dict[str
+서버_DB_수정/RoadGlass
