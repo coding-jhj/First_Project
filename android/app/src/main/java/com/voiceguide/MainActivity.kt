@@ -1155,14 +1155,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 }
                 markClassesSpoken(detections)
 
-                // 온디바이스 alertMode 계산
-                // (서버 없이 bbox 면적으로 거리 추정 — 8% 이상이면 1m 이내 추정)
-                val topDet = detections.firstOrNull()
-                val onDeviceMode = when {
-                    detections.any { it.classKo in ALWAYS_PASS } -> "critical"
-                    topDet != null && topDet.w * topDet.h > 0.08f -> "beep"
-                    else -> "normal"
-                }
+                // 온디바이스 alertMode: 차량·위험 → critical, 그 외 → normal
+                // beep는 서버 모드 전용 (서버가 거리를 정확히 알 때만 의미 있음)
+                val onDeviceMode = if (detections.any { it.classKo in ALWAYS_PASS }) "critical" else "normal"
                 handleSuccess(sentence, onDeviceMode)
             } catch (_: Exception) {
                 bmp?.recycle()
