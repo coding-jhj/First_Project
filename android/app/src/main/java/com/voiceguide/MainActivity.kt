@@ -88,10 +88,14 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // 최근 5프레임 탐지 결과를 기록해 3회 이상 등장한 사물만 안내
     // → 순간 오탐(인형·노트북 등)이 단발로 잡혀도 TTS 안내 안 됨
     private val detectionHistory = ArrayDeque<Set<String>>()
-    private val VOTE_WINDOW    = 3    // 최근 N프레임 기억
-    private val VOTE_MIN_COUNT = 2    // N프레임 중 최소 M번 이상이어야 확정 (3초 안에 2번)
+    private val VOTE_WINDOW    = 3
+    private val VOTE_MIN_COUNT = 2
     private val ALWAYS_PASS    = setOf("자동차","오토바이","버스","트럭","기차","자전거",
                                        "칼","가위","개","말","곰","코끼리")
+
+    // 클래스별 마지막 발화 시간 — 문장이 미세하게 달라도 같은 사물이면 쿨다운
+    private val classLastSpoken = mutableMapOf<String, Long>()
+    private val CLASS_COOLDOWN_MS = 5000L  // 같은 사물 5초 쿨다운
 
     private fun voteFilter(detections: List<Detection>): List<Detection> {
         val currentClasses = detections.map { it.classKo }.toSet()
@@ -101,9 +105,18 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         val counts = mutableMapOf<String, Int>()
         for (frame in detectionHistory) frame.forEach { counts[it] = (counts[it] ?: 0) + 1 }
 
+        val now = System.currentTimeMillis()
         return detections.filter { d ->
-            d.classKo in ALWAYS_PASS || (counts[d.classKo] ?: 0) >= VOTE_MIN_COUNT
+            val confirmed = d.classKo in ALWAYS_PASS || (counts[d.classKo] ?: 0) >= VOTE_MIN_COUNT
+            val cooledDown = d.classKo in ALWAYS_PASS ||
+                             (now - (classLastSpoken[d.classKo] ?: 0L)) > CLASS_COOLDOWN_MS
+            confirmed && cooledDown
         }
+    }
+
+    private fun markClassesSpoken(detections: List<Detection>) {
+        val now = System.currentTimeMillis()
+        detections.forEach { classLastSpoken[it.classKo] = now }
     }
     // 질문 응답 직후 periodic TTS 억제 — 겹침 방지 (3초간 periodic silent 처리)
     @Volatile private var suppressPeriodicUntil = 0L
@@ -1107,10 +1120,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
                 runOnUiThread { boundingBoxOverlay.setDetections(detections, imgW, imgH) }
 
+                if (detections.isEmpty()) {
+                    handleSuccess("주변에 장애물이 없어요.")
+                    return@Thread
+                }
+
                 val sentence = when (currentMode) {
                     "찾기"  -> SentenceBuilder.buildFind(findTarget, detections)
                     else   -> SentenceBuilder.build(detections)
                 }
+                markClassesSpoken(detections)  // 발화한 사물 쿨다운 등록
                 handleSuccess(sentence)
             } catch (_: Exception) {
                 bmp?.recycle()
