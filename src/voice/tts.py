@@ -31,13 +31,13 @@
 import os
 import hashlib
 import pygame
-from elevenlabs.client import ElevenLabs
+import requests
 
 _api_key = os.environ.get("ELEVENLABS_API_KEY", "")
-client = ElevenLabs(api_key=_api_key)
 
 _VOICE_ID  = "uyVNoMrnUku1dZyVEXwD"       # Anna Kim (한국어)
 _MODEL_ID  = "eleven_multilingual_v2"
+_TTS_URL = f"https://api.elevenlabs.io/v1/text-to-speech/{_VOICE_ID}"
 
 _CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "__tts_cache__")
 os.makedirs(_CACHE_DIR, exist_ok=True)
@@ -46,6 +46,25 @@ def _cache_path(text: str) -> str:
     key = hashlib.md5(f"eleven_{text}".encode("utf-8")).hexdigest()
     return os.path.join(_CACHE_DIR, f"{key}.mp3")
 
+def _write_tts_audio(text: str, path: str) -> None:
+    if not _api_key:
+        raise RuntimeError("ELEVENLABS_API_KEY is not set")
+
+    response = requests.post(
+        _TTS_URL,
+        headers={
+            "Accept": "audio/mpeg",
+            "Content-Type": "application/json",
+            "xi-api-key": _api_key,
+        },
+        json={"text": text, "model_id": _MODEL_ID},
+        timeout=30,
+    )
+    response.raise_for_status()
+
+    with open(path, "wb") as f:
+        f.write(response.content)
+
 def speak(text: str):
     """ElevenLabs TTS로 한국어 음성 재생. 동일 문장은 캐시에서 즉시 재생."""
     path = _cache_path(text)
@@ -53,14 +72,7 @@ def speak(text: str):
     if not os.path.exists(path):
         try:
             print(f"[TTS] 생성 중: {text}")
-            audio = client.text_to_speech.convert(
-                voice_id=_VOICE_ID,
-                text=text,
-                model_id=_MODEL_ID,
-            )
-            with open(path, "wb") as f:
-                for chunk in audio:
-                    f.write(chunk)
+            _write_tts_audio(text, path)
         except Exception as e:
             print(f"[TTS] ElevenLabs 오류: {e}")
             return
@@ -97,11 +109,7 @@ def warmup_cache():
         path = _cache_path(phrase)
         if not os.path.exists(path):
             try:
-                audio = client.text_to_speech.convert(
-                    voice_id=_VOICE_ID, text=phrase, model_id=_MODEL_ID)
-                with open(path, "wb") as f:
-                    for chunk in audio:
-                        f.write(chunk)
+                _write_tts_audio(phrase, path)
                 print(f"[TTS] 캐시 완료: {phrase[:20]}...")
             except Exception as e:
                 print(f"[TTS] 캐시 실패: {e}")
