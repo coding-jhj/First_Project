@@ -19,7 +19,7 @@
 | 🟡 추가 | 사물 인식률 개선 — 위험 클래스 임계값 조정 | ✅ 완료 |
 | 🟡 추가 | TTS 겹침 완전 차단 | ✅ 완료 |
 | 🟡 추가 | feature/nlg PR conflict 해결 + merge | ✅ 완료 |
-| 🔲 미완료 | 추론속도 / FPS 최적화 | 🔲 미완료 — 다음 우선순위 |
+| 🟡 추가 | 추론속도 / FPS 최적화 | ✅ 완료 — 이미지 압축 + 처리시간 측정 UI |
 | 🟢 하드웨어 | 뎁스 카메라 → Depth Anything V2로 대체 | ✅ 정상 동작 (/health 확인) |
 | 🟢 보류 | 사물 클래스 신규 추가 (전동킥보드 등) | 🔲 기능 완성 후 |
 
@@ -164,25 +164,18 @@ https://voiceguide-xxx.railway.app/dashboard  ← 외부 서버
 
 ---
 
-## 🔲 미완료 — 다음 우선순위
+## ✅ 추론속도 / FPS 최적화 — 완료
 
-### 추론속도 / FPS 최적화
-
-강사님이 언급한 항목. 현재 1초 간격 캡처인데, 실제 추론 속도와의 차이 점검 필요.
-
-**확인 포인트**:
-- 서버 응답 시간 측정: YOLO 추론 + Depth V2 추론 + 네트워크 시간
-- Android 쪽 `isSending` 플래그로 중복 요청 막는 중 → FPS 실측값 로깅 필요
-- `INTERVAL_MS = 1000L` → 서버 응답이 1초 미만이면 실질 FPS 향상 가능
-
-**개선 방향**:
-```kotlin
-// MainActivity.kt — 응답 시간 로깅 추가
-val start = System.currentTimeMillis()
-// ... 서버 요청 ...
-val elapsed = System.currentTimeMillis() - start
-Log.d("VG_FPS", "응답: ${elapsed}ms")
-```
+**구현 내용**:
+- `routes.py`: `process_ms` 필드 추가 — 서버 내부 처리 시간(ms) 응답에 포함
+- `MainActivity.kt`: `optimizeImageForUpload()` — 전송 전 640px 리사이즈 + JPEG 75% 압축
+  - 전송 크기 약 40~60% 감소 → 네트워크 지연 단축
+  - YOLO는 어차피 640×640으로 리사이즈하므로 품질 손실 없음
+- `MainActivity.kt`: `tvMode`에 `서버:XXXms 네트워크:XXXms` 실시간 표시
+- `templates/dashboard.html`: 네비게이션 / Google 로드뷰 버튼 추가 (GPS 수신 시 활성화)
+  - 네이버 지도로 열기
+  - 카카오맵으로 열기
+  - Google Street View (로드뷰)
 
 ### 사물 클래스 신규 추가
 

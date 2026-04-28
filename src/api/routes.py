@@ -120,6 +120,9 @@ async def detect(
     # ── 이미지 분석 공통 흐름 (장애물/찾기/확인/질문 모드) ───────────────────
     image_bytes = await image.read()  # multipart form에서 이미지 바이트 추출
 
+    # FPS 측정: 서버 처리 시간 기록 시작
+    _t0 = _time.monotonic()
+
     # GPS 위치 기록 (대시보드 지도 표시용) — 좌표가 있을 때만 저장
     if lat != 0.0 or lng != 0.0:
         db.save_gps(wifi_ssid or "__default__", lat, lng)
@@ -214,6 +217,9 @@ async def detect(
     if _should_suppress(sid, sentence, alert_mode):
         alert_mode = "silent"
 
+    # FPS 측정: 전체 처리 시간 계산 (Android 앱 UI에 표시용)
+    process_ms = int((_time.monotonic() - _t0) * 1000)
+
     return {
         "sentence":      sentence,
         "alert_mode":    alert_mode,
@@ -222,6 +228,7 @@ async def detect(
         "changes":       all_changes,
         "scene":         scene,
         "depth_source":  objects[0].get("depth_source", "bbox") if objects else "bbox",
+        "process_ms":    process_ms,  # 서버 처리 시간 ms — Android FPS 표시용
     }
 
 

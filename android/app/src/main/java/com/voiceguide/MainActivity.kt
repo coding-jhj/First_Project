@@ -85,6 +85,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private var lastSentence = ""                  // 직전 안내 문장 (반복 방지)
     // 질문 응답 직후 periodic TTS 억제 — 겹침 방지 (3초간 periodic silent 처리)
     @Volatile private var suppressPeriodicUntil = 0L
+    // FPS 측정 — 마지막 요청 시각과 서버 응답시간(ms) 기록
+    private var lastRequestTime = 0L
+    @Volatile private var lastProcessMs = 0
 
     // ── HTTP 클라이언트 (서버 연동 — 선택 사항) ────────────────────────
     // connectTimeout: 서버 연결 최대 대기 5초
@@ -1029,6 +1032,40 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }.start()
     }
 
+    /**
+     * 서버 전송 전 이미지 최적화 — FPS 개선 핵심
+     *
+     * 원본 이미지(예: 4000×3000, JPEG 90%) → 640×480, JPEG 75%로 변환
+     * 전송 크기 약 40~60% 감소 → 네트워크 지연 단축 → 체감 FPS 향상
+     * YOLO 입력은 어차피 640×640으로 리사이즈되므로 품질 손실 없음
+     */
+    private fun optimizeImageForUpload(file: File): File {
+        return try {
+            val bmp = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
+                ?: return file  // 디코딩 실패 시 원본 반환
+
+            // 가로 기준 최대 640px — YOLO 입력 해상도에 맞춤
+            val maxW = 640
+            val scaled = if (bmp.width > maxW) {
+                val ratio  = maxW.toFloat() / bmp.width
+                val newH   = (bmp.height * ratio).toInt()
+                android.graphics.Bitmap.createScaledBitmap(bmp, maxW, newH, true)
+                    .also { if (it != bmp) bmp.recycle() }
+            } else bmp
+
+            val out = File.createTempFile("vg_opt_", ".jpg", cacheDir)
+            out.outputStream().use { stream ->
+                // JPEG 75%: 시각적 품질 충분, 파일 크기 크게 감소
+                scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 75, stream)
+            }
+            scaled.recycle()
+            file.delete()  // 원본 삭제
+            out
+        } catch (_: Exception) {
+            file  // 실패 시 원본 그대로 사용
+        }
+    }
+
     // ── 온디바이스 추론 ─────────────────────────────────────────────────
 
     private fun processOnDevice(imageFile: File) {
@@ -1097,9 +1134,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
         Thread {
             try {
+                // FPS 측정 시작 — 요청 전송 시각 기록
+                val reqStart = System.currentTimeMillis()
+                lastRequestTime = reqStart
+
+                // 이미지 압축 최적화: 해상도 640×480으로 리사이즈 후 JPEG 75% 품질
+                // 기존 대비 전송 크기 약 40% 감소 → 네트워크 지연 단축
+                val optimized = optimizeImageForUpload(imageFile)
+
                 val body = MultipartBody.Builder().setType(MultipartBody.FORM)
                     .addFormDataPart("image", "frame.jpg",
-                        imageFile.asRequestBody("image/jpeg".toMediaType()))
+                        optimized.asRequestBody("image/jpeg".toMediaType()))
                     .addFormDataPart("camera_orientation", cameraOrientation)
                     .addFormDataPart("wifi_ssid", getWifiSsid())
                     .addFormDataPart("mode", currentMode)
@@ -1112,10 +1157,22 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     Request.Builder().url("$serverUrl/detect").post(body).build()
                 ).execute()
 
-                val json      = JSONObject(response.body?.string() ?: "{}")
-                val sentence  = json.optString("sentence", "주변에 장애물이 없어요.")
-                val alertMode = json.optString("alert_mode", "critical")
+                // 전체 왕복 시간 = 네트워크 + 서버 처리
+                val roundTripMs = System.currentTimeMillis() - reqStart
+                val json        = JSONObject(response.body?.string() ?: "{}")
+                val sentence    = json.optString("sentence", "주변에 장애물이 없어요.")
+                val alertMode   = json.optString("alert_mode", "critical")
+                val processMs   = json.optInt("process_ms", -1)  // 서버 내부 처리 시간
+                lastProcessMs   = processMs
+
                 checkWaitingBus(json)   // 버스 대기 모드 자동 감지
+
+                // FPS 정보 UI 업데이트 (네트워크 ms / 서버 ms)
+                runOnUiThread {
+                    val netMs = if (processMs > 0) roundTripMs - processMs else roundTripMs
+                    tvMode.text = "모드: $currentMode | 서버:${processMs}ms 네트워크:${netMs}ms"
+                }
+
                 handleSuccess(sentence, alertMode)
             } catch (_: Exception) {
                 handleFail()

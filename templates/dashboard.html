@@ -285,13 +285,45 @@
     flex-shrink: 0;
   }
 
-  /* 타임스탬프 */
+  /* 네비게이션 버튼 그룹 */
+  .nav-buttons {
+    position: absolute;
+    z-index: 400;
+    top: 16px; left: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .nav-btn {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    text-decoration: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+  .nav-btn:hover { background: var(--surface2); border-color: var(--accent); }
+  .nav-btn.naver  { border-color: #03c75a33; color: #03c75a; }
+  .nav-btn.kakao  { border-color: #fee50033; color: #fee500; }
+  .nav-btn.street { border-color: #4285f433; color: #4285f4; }
+
+  /* 타임스탬프 + FPS */
   .last-update {
     position: absolute;
     z-index: 400;
     bottom: 24px; right: 16px;
     font-size: 11px;
     color: var(--muted);
+    text-align: right;
   }
 
   /* 토스트 알림 */
@@ -401,6 +433,19 @@
         <span class="gps-label">경로 포인트</span>
         <span class="gps-value" id="trackCount">0</span>
       </div>
+    </div>
+
+    <!-- 네비게이션 / 로드뷰 버튼 -->
+    <div class="nav-buttons" id="navButtons" style="display:none;">
+      <a id="btnNaver" class="nav-btn naver" href="#" target="_blank">
+        🗺️ 네이버 지도로 열기
+      </a>
+      <a id="btnKakao" class="nav-btn kakao" href="#" target="_blank">
+        🗺️ 카카오맵으로 열기
+      </a>
+      <a id="btnStreet" class="nav-btn street" href="#" target="_blank">
+        📸 Google 로드뷰
+      </a>
     </div>
 
     <!-- 범례 -->
@@ -579,6 +624,19 @@ function renderGps(gps, track) {
     map.setView(pos, 17);
     mapCentered = true;
   }
+
+  // 네비게이션·로드뷰 버튼 URL 업데이트
+  const lat = gps.lat, lng = gps.lng;
+  document.getElementById('navButtons').style.display = 'flex';
+  // 네이버 지도: 현재 위치 중심으로 열기
+  document.getElementById('btnNaver').href =
+    `https://map.naver.com/v5/?c=${lng},${lat},15,0,0,0,dh`;
+  // 카카오맵: 현재 위치 중심으로 열기
+  document.getElementById('btnKakao').href =
+    `https://map.kakao.com/link/map/현재위치,${lat},${lng}`;
+  // Google Street View (로드뷰 대체): 현재 좌표로
+  document.getElementById('btnStreet').href =
+    `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lng}`;
 }
 
 // ── 폴링 ─────────────────────────────────────────────
@@ -607,8 +665,10 @@ async function poll() {
     }
     prevObjectCount = currCount;
 
-    document.getElementById('lastUpdate').textContent =
-      '마지막 업데이트: ' + new Date().toLocaleTimeString('ko-KR');
+    const objCount = (data.objects ?? []).length;
+    document.getElementById('lastUpdate').innerHTML =
+      '마지막 업데이트: ' + new Date().toLocaleTimeString('ko-KR') +
+      `<br>탐지: ${objCount}개`;
   } catch (e) {
     dot.className  = 'pulse-dot offline';
     text.textContent = '서버 연결 끊김';
