@@ -174,6 +174,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // FPS 스파크라인 그래프 (최근 10프레임)
     private val fpsHistory = ArrayDeque<Float>(10)
     private val SPARK = arrayOf("▁","▂","▃","▄","▅","▆","▇","█")
+    private var debugVisible = false   // 디버그 오버레이 표시 여부
 
     // ── HTTP 클라이언트 (서버 연동 — 선택 사항) ────────────────────────
     // connectTimeout: 서버 연결 최대 대기 5초
@@ -277,6 +278,14 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         btnStt      = findViewById(R.id.btnStt)
         previewView         = findViewById(R.id.previewView)
         boundingBoxOverlay  = findViewById(R.id.boundingBoxOverlay)
+
+        // 디버그 오버레이 — tvMode 길게 누르면 토글
+        val tvDebug = findViewById<android.widget.TextView>(R.id.tvDebug)
+        tvMode.setOnLongClickListener {
+            debugVisible = !debugVisible
+            tvDebug.visibility = if (debugVisible) android.view.View.VISIBLE else android.view.View.GONE
+            true
+        }
 
         // 저장된 서버 URL 복원 (없어도 무관)
         etServerUrl.setText(
@@ -1248,6 +1257,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 val inferMs = System.currentTimeMillis() - tInfer
 
                 val tDedup = System.currentTimeMillis()
+                // 투표 필터 → 같은 클래스 중복 bbox 제거(IoU 기반) 순서로 처리
                 val voted = removeDuplicates(voteOnly(rawDetections))
                 val dedupMs = System.currentTimeMillis() - tDedup
 
@@ -1269,6 +1279,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     val spark = buildSparkline()
                     lastFpsText = "${fps}fps $spark | ${inferMs}ms"
                     tvMode.text = "[$currentMode] $lastFpsText"
+                    if (debugVisible) {
+                        val tv = findViewById<android.widget.TextView>(R.id.tvDebug)
+                        tv.text = "FPS    : ${fps}\n" +
+                                  "디코딩 : ${decodeMs}ms\n" +
+                                  "YOLO   : ${inferMs}ms\n" +
+                                  "후처리 : ${dedupMs}ms\n" +
+                                  "전체   : ${totalMs}ms\n" +
+                                  "탐지수 : raw=${rawDetections.size} → ${voted.size}"
+                    }
                 }
 
                 bmp.recycle(); bmp = null
@@ -1438,6 +1457,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     val spark = buildSparkline()
                     lastFpsText = "${fps}fps $spark | 서버:${processMs}ms"
                     tvMode.text = "[$currentMode] $lastFpsText"
+                    if (debugVisible) {
+                        val tv = findViewById<android.widget.TextView>(R.id.tvDebug)
+                        tv.text = "FPS      : ${fps}\n" +
+                                  "서버처리 : ${if (processMs > 0) "${processMs}ms" else "-"}\n" +
+                                  "네트워크 : ${netMs}ms\n" +
+                                  "전체왕복 : ${roundTripMs}ms"
+                    }
                 }
 
                 // CSV 성능 로그 (CSV_LOG_ENABLED=true 시 활성화)
