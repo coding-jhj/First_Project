@@ -168,6 +168,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // FPS 측정 — 마지막 요청 시각과 서버 응답시간(ms) 기록
     private var lastRequestTime = 0L
     @Volatile private var lastProcessMs = 0
+    private var lastFpsText = ""  // 마지막 FPS 텍스트 — STT 중에도 유지
 
     // ── HTTP 클라이언트 (서버 연동 — 선택 사항) ────────────────────────
     // connectTimeout: 서버 연결 최대 대기 5초
@@ -458,7 +459,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 800L)
         }
-        tvMode.text = "🎤 듣는 중... [$currentMode]"
+        // FPS 정보 유지하면서 듣는 중 표시
+        tvMode.text = "🎤 [$currentMode] 듣는 중...${if (lastFpsText.isNotEmpty()) "  $lastFpsText" else ""}"
         speechRecognizer.startListening(intent)
     }
 
@@ -1217,6 +1219,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         Thread {
             // 새 분석 시작 시 이전 바운딩박스 즉시 제거
             runOnUiThread { boundingBoxOverlay.clearDetections() }
+            val t0 = System.currentTimeMillis()
             var bmp: android.graphics.Bitmap? = null
             try {
                 // EXIF 회전 정보를 반영해 바른 방향의 비트맵으로 디코딩
@@ -1227,6 +1230,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 val rawDetections = yoloDetector!!.detect(bmp)
                 // 투표 필터 → 같은 클래스 중복 bbox 제거(IoU 기반) 순서로 처리
                 val voted         = removeDuplicates(voteOnly(rawDetections))
+                val inferMs = System.currentTimeMillis() - t0
+                runOnUiThread {
+                    lastFpsText = "온디바이스:${inferMs}ms"
+                    tvMode.text = "[$currentMode] $lastFpsText"
+                }
 
                 bmp.recycle(); bmp = null
                 imageFile.delete()
@@ -1353,7 +1361,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 // FPS 정보 UI 업데이트 (네트워크 ms / 서버 ms)
                 runOnUiThread {
                     val netMs = if (processMs > 0) roundTripMs - processMs else roundTripMs
-                    tvMode.text = "모드: $currentMode | 서버:${processMs}ms 네트워크:${netMs}ms"
+                    lastFpsText = "서버:${processMs}ms 네트워크:${netMs}ms"
+                    tvMode.text = "[$currentMode] $lastFpsText"
                 }
 
                 handleSuccess(sentence, alertMode)
