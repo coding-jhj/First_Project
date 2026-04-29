@@ -10,7 +10,7 @@
 ```
 사용자가 말한다 → STT가 듣는다 → 모드를 결정한다
                                         ↓
-                              카메라로 사진을 찍는다 (1초마다 자동)
+                              카메라로 사진을 찍는다 (0.8초마다 자동)
                                         ↓
                               YOLO가 물체를 찾는다
                               Depth V2가 거리를 추정한다
@@ -134,18 +134,28 @@ depth_val = np.percentile(region, 30)
 
 모델 파일이 없으면 자동으로 bbox 면적 기반 fallback.
 
-### 거리 표현 (2026-04-27 변경)
+### 거리 표현 (2026-04-29 업데이트)
 
-강사님 피드백 반영: 카메라로 정확한 수치 거리는 측정 불가.
-"약 1.2미터" 대신 상대 표현 사용.
+Depth V2 추정값을 실제 미터로 표현. 서버와 Android 앱 모두 동일.
 
 ```python
+# src/nlg/sentence.py
 def _format_dist(dist_m):
     if dist_m < 0.5:  return "바로 코앞"
-    if dist_m < 1.0:  return "매우 가까이"
-    if dist_m < 2.5:  return "가까이"
-    if dist_m < 5.0:  return "조금 멀리"
-    return "멀리"
+    if dist_m < 3.0:
+        r = round(dist_m * 2) / 2   # 0.5m 단위
+        return f"약 {r}미터 앞"
+    return f"약 {round(dist_m)}미터 앞"  # 1m 단위
+```
+
+```kotlin
+// SentenceBuilder.kt (Android)
+fun formatDist(w: Float, h: Float): String {
+    val distM = sqrt(0.12f / (w * h))  // bbox 면적 기반
+    if (distM < 0.5f) return "바로 코앞"
+    // 0.5m 단위 반올림 → "약 1.5미터 앞"
+    // 1m 단위 반올림  → "약 3미터 앞"
+}
 ```
 
 ### 계단·낙차 감지 (`src/depth/hazard.py`)

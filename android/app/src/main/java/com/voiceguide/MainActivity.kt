@@ -168,6 +168,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // FPS 측정 — 마지막 요청 시각과 서버 응답시간(ms) 기록
     private var lastRequestTime = 0L
     @Volatile private var lastProcessMs = 0
+    private var lastFpsText = ""      // 마지막 FPS 텍스트 — STT 중에도 유지
+    private var lastFrameDoneTime = 0L  // FPS 계산용 — 직전 프레임 완료 시각
+    private var currentFps = 0.0f      // 최근 계산된 FPS
 
     // ── HTTP 클라이언트 (서버 연동 — 선택 사항) ────────────────────────
     // connectTimeout: 서버 연결 최대 대기 5초
@@ -250,7 +253,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         private const val PREFS_NAME       = "voiceguide"  // SharedPreferences 이름
         private const val PREF_URL         = "server_url"  // 저장된 서버 URL 키
         private const val PREF_LOCATIONS   = "saved_locations"  // 저장 장소 JSON 배열 키
-        private const val INTERVAL_MS      = 1000L         // 캡처 간격: 1초
+        private const val INTERVAL_MS      = 800L          // 캡처 간격: 0.8초 (빠른 응답)
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
         private const val FAIL_WARN_COUNT  = 3             // 연속 3회 실패 시 경고
     }
@@ -385,10 +388,24 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
         speechRecognizer.setRecognitionListener(object : RecognitionListener {
             override fun onResults(results: Bundle) {
-                // RESULTS_RECOGNITION: 인식된 텍스트 후보 배열 (확신도 높은 순)
-                val text = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    ?.firstOrNull() ?: return  // 가장 확신도 높은 1개 사용
+                val candidates = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.takeIf { it.isNotEmpty() } ?: return
+                // 후보 중 장애물 fallback이 아닌 키워드가 매칭되는 것 우선 선택
+                val text = candidates.firstOrNull { classifyKeyword(it) != "장애물" }
+                    ?: candidates.first()
+                runOnUiThread {
+                    btnStt.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFF059669.toInt())
+                }
                 handleSttResult(text)
+            }
+            override fun onPartialResults(partialResults: Bundle?) {
+                // 부분 인식 결과로 UI 즉시 반응 (사용자에게 인식 중임을 보여줌)
+                val partial = partialResults
+                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull() ?: return
+                if (partial.isNotEmpty()) {
+                    runOnUiThread { tvMode.text = "🎤 \"$partial\"" }
+                }
             }
             override fun onError(error: Int) {
                 isListening = false
@@ -398,7 +415,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     SpeechRecognizer.ERROR_RECOGNIZER_BUSY
                 )
                 if (autoListenEnabled && retryable) {
-                    runOnUiThread { tvMode.text = "모드: $currentMode  |  듣는 중..." }
+                    runOnUiThread {
+                        tvMode.text = "🎤 [$currentMode] 듣는 중...${if (lastFpsText.isNotEmpty()) "  $lastFpsText" else ""}"
+                        btnStt.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFF059669.toInt())
+                    }
                     handler.postDelayed({ scheduleAutoListen() }, 800)
                 } else {
                     runOnUiThread { tvMode.text = "음성 인식 실패. 다시 눌러주세요." }
@@ -410,7 +430,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             override fun onRmsChanged(v: Float)         {}
             override fun onBufferReceived(b: ByteArray?) {}
             override fun onEndOfSpeech()                {}
-            override fun onPartialResults(p: Bundle?)   {}
             override fun onEvent(t: Int, p: Bundle?)    {}
         })
     }
@@ -437,11 +456,19 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         isElevenLabsSpeaking = false
         isListening = true
         val intent = android.content.Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            // WEB_SEARCH: 짧은 명령어에 최적화 (FREE_FORM보다 인식률 높음)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_WEB_SEARCH)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ko-KR")
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)          // 후보 3개 → 키워드 매칭률 향상
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)   // 말하는 중간에도 결과 수신
+            // 침묵 감지 시간 단축 → 명령어 말한 뒤 빠르게 인식 완료
+            putExtra("android.speech.extra.DICTATION_MODE", false)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 800L)
         }
-        tvMode.text = "모드: $currentMode  |  듣는 중..."
+        // FPS 정보 유지하면서 듣는 중 표시
+        tvMode.text = "🎤 [$currentMode] 듣는 중...${if (lastFpsText.isNotEmpty()) "  $lastFpsText" else ""}"
+        btnStt.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFDC2626.toInt())
         speechRecognizer.startListening(intent)
     }
 
@@ -1027,7 +1054,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         lastSentence = ""
         consecutiveFails.set(0)
         lastSuccessTime = System.currentTimeMillis()
-        btnToggle.text = "분석 중지"
+        btnToggle.text = "■ 분석 중지"
+        btnToggle.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFDC2626.toInt())
         tvStatus.text  = "분석 중..."
         captureAndProcess()
         scheduleNext()
@@ -1039,7 +1067,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         isAnalyzing.set(false)
         autoListenEnabled = false
         handler.removeCallbacksAndMessages(null)
-        btnToggle.text = "분석 시작"
+        btnToggle.text = "▶ 분석 시작"
+        btnToggle.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFF2563EB.toInt())
         tvStatus.text  = "분석 중지됨"
         boundingBoxOverlay.clearDetections()
     }
@@ -1198,6 +1227,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     private fun processOnDevice(imageFile: File) {
         Thread {
+            // 새 분석 시작 시 이전 바운딩박스 즉시 제거
+            runOnUiThread { boundingBoxOverlay.clearDetections() }
+            val t0 = System.currentTimeMillis()
             var bmp: android.graphics.Bitmap? = null
             try {
                 // EXIF 회전 정보를 반영해 바른 방향의 비트맵으로 디코딩
@@ -1208,6 +1240,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 val rawDetections = yoloDetector!!.detect(bmp)
                 // 투표 필터 → 같은 클래스 중복 bbox 제거(IoU 기반) 순서로 처리
                 val voted         = removeDuplicates(voteOnly(rawDetections))
+                val inferMs = System.currentTimeMillis() - t0
+                runOnUiThread {
+                    val fps = calcFps()
+                    lastFpsText = "${fps}fps | 온디바이스:${inferMs}ms"
+                    tvMode.text = "[$currentMode] $lastFpsText"
+                }
 
                 bmp.recycle(); bmp = null
                 imageFile.delete()
@@ -1331,10 +1369,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
                 checkWaitingBus(json)   // 버스 대기 모드 자동 감지
 
-                // FPS 정보 UI 업데이트 (네트워크 ms / 서버 ms)
+                // FPS + 처리시간 UI 업데이트
                 runOnUiThread {
                     val netMs = if (processMs > 0) roundTripMs - processMs else roundTripMs
-                    tvMode.text = "모드: $currentMode | 서버:${processMs}ms 네트워크:${netMs}ms"
+                    val fps   = calcFps()
+                    lastFpsText = "${fps}fps | 서버:${processMs}ms 네트:${netMs}ms"
+                    tvMode.text = "[$currentMode] $lastFpsText"
                 }
 
                 handleSuccess(sentence, alertMode)
@@ -1385,6 +1425,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     val now = System.currentTimeMillis()
                     if (sentence != lastSentence || now - lastCriticalTime > 5000L) {
                         val isVehicleDanger = ALWAYS_PASS.any { sentence.contains(it) }
+                        // 차량·계단 긴급이 아닌 경우 TTS 재생 중이면 끊지 않음
+                        if (!isVehicleDanger && isSpeaking()) return@runOnUiThread
                         lastSentence     = sentence
                         lastCriticalTime = now
                         tvStatus.text    = sentence
@@ -1523,6 +1565,18 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private fun isSpeaking(): Boolean =
         if (etServerUrl.text.toString().trim().isNotEmpty()) isElevenLabsSpeaking
         else ttsBusy.get()
+
+    /** 직전 프레임과의 시간 간격으로 FPS 계산. 소수점 1자리 반올림. */
+    private fun calcFps(): String {
+        val now = System.currentTimeMillis()
+        val fps = if (lastFrameDoneTime > 0L && now > lastFrameDoneTime) {
+            1000.0f / (now - lastFrameDoneTime)
+        } else 0.0f
+        lastFrameDoneTime = now
+        currentFps = fps
+        return if (fps >= 10f) "%.0f".format(fps)
+               else            "%.1f".format(fps)
+    }
 
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
