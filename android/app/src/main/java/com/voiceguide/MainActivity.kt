@@ -179,8 +179,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // connectTimeout: 서버 연결 최대 대기 5초
     // readTimeout: 서버 응답 최대 대기 8초 (YOLO+Depth 추론 시간 고려)
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(8, TimeUnit.SECONDS)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
         .build()
     // AtomicInteger: 연속 실패 횟수 (3회 이상이면 경고 음성)
     private val consecutiveFails = AtomicInteger(0)
@@ -1541,17 +1541,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     private fun speak(text: String) {
         // STT 중이면 먼저 취소하고 TTS 재생
-        // cancel()은 onResults/onError 없이 즉시 중단 → echo 방지하면서 TTS 재생 가능
         if (isListening) {
             try { speechRecognizer.cancel() } catch (_: Exception) {}
             isListening = false
         }
-        val serverUrl = etServerUrl.text.toString().trim()
-        if (serverUrl.isNotEmpty()) {
-            speakElevenLabs(text, serverUrl)
-        } else {
-            speakBuiltIn(text)
-        }
+        speakBuiltIn(text)
     }
 
     private fun speakBuiltIn(text: String, immediate: Boolean = false) {
@@ -1597,9 +1591,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }
     }
 
-    private fun isSpeaking(): Boolean =
-        if (etServerUrl.text.toString().trim().isNotEmpty()) isElevenLabsSpeaking
-        else ttsBusy.get()
+    private fun isSpeaking(): Boolean = ttsBusy.get() || isElevenLabsSpeaking
 
     /** 직전 프레임과의 시간 간격으로 FPS 계산 + 스파크라인 업데이트 */
     private fun calcFps(): String {
