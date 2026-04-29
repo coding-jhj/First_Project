@@ -1362,6 +1362,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }
 
         Thread {
+            var sentImgW = 0
+            var sentImgH = 0
             try {
                 // FPS 측정 시작 — 요청 전송 시각 기록
                 val reqStart = System.currentTimeMillis()
@@ -1370,6 +1372,14 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 // 이미지 압축 최적화: 해상도 640×480으로 리사이즈 후 JPEG 75% 품질
                 // 기존 대비 전송 크기 약 40% 감소 → 네트워크 지연 단축
                 val optimized = optimizeImageForUpload(imageFile)
+
+                // 전송 이미지 크기 기록 — 서버 응답 bbox 좌표 정규화에 사용
+                android.graphics.BitmapFactory.Options().also { opts ->
+                    opts.inJustDecodeBounds = true
+                    android.graphics.BitmapFactory.decodeFile(optimized.absolutePath, opts)
+                    sentImgW = opts.outWidth.coerceAtLeast(1)
+                    sentImgH = opts.outHeight.coerceAtLeast(1)
+                }
 
                 val body = MultipartBody.Builder().setType(MultipartBody.FORM)
                     .addFormDataPart("image", "frame.jpg",
@@ -1394,7 +1404,34 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 val processMs   = json.optInt("process_ms", -1)  // 서버 내부 처리 시간
                 lastProcessMs   = processMs
 
-                checkWaitingBus(json)   // 버스 대기 모드 자동 감지
+                checkWaitingBus(json)
+
+                // 서버 탐지 결과로 바운딩박스 즉시 갱신 — 화면에서 물체 사라지면 박스도 제거
+                val serverObjs = json.optJSONArray("objects")
+                val detections = mutableListOf<Detection>()
+                if (serverObjs != null && sentImgW > 0 && sentImgH > 0) {
+                    for (i in 0 until serverObjs.length()) {
+                        val obj  = serverObjs.getJSONObject(i)
+                        val bbox = obj.optJSONArray("bbox") ?: continue
+                        if (bbox.length() < 4) continue
+                        val x1 = bbox.optDouble(0).toFloat()
+                        val y1 = bbox.optDouble(1).toFloat()
+                        val x2 = bbox.optDouble(2).toFloat()
+                        val y2 = bbox.optDouble(3).toFloat()
+                        detections.add(Detection(
+                            classKo    = obj.optString("class_ko", "물체"),
+                            confidence = obj.optDouble("conf", 0.5).toFloat(),
+                            cx = ((x1 + x2) / 2f) / sentImgW,
+                            cy = ((y1 + y2) / 2f) / sentImgH,
+                            w  = (x2 - x1).coerceAtLeast(1f) / sentImgW,
+                            h  = (y2 - y1).coerceAtLeast(1f) / sentImgH
+                        ))
+                    }
+                }
+                runOnUiThread {
+                    if (detections.isEmpty()) boundingBoxOverlay.clearDetections()
+                    else boundingBoxOverlay.setDetections(detections, sentImgW, sentImgH)
+                }
 
                 // FPS + 처리시간 UI 업데이트
                 val netMs = if (processMs > 0) roundTripMs - processMs else roundTripMs
@@ -1412,6 +1449,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 handleFail()
             } finally {
                 imageFile.delete()
+                isSending.set(false)  // 예외로 handleFail 미호출 시 안전망
             }
         }.start()
     }
