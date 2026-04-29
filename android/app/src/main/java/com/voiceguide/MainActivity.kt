@@ -180,8 +180,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // connectTimeout: 서버 연결 최대 대기 5초
     // readTimeout: 서버 응답 최대 대기 8초 (YOLO+Depth 추론 시간 고려)
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(8, TimeUnit.SECONDS)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
         .build()
     // AtomicInteger: 연속 실패 횟수 (3회 이상이면 경고 음성)
     private val consecutiveFails = AtomicInteger(0)
@@ -257,7 +257,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         private const val PREFS_NAME       = "voiceguide"  // SharedPreferences 이름
         private const val PREF_URL         = "server_url"  // 저장된 서버 URL 키
         private const val PREF_LOCATIONS   = "saved_locations"  // 저장 장소 JSON 배열 키
-        private const val INTERVAL_MS      = 800L          // 캡처 간격: 0.8초 (빠른 응답)
+        private const val INTERVAL_MS      = 100L          // 캡처 간격: 0.1초 (10fps 목표)
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
         private const val FAIL_WARN_COUNT  = 3             // 연속 3회 실패 시 경고
     }
@@ -1104,8 +1104,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         handler.postDelayed({
             if (isAnalyzing.get()) {
                 checkRevisit()
-                captureAndProcess()
-                scheduleNext()
+                captureAndProcess()  // isSending 플래그로 중복 방지
+                scheduleNext()       // 100ms 후 다시 시도 (실제 FPS = 추론시간에 의해 결정)
             }
         }, INTERVAL_MS)
     }
@@ -1239,8 +1239,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     private fun processOnDevice(imageFile: File) {
         Thread {
-            // 새 분석 시작 시 이전 바운딩박스 즉시 제거
-            runOnUiThread { boundingBoxOverlay.clearDetections() }
             val t0 = System.currentTimeMillis()
             var bmp: android.graphics.Bitmap? = null
             try {
@@ -1265,6 +1263,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 // 구조화 성능 로그 — Logcat에서 tag:VG_PERF 로 필터
                 android.util.Log.d("VG_PERF",
                     "decode|$decodeMs|infer|$inferMs|dedup|$dedupMs|total|$totalMs|objs|${voted.size}")
+
+                // FPS < 10 이면 경고 로그
+                val estimatedFps = if (totalMs > 0) 1000f / totalMs else 0f
+                if (estimatedFps < 10f) {
+                    android.util.Log.w("VG_PERF",
+                        "⚠ FPS 미달: ${String.format("%.1f", estimatedFps)}fps (${totalMs}ms) — 모델 경량화 필요")
+                }
 
                 runOnUiThread {
                     val fps = calcFps()
@@ -1291,7 +1296,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     Log.d("VG_DETECT", "  [$i] ${d.classKo} | conf=${String.format("%.2f", d.confidence)} | cx=${String.format("%.2f", d.cx)} | w=${String.format("%.2f", d.w)} h=${String.format("%.2f", d.h)} | area=${String.format("%.3f", d.w * d.h)}")
                 }
 
-                runOnUiThread { boundingBoxOverlay.setDetections(voted, imgW, imgH) }
+                runOnUiThread {
+                    if (voted.isEmpty()) {
+                        boundingBoxOverlay.clearDetections()  // 탐지 없을 때만 박스 제거
+                    } else {
+                        boundingBoxOverlay.setDetections(voted, imgW, imgH)
+                    }
+                }
 
                 if (voted.isEmpty()) {
                     Log.d("VG_DETECT", "→ 장애물 없음")
@@ -1555,9 +1566,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     } catch (_: Exception) { "" }
 
     private fun speak(text: String) {
-        if (isListening) return  // STT 중엔 TTS 차단 (마이크 간섭 방지)
-        // 서버 URL은 /detect 전용 — TTS는 항상 Android 내장 TTS 사용
-        // (ElevenLabs는 API 키 없으면 소리 안 남)
+        // STT 중이면 먼저 취소하고 TTS 재생
+        if (isListening) {
+            try { speechRecognizer.cancel() } catch (_: Exception) {}
+            isListening = false
+        }
         speakBuiltIn(text)
     }
 
@@ -1604,9 +1617,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }
     }
 
-    private fun isSpeaking(): Boolean =
-        if (etServerUrl.text.toString().trim().isNotEmpty()) isElevenLabsSpeaking
-        else ttsBusy.get()
+    private fun isSpeaking(): Boolean = ttsBusy.get() || isElevenLabsSpeaking
 
     /** 직전 프레임과의 시간 간격으로 FPS 계산 + 스파크라인 업데이트 */
     private fun calcFps(): String {

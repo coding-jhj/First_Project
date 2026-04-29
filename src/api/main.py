@@ -10,15 +10,18 @@ from src.api import db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 서버 시작 시: DB 초기화 + YOLO 워밍업
+    # 서버 시작 시: DB 초기화 + YOLO + Depth V2 워밍업
     db.init_db()
     import numpy as np
     from src.vision.detect import model, CONF_THRESHOLD
     model(np.zeros((640, 640, 3), dtype=np.uint8), conf=CONF_THRESHOLD, verbose=False)
-    # EasyOCR 워밍업: 첫 요청 지연 방지 (백그라운드 스레드)
+    # Depth V2 모델 미리 로드 — 안 하면 첫 /detect 요청에서 10~30초 걸려 Android timeout 발생
+    from src.depth.depth import _load_model
+    _load_model()
+    # EasyOCR·TTS 워밍업: 느려도 무관하므로 백그라운드 스레드
     import threading
-    threading.Thread(target=_warmup_ocr,  daemon=True).start()
-    threading.Thread(target=_warmup_tts,  daemon=True).start()
+    threading.Thread(target=_warmup_ocr, daemon=True).start()
+    threading.Thread(target=_warmup_tts, daemon=True).start()
     yield
 
 
