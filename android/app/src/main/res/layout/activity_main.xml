@@ -1,94 +1,136 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:background="#000000">
+    android:background="@color/vg_bg">
 
-    <EditText
-        android:id="@+id/etServerUrl"
+    <!-- ── 카메라 프리뷰 (전체 화면) ── -->
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:hint="서버 URL  예) http://192.168.x.x:8000"
-        android:inputType="textUri"
-        android:padding="10dp"
-        android:textSize="13sp"
-        android:background="#1A1A1A"
-        android:textColor="#FFFFFF"
-        android:textColorHint="#888888" />
+        android:layout_height="match_parent" />
 
-    <!-- 카메라 프리뷰 + 디버그 바운드박스 오버레이를 겹치기 위해 FrameLayout으로 감쌈 -->
-    <FrameLayout
+    <!-- ── 바운딩박스 오버레이 ── -->
+    <com.voiceguide.BoundingBoxOverlay
+        android:id="@+id/boundingBoxOverlay"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1">
+        android:layout_height="match_parent" />
 
-        <!-- 실제 카메라 프리뷰 -->
-        <androidx.camera.view.PreviewView
-            android:id="@+id/previewView"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent" />
-
-        <!-- 디버깅용 바운드박스 오버레이 (프리뷰 위에 겹쳐서 표시) -->
-        <com.voiceguide.BoundingBoxOverlay
-            android:id="@+id/boundingBoxOverlay"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent" />
-
-    </FrameLayout>
-
-    <!-- 음성 안내 결과 -->
-    <TextView
-        android:id="@+id/tvStatus"
+    <!-- ── 하단 그라데이션 페이드 ── -->
+    <View
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:minHeight="80dp"
-        android:text="분석 시작 버튼을 누르세요"
-        android:textSize="22sp"
-        android:textColor="#FFFFFF"
-        android:gravity="center"
-        android:padding="16dp"
-        android:background="#1A1A1A"
-        android:lineSpacingMultiplier="1.4" />
+        android:layout_height="280dp"
+        android:layout_gravity="bottom"
+        android:background="@drawable/bg_camera_gradient" />
 
-    <!-- 모드 / 방향 상태 표시 -->
-    <TextView
-        android:id="@+id/tvMode"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="모드: 장애물  |  방향: 정면"
-        android:textSize="13sp"
-        android:textColor="#AAAAAA"
-        android:gravity="center"
-        android:paddingTop="4dp"
-        android:paddingBottom="4dp"
-        android:background="#111111" />
-
-    <!-- 버튼 행 -->
+    <!-- ── 상단 URL 입력 ── -->
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="72dp"
-        android:orientation="horizontal">
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:orientation="horizontal"
+        android:paddingTop="16dp"
+        android:paddingBottom="8dp"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp">
 
-        <Button
-            android:id="@+id/btnToggle"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="2"
-            android:text="분석 시작"
-            android:textSize="20sp"
-            android:textStyle="bold"
-            android:backgroundTint="#1565C0" />
-
-        <Button
-            android:id="@+id/btnStt"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:text="음성 명령"
-            android:textSize="16sp"
-            android:backgroundTint="#2E7D32" />
+        <EditText
+            android:id="@+id/etServerUrl"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:hint="서버 URL  (비우면 온디바이스 모드)"
+            android:inputType="textUri"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp"
+            android:textSize="13sp"
+            android:background="@drawable/bg_url_input"
+            android:textColor="@color/vg_text"
+            android:textColorHint="@color/vg_text_hint"
+            android:singleLine="true" />
 
     </LinearLayout>
 
-</LinearLayout>
+    <!-- ── 하단 패널 ── -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:orientation="vertical"
+        android:background="@drawable/bg_bottom_panel"
+        android:paddingTop="20dp"
+        android:paddingBottom="20dp"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp">
+
+        <!-- 안내 문장 -->
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="68dp"
+            android:text="분석 시작 버튼을 눌러주세요"
+            android:textSize="20sp"
+            android:textColor="@color/vg_text"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:lineSpacingMultiplier="1.3"
+            android:paddingBottom="10dp" />
+
+        <!-- 모드 / FPS -->
+        <TextView
+            android:id="@+id/tvMode"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="[장애물] 준비 중..."
+            android:textSize="12sp"
+            android:textColor="@color/vg_text_sub"
+            android:gravity="center"
+            android:paddingBottom="16dp"
+            android:fontFamily="monospace" />
+
+        <!-- 구분선 -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/vg_divider"
+            android:layout_marginBottom="16dp" />
+
+        <!-- 버튼 행 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <!-- 분석 시작/중지 버튼 -->
+            <Button
+                android:id="@+id/btnToggle"
+                android:layout_width="0dp"
+                android:layout_height="56dp"
+                android:layout_weight="1"
+                android:layout_marginEnd="12dp"
+                android:text="분석 시작"
+                android:textSize="17sp"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"
+                android:background="@drawable/bg_btn_start"
+                android:stateListAnimator="@null"
+                android:elevation="0dp" />
+
+            <!-- 음성 명령 버튼 (원형) -->
+            <Button
+                android:id="@+id/btnStt"
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:text="🎤"
+                android:textSize="22sp"
+                android:background="@drawable/bg_btn_mic"
+                android:stateListAnimator="@null"
+                android:elevation="0dp"
+                android:padding="0dp" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+</FrameLayout>

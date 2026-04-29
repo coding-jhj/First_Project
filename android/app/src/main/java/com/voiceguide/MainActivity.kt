@@ -393,6 +393,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 // 후보 중 장애물 fallback이 아닌 키워드가 매칭되는 것 우선 선택
                 val text = candidates.firstOrNull { classifyKeyword(it) != "장애물" }
                     ?: candidates.first()
+                runOnUiThread {
+                    btnStt.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFF059669.toInt())
+                }
                 handleSttResult(text)
             }
             override fun onPartialResults(partialResults: Bundle?) {
@@ -412,7 +415,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     SpeechRecognizer.ERROR_RECOGNIZER_BUSY
                 )
                 if (autoListenEnabled && retryable) {
-                    runOnUiThread { tvMode.text = "모드: $currentMode  |  듣는 중..." }
+                    runOnUiThread {
+                        tvMode.text = "🎤 [$currentMode] 듣는 중...${if (lastFpsText.isNotEmpty()) "  $lastFpsText" else ""}"
+                        btnStt.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFF059669.toInt())
+                    }
                     handler.postDelayed({ scheduleAutoListen() }, 800)
                 } else {
                     runOnUiThread { tvMode.text = "음성 인식 실패. 다시 눌러주세요." }
@@ -463,6 +469,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }
         // FPS 정보 유지하면서 듣는 중 표시
         tvMode.text = "🎤 [$currentMode] 듣는 중...${if (lastFpsText.isNotEmpty()) "  $lastFpsText" else ""}"
+        btnStt.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFDC2626.toInt())
         speechRecognizer.startListening(intent)
     }
 
@@ -1048,7 +1055,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         lastSentence = ""
         consecutiveFails.set(0)
         lastSuccessTime = System.currentTimeMillis()
-        btnToggle.text = "분석 중지"
+        btnToggle.text = "■ 분석 중지"
+        btnToggle.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFDC2626.toInt())
         tvStatus.text  = "분석 중..."
         captureAndProcess()
         scheduleNext()
@@ -1060,7 +1068,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         isAnalyzing.set(false)
         autoListenEnabled = false
         handler.removeCallbacksAndMessages(null)
-        btnToggle.text = "분석 시작"
+        btnToggle.text = "▶ 분석 시작"
+        btnToggle.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFF2563EB.toInt())
         tvStatus.text  = "분석 중지됨"
         boundingBoxOverlay.clearDetections()
     }
