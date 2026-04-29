@@ -4,10 +4,11 @@
 
 ## 2026-04-29 (강사 미팅 피드백 즉일 반영)
 
-### FPS 최적화
+### FPS 최적화 (10fps 목표)
 - `YoloDetector.kt`: NNAPI 하드웨어 가속 추가 (DSP/NPU) → 추론 속도 향상
 - CPU 스레드 4개 병렬 처리 (`setIntraOpNumThreads(4)`)
-- 캡처 간격: 1000ms → 800ms
+- 캡처 간격: 1000ms → **100ms** (10fps 목표 — 실제 FPS는 추론 속도에 의해 결정)
+- FPS < 10 시 Logcat 경고 자동 출력 (`tag:VG_PERF`)
 
 ### FPS 시각화 + 구조화 로그
 - FPS 스파크라인 그래프 추가: `2.1fps ▄▃▅▄▃▅ | 180ms` 형태로 tvMode에 표시
@@ -24,9 +25,11 @@
 - WEB_SEARCH 모델 사용 (짧은 명령어 최적화)
 - 후보 3개로 키워드 매칭률 향상
 
-### TTS 소리 안나는 버그 수정
-- **원인**: 서버 URL 입력 시 ElevenLabs TTS 자동 호출 → API 키 없으면 무음
-- **수정**: `speak()` 함수가 항상 Android 내장 TTS 사용 (ElevenLabs 자동 호출 제거)
+### TTS 소리 안나는 버그 수정 (2단계)
+- **1차 원인**: 서버 URL 입력 시 ElevenLabs TTS 자동 호출 → API 키 없으면 무음
+  - 수정: `speak()` 함수가 항상 Android 내장 TTS 사용
+- **2차 원인(진짜 원인)**: 오토리슨(`isListening=true`)이 항상 켜져있어서 `speak()`가 항상 차단됨
+  - 수정: `speak()` 호출 시 STT를 `cancel()`로 즉시 중단 후 TTS 재생 → 소리 후 오토리슨 자동 재시작
 
 ### UI 전면 개선
 - 카메라 풀스크린 레이아웃 (기존: 화면 일부)

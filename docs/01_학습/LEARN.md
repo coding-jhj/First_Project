@@ -420,6 +420,47 @@ putExtra(EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 500L)
 putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
 ```
 
+### TTS 소리 안 나던 진짜 원인 (2026-04-29)
+
+```
+오토리슨 항상 켜짐 → isListening = true
+      ↓
+speak() 호출
+      ↓
+if (isListening) return  ← 항상 차단
+      ↓
+소리 안남
+```
+
+**수정**: TTS 재생 전 STT를 먼저 `cancel()`로 즉시 중단
+
+```kotlin
+private fun speak(text: String) {
+    if (isListening) {
+        speechRecognizer.cancel()  // STT 즉시 중단 (onError 안 뜨는 cancel)
+        isListening = false
+    }
+    speakBuiltIn(text)  // TTS 재생
+    // TTS 끝나면 onDone → scheduleAutoListen() → 자동으로 다시 듣기 시작
+}
+```
+
+### 캡처 간격 + 10fps 목표 (2026-04-29)
+
+```kotlin
+private const val INTERVAL_MS = 100L  // 100ms = 10fps 목표
+```
+
+실제 FPS는 YOLO 추론 시간에 의해 결정됨:
+- 추론 100ms 이하 → 10fps 달성 (NNAPI + YOLO11n)
+- 추론 500ms → 2fps (YOLO11m, 느린 기기)
+
+Logcat `tag:VG_PERF`에서 `infer` 값 확인:
+```
+VG_PERF: infer|180ms  → 5.5fps (미달, 모델 경량화 필요)
+VG_PERF: infer|90ms   → 11fps  (목표 달성)
+```
+
 ---
 
 ## 8. 자주 묻는 질문

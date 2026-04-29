@@ -28,13 +28,16 @@
 
 ## 알려진 오류 및 해결법
 
-### 0. 소리가 안 나와요 (2026-04-29 수정)
+### 0. 소리가 안 나와요 (2026-04-29 수정 완료)
 
 **증상**: 텍스트는 표시되는데 TTS 소리가 안 남
 
-**원인**: 서버 URL 입력 시 ElevenLabs /tts 자동 호출 → API 키 없으면 JSON 에러 반환 → MediaPlayer가 MP3로 재생 시도 → 실패 → 무음
+**1차 원인**: 서버 URL 입력 시 ElevenLabs /tts 자동 호출 → API 키 없으면 JSON 에러 → MediaPlayer 실패 → 무음
+- 수정: `speak()`가 항상 Android 내장 TTS 사용
 
-**수정**: `speak()` 함수가 항상 Android 내장 TTS 사용하도록 변경 (이미 적용됨)
+**2차 원인(진짜 원인)**: 오토리슨이 항상 켜져서 `isListening=true` → `speak()` 안에서 `return` → TTS 차단
+- 수정: `speak()` 호출 시 `speechRecognizer.cancel()`로 STT 즉시 중단 후 TTS 재생
+- TTS 끝나면 자동으로 오토리슨 재시작
 
 ---
 
