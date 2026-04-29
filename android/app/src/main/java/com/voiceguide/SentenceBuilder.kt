@@ -204,20 +204,20 @@ object SentenceBuilder {
     }
 
     /**
-     * 거리를 상대 표현으로 변환.
-     * 서버(sentence.py)의 _format_dist와 동일한 표현 사용.
-     * 카메라 단안으로 정확한 미터 측정 불가 → 상대 표현이 더 정직함.
+     * 거리를 "약 Xm 앞" 형식으로 변환 — 서버 sentence.py의 _format_dist와 동일.
+     * 3m 미만: 0.5m 단위 / 3m 이상: 1m 단위 반올림
      */
     fun formatDist(w: Float, h: Float): String {
-        // bbox 면적 기반 거리 근사 (calib=0.12 가정 — 보통 물체 기준)
-        val area  = w * h
-        val distM = if (area > 0) sqrt(0.12f / area) else 99f
-        return when {
-            distM < 0.5f -> "바로 코앞"
-            distM < 1.0f -> "매우 가까이"
-            distM < 2.5f -> "가까이"
-            distM < 5.0f -> "조금 멀리"
-            else         -> "멀리"
+        val area   = w * h
+        val rawM   = if (area > 0) sqrt(0.12f / area) else 99f
+        val distM  = rawM.coerceIn(0.1f, 15.0f)
+        if (distM < 0.5f) return "바로 코앞"
+        return if (distM < 3.0f) {
+            val r = kotlin.math.round(distM * 2) / 2.0f
+            val str = if (r % 1.0f == 0.0f) r.toInt().toString() else "%.1f".format(r)
+            "약 ${str}미터 앞"
+        } else {
+            "약 ${kotlin.math.round(distM)}미터 앞"
         }
     }
 

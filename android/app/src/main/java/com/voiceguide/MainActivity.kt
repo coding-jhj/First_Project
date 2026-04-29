@@ -250,7 +250,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         private const val PREFS_NAME       = "voiceguide"  // SharedPreferences 이름
         private const val PREF_URL         = "server_url"  // 저장된 서버 URL 키
         private const val PREF_LOCATIONS   = "saved_locations"  // 저장 장소 JSON 배열 키
-        private const val INTERVAL_MS      = 1000L         // 캡처 간격: 1초
+        private const val INTERVAL_MS      = 800L          // 캡처 간격: 0.8초 (빠른 응답)
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
         private const val FAIL_WARN_COUNT  = 3             // 연속 3회 실패 시 경고
     }
@@ -385,10 +385,21 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
         speechRecognizer.setRecognitionListener(object : RecognitionListener {
             override fun onResults(results: Bundle) {
-                // RESULTS_RECOGNITION: 인식된 텍스트 후보 배열 (확신도 높은 순)
-                val text = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                    ?.firstOrNull() ?: return  // 가장 확신도 높은 1개 사용
+                val candidates = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.takeIf { it.isNotEmpty() } ?: return
+                // 후보 중 장애물 fallback이 아닌 키워드가 매칭되는 것 우선 선택
+                val text = candidates.firstOrNull { classifyKeyword(it) != "장애물" }
+                    ?: candidates.first()
                 handleSttResult(text)
+            }
+            override fun onPartialResults(partialResults: Bundle?) {
+                // 부분 인식 결과로 UI 즉시 반응 (사용자에게 인식 중임을 보여줌)
+                val partial = partialResults
+                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    ?.firstOrNull() ?: return
+                if (partial.isNotEmpty()) {
+                    runOnUiThread { tvMode.text = "🎤 \"$partial\"" }
+                }
             }
             override fun onError(error: Int) {
                 isListening = false
@@ -437,11 +448,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         isElevenLabsSpeaking = false
         isListening = true
         val intent = android.content.Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            // WEB_SEARCH: 짧은 명령어에 최적화 (FREE_FORM보다 인식률 높음)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_WEB_SEARCH)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ko-KR")
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)          // 후보 3개 → 키워드 매칭률 향상
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)   // 말하는 중간에도 결과 수신
+            // 침묵 감지 시간 단축 → 명령어 말한 뒤 빠르게 인식 완료
+            putExtra("android.speech.extra.DICTATION_MODE", false)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 800L)
         }
-        tvMode.text = "모드: $currentMode  |  듣는 중..."
+        tvMode.text = "🎤 듣는 중... [$currentMode]"
         speechRecognizer.startListening(intent)
     }
 
@@ -1198,6 +1215,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     private fun processOnDevice(imageFile: File) {
         Thread {
+            // 새 분석 시작 시 이전 바운딩박스 즉시 제거
+            runOnUiThread { boundingBoxOverlay.clearDetections() }
             var bmp: android.graphics.Bitmap? = null
             try {
                 // EXIF 회전 정보를 반영해 바른 방향의 비트맵으로 디코딩
@@ -1385,6 +1404,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     val now = System.currentTimeMillis()
                     if (sentence != lastSentence || now - lastCriticalTime > 5000L) {
                         val isVehicleDanger = ALWAYS_PASS.any { sentence.contains(it) }
+                        // 차량·계단 긴급이 아닌 경우 TTS 재생 중이면 끊지 않음
+                        if (!isVehicleDanger && isSpeaking()) return@runOnUiThread
                         lastSentence     = sentence
                         lastCriticalTime = now
                         tvStatus.text    = sentence
