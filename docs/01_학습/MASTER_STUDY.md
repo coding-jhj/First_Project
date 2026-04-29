@@ -88,10 +88,11 @@ docs/
 
 ### 버그 디버깅 중
 ```
-1. troubleshooting.md → 비슷한 증상 검색
-2. BUG_STUDY.md       → 버그 원인 패턴 이해
-3. CHANGELOG.md       → 최근 변경사항 확인
-4. Logcat tag:VG_DETECT, VG_PERF 필터
+1. troubleshooting.md  → 비슷한 증상 검색 (버그 38개)
+2. PERF_DEBUG.md       → FPS/추론속도 병목 찾기 (WiFi ADB, 파일 로깅, 보행 물리학 기준)
+3. BUG_STUDY.md        → 버그 원인 패턴 이해
+4. CHANGELOG.md        → 최근 변경사항 확인
+5. Logcat tag:VG_DETECT, VG_PERF 필터
 ```
 
 ### 서버 배포해야 할 때
