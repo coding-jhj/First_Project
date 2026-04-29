@@ -116,7 +116,7 @@ docs/
 - `2026-04-27`: 방향 좌우반전 버그 수정, 앱-서버 연동 완성
 - `2026-04-28`: TTS 완전 잠금, 거리 기반 음성/비프 분리, 여러 사물 안내
 - `2026-04-29 (강사 피드백)`: FPS 최적화, STT 딜레이 수정, UI 개선
-- `2026-04-29 (디버깅)`: TTS 무음 3개 버그, 바운딩박스 유지, 분析중지 미작동, 첫 감지 느림
+- `2026-04-29 (디버깅)`: TTS 무음 3개 버그, 바운딩박스 유지, 분석중지 미작동, 첫 감지 느림
 
 ---
 
@@ -223,7 +223,7 @@ Module E: 문장생성 (임명광) — build_sentence, 조사자동화
 | 버그 | 배운 개념 |
 |------|---------|
 | TTS 무음 | ttsBusy 잠금 구조, HTTP 상태코드 의미, isSpeaking() |
-| 분析중지 미작동 | Handler vs Thread 차이, AtomicBoolean |
+| 분석중지 미작동 | Handler vs Thread 차이, AtomicBoolean |
 | 첫 감지 느림 | 투표 버퍼(Voting Buffer) 원리, 정밀도-속도 트레이드오프 |
 | 바운딩박스 유지 | 픽셀→정규화 좌표 변환, 온디바이스 vs 서버 코드 분리 |
 | 서버 첫 요청 느림 | Singleton + Lazy Loading 패턴, timeout 관계 |
@@ -256,7 +256,7 @@ Module E: 문장생성 (임명광) — build_sentence, 조사자동화
 
 **주요 버그 번호 (면접/발표 대비):**
 - `#0`: TTS 무음 (ElevenLabs→Android 내장 전환)
-- `#34`: 분析중지 미작동 (isAnalyzing 체크 누락)
+- `#34`: 분석중지 미작동 (isAnalyzing 체크 누락)
 - `#35`: 첫 감지 느림 (VOTE_MIN_COUNT, detectionHistory)
 - `#36`: /tts HTTP 200 에러
 - `#37`: 바운딩박스 유지 (sendToServer 바운딩박스 갱신 누락)
