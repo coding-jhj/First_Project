@@ -1248,7 +1248,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 bmp = decodeBitmapUpright(imageFile)
                 val decodeMs = System.currentTimeMillis() - tDecode
 
-                val t1 = System.currentTimeMillis()   // 디코딩 완료
                 val imgW = bmp.width
                 val imgH = bmp.height
 
@@ -1257,6 +1256,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 val inferMs = System.currentTimeMillis() - tInfer
 
                 val tDedup = System.currentTimeMillis()
+                // 투표 필터 → 같은 클래스 중복 bbox 제거(IoU 기반) 순서로 처리
                 val voted = removeDuplicates(voteOnly(rawDetections))
                 val dedupMs = System.currentTimeMillis() - tDedup
 
@@ -1266,29 +1266,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 android.util.Log.d("VG_PERF",
                     "decode|$decodeMs|infer|$inferMs|dedup|$dedupMs|total|$totalMs|objs|${voted.size}")
 
-                val t2 = System.currentTimeMillis()   // YOLO 추론 완료
-
-                // 투표 필터 → 같은 클래스 중복 bbox 제거(IoU 기반) 순서로 처리
-                val voted         = removeDuplicates(voteOnly(rawDetections))
-                val t3 = System.currentTimeMillis()   // 후처리 완료
-
-                val decodeMs = t1 - t0
-                val yoloMs   = t2 - t1
-                val postMs   = t3 - t2
-                val totalMs  = t3 - t0
-
                 runOnUiThread {
                     val fps = calcFps()
                     val spark = buildSparkline()
                     lastFpsText = "${fps}fps $spark | ${inferMs}ms"
-                    lastFpsText = "${fps}fps | 온디바이스:${totalMs}ms"
                     tvMode.text = "[$currentMode] $lastFpsText"
                     if (debugVisible) {
                         val tv = findViewById<android.widget.TextView>(R.id.tvDebug)
                         tv.text = "FPS    : ${fps}\n" +
                                   "디코딩 : ${decodeMs}ms\n" +
-                                  "YOLO   : ${yoloMs}ms\n" +
-                                  "후처리 : ${postMs}ms\n" +
+                                  "YOLO   : ${inferMs}ms\n" +
+                                  "후처리 : ${dedupMs}ms\n" +
                                   "전체   : ${totalMs}ms\n" +
                                   "탐지수 : raw=${rawDetections.size} → ${voted.size}"
                     }
