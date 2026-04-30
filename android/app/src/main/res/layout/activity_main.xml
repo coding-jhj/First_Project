@@ -22,7 +22,7 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="top|end"
-        android:layout_marginTop="72dp"
+        android:layout_marginTop="80dp"
         android:layout_marginEnd="12dp"
         android:padding="7dp"
         android:text=""
@@ -40,33 +40,21 @@
         android:layout_gravity="bottom"
         android:background="@drawable/bg_camera_gradient" />
 
-    <!-- ── 상단 URL 입력 ── -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_gravity="top"
-        android:orientation="horizontal"
-        android:paddingTop="16dp"
-        android:paddingBottom="8dp"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp">
-
-        <EditText
-            android:id="@+id/etServerUrl"
-            android:layout_width="match_parent"
-            android:layout_height="44dp"
-            android:hint="서버 URL  (비우면 온디바이스 모드)"
-            android:inputType="textUri"
-            android:paddingStart="14dp"
-            android:paddingEnd="14dp"
-            android:textSize="13sp"
-            android:background="@drawable/bg_url_input"
-            android:textColor="@color/vg_text"
-            android:textColorHint="@color/vg_text_hint"
-            android:singleLine="true"
-            android:contentDescription="서버 URL 입력 — 비워두면 폰 단독 온디바이스 모드로 동작" />
-
-    </LinearLayout>
+    <!-- ── 우상단 설정 아이콘 ── -->
+    <Button
+        android:id="@+id/btnSettings"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="16dp"
+        android:layout_marginEnd="16dp"
+        android:text="⚙"
+        android:textSize="22sp"
+        android:textColor="#FFFFFF"
+        android:background="@drawable/bg_btn_start"
+        android:stateListAnimator="@null"
+        android:elevation="0dp"
+        android:contentDescription="설정 — 서버 URL 및 디버그 모드" />
 
     <!-- ── 하단 패널 ── -->
     <LinearLayout
@@ -80,23 +68,38 @@
         android:paddingStart="20dp"
         android:paddingEnd="20dp">
 
-        <!-- 안내 문장 — 최대 2줄로 제한 (긴 안내는 TTS로 들음) -->
-        <TextView
-            android:id="@+id/tvStatus"
+        <!-- 안내 문장 — 최대 2줄, 하단 페이드아웃 처리 -->
+        <FrameLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:minHeight="68dp"
-            android:maxLines="2"
-            android:ellipsize="end"
-            android:text="분석 시작 버튼을 눌러주세요"
-            android:textSize="20sp"
-            android:textColor="@color/vg_text"
-            android:textStyle="bold"
-            android:gravity="center"
-            android:lineSpacingMultiplier="1.3"
-            android:paddingBottom="10dp"
-            android:importantForAccessibility="yes"
-            android:accessibilityLiveRegion="polite" />
+            android:minHeight="76dp">
+
+            <TextView
+                android:id="@+id/tvStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="76dp"
+                android:maxLines="2"
+                android:ellipsize="end"
+                android:text="분석 시작 버튼을 눌러주세요"
+                android:textSize="24sp"
+                android:textColor="@color/vg_text"
+                android:textStyle="bold"
+                android:gravity="center"
+                android:lineSpacingMultiplier="1.4"
+                android:paddingBottom="10dp"
+                android:importantForAccessibility="yes"
+                android:accessibilityLiveRegion="polite" />
+
+            <!-- 텍스트 하단 페이드아웃 오버레이 -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="32dp"
+                android:layout_gravity="bottom"
+                android:background="@drawable/bg_text_fade"
+                android:importantForAccessibility="no" />
+
+        </FrameLayout>
 
         <!-- 모드 / FPS -->
         <TextView
@@ -117,9 +120,7 @@
             android:background="@color/vg_divider"
             android:layout_marginBottom="16dp" />
 
-        <!-- 버튼 행
-             음성 명령(주 액션): 더 크고 강조 — 시각장애인이 화면을 만질 때 큰 영역이 음성 명령이어야 함
-             분석 중지(보조 액션): 작게 outline — 잘못 누를 가능성 감소 -->
+        <!-- 버튼 행 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="64dp"
@@ -142,7 +143,7 @@
                 android:elevation="0dp"
                 android:contentDescription="음성 명령 입력 — 길게 누르면 명령어 목록 안내" />
 
-            <!-- 분석 시작/중지 버튼 — 보조 액션: 작게 -->
+            <!-- 분석 시작/중지 버튼 — 보조 액션 -->
             <Button
                 android:id="@+id/btnToggle"
                 android:layout_width="0dp"

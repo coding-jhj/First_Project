@@ -33,7 +33,8 @@ data class Detection(
     val cx: Float,           // 바운딩 박스 중심 X (이미지 너비 기준 0.0~1.0)
     val cy: Float,           // 바운딩 박스 중심 Y (이미지 높이 기준 0.0~1.0)
     val w: Float,            // 바운딩 박스 너비 (0.0~1.0)
-    val h: Float             // 바운딩 박스 높이 (0.0~1.0)
+    val h: Float,            // 바운딩 박스 높이 (0.0~1.0)
+    val isFound: Boolean = false  // 찾기 모드에서 발견된 대상이면 true (흰색 박스)
 )
 
 class YoloDetector(context: Context) {
