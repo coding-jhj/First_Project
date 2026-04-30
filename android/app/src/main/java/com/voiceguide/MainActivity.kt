@@ -92,7 +92,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // → 순간 오탐(인형·노트북 등)이 단발로 잡혀도 TTS 안내 안 됨
     private val detectionHistory = ArrayDeque<Set<String>>()
     private val VOTE_WINDOW    = 3
-    private val VOTE_MIN_COUNT = 2  // 3프레임 중 2회 이상 등장해야 안내 (오탐 차단)
+    private val VOTE_MIN_COUNT = 1  // 1회 이상 등장하면 즉시 안내 (2→1: 휴대폰 등 일반 물체 누락 방지)
     private val ALWAYS_PASS    = setOf("자동차","오토바이","버스","트럭","기차","자전거",
                                        "칼","가위","개","말","곰","코끼리")
 
