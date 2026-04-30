@@ -8,6 +8,12 @@ Windows CMD에서 실행/배포/Android 확인하는 순서는 아래 문서에 
 docs/00_실행/CMD_RUNBOOK.md
 ```
 
+서버 담당/팀장 체크리스트:
+
+```text
+docs/04_팀/SERVER_AND_LEAD_ACTIONS.md
+```
+
 현재 기준 핵심 명령:
 
 ```bat

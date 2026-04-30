@@ -24,15 +24,19 @@ from fastapi import APIRouter, Depends, UploadFile, Form, Header, HTTPException
 from fastapi.responses import FileResponse
 
 # ── API Key 인증 ────────────────────────────────────────────────────────────
-# .env에 API_KEY=비밀값 설정 시 모든 /detect 요청에 Authorization: Bearer <키> 필요
+# .env에 API_KEY=비밀값 설정 시 민감 API 요청에 Authorization: Bearer <키> 또는 X-API-Key 필요
 # API_KEY 미설정 시 인증 없음 (로컬 개발 모드)
 _API_KEY = os.getenv("API_KEY", "")
 
-def _verify_api_key(authorization: str = Header(default="")) -> None:
+def _verify_api_key(
+    authorization: str = Header(default=""),
+    x_api_key: str = Header(default=""),
+) -> None:
     if not _API_KEY:
         return  # 키 미설정 = 개발 모드, 인증 건너뜀
-    if authorization != f"Bearer {_API_KEY}":
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    if authorization == f"Bearer {_API_KEY}" or x_api_key == _API_KEY:
+        return
+    raise HTTPException(status_code=401, detail="Invalid or missing API key")
 from src.depth.depth import detect_and_depth
 from src.nlg.sentence import (
     build_sentence, build_hazard_sentence, build_find_sentence,
@@ -362,7 +366,7 @@ def _extract_find_target(text: str) -> str:
 # ── 장소 저장/조회 전용 엔드포인트 ───────────────────────────────────────────
 # Android MainActivity에서 직접 호출 가능 (detect API 거치지 않고 빠르게 처리)
 
-@router.post("/tts")
+@router.post("/tts", dependencies=[Depends(_verify_api_key)])
 async def tts_endpoint(text: str = Form("")):
     """ElevenLabs / gTTS — 텍스트를 음성 파일(MP3)로 변환해 Android 앱에 반환.
     API 키 없으면 gTTS로 자동 폴백."""
@@ -378,7 +382,7 @@ async def tts_endpoint(text: str = Form("")):
     return FileResponse(path, media_type="audio/mpeg")
 
 
-@router.post("/vision/clothing")
+@router.post("/vision/clothing", dependencies=[Depends(_verify_api_key)])
 async def vision_clothing(
     image: UploadFile,
     type:  str = Form("matching"),   # "matching" or "pattern"
@@ -392,7 +396,7 @@ async def vision_clothing(
     return {"sentence": sentence}
 
 
-@router.post("/ocr/bus")
+@router.post("/ocr/bus", dependencies=[Depends(_verify_api_key)])
 async def ocr_bus(
     image:     UploadFile,
     bus_crop:  str = Form(""),   # JSON 배열 문자열 "[x1,y1,x2,y2]" 또는 빈 문자열
@@ -428,7 +432,7 @@ async def ocr_bus(
             "sentence": "버스 번호를 읽지 못했어요. 번호판에 더 가까이 대보세요."}
 
 
-@router.post("/locations/save")
+@router.post("/locations/save", dependencies=[Depends(_verify_api_key)])
 async def save_location_endpoint(
     wifi_ssid: str = Form(""),
     label:     str = Form(""),
@@ -442,7 +446,7 @@ async def save_location_endpoint(
     return {"success": True, "sentence": build_navigation_sentence(label, "save")}
 
 
-@router.get("/locations")
+@router.get("/locations", dependencies=[Depends(_verify_api_key)])
 async def list_locations(wifi_ssid: str = ""):
     """저장 장소 목록 반환. wifi_ssid 지정 시 해당 WiFi 위치 장소만."""
     locations = db.get_locations(wifi_ssid)
@@ -452,7 +456,7 @@ async def list_locations(wifi_ssid: str = ""):
     }
 
 
-@router.get("/locations/find/{label}")
+@router.get("/locations/find/{label}", dependencies=[Depends(_verify_api_key)])
 async def find_location_endpoint(label: str, wifi_ssid: str = ""):
     """
     라벨로 장소 검색. 현재 WiFi와 일치 여부도 확인.
@@ -471,7 +475,7 @@ async def find_location_endpoint(label: str, wifi_ssid: str = ""):
     }
 
 
-@router.delete("/locations/{label}")
+@router.delete("/locations/{label}", dependencies=[Depends(_verify_api_key)])
 async def delete_location_endpoint(label: str):
     """저장 장소 삭제."""
     loc = db.find_location(label)
@@ -481,7 +485,7 @@ async def delete_location_endpoint(label: str):
     return {"success": True, "sentence": build_navigation_sentence(loc["label"], "deleted")}
 
 
-@router.get("/status/{session_id}")
+@router.get("/status/{session_id}", dependencies=[Depends(_verify_api_key)])
 async def get_session_status(session_id: str):
     """
     세션(WiFi SSID)의 현재 추적 상태 반환 — 대시보드 폴링용.
@@ -499,7 +503,7 @@ async def get_session_status(session_id: str):
     }
 
 
-@router.get("/dashboard")
+@router.get("/dashboard", dependencies=[Depends(_verify_api_key)])
 async def dashboard():
     """대시보드 HTML 페이지 반환."""
     from fastapi.responses import HTMLResponse
@@ -511,7 +515,7 @@ async def dashboard():
     return HTMLResponse("<h1>dashboard.html not found</h1>", status_code=404)
 
 
-@router.post("/spaces/snapshot")
+@router.post("/spaces/snapshot", dependencies=[Depends(_verify_api_key)])
 async def save_space_snapshot(body: dict):
     """공간 스냅샷 수동 저장 (테스트·디버깅용)."""
     space_id = body.get("space_id", "")

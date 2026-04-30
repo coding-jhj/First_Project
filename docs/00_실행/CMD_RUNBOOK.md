@@ -74,6 +74,24 @@ gcloud run services logs tail voiceguide --region asia-northeast3
 [PERF] request_id=and-... detect=...ms | tracker=...ms | nlg+rest=...ms | TOTAL=...ms | objs=...
 ```
 
+## 3.5. API Key를 켠 경우
+
+Cloud Run에 `API_KEY`를 설정하면 `/detect`, `/status`, `/dashboard` 같은 민감 엔드포인트가 보호됩니다.
+
+```bat
+gcloud run services update voiceguide ^
+  --region asia-northeast3 ^
+  --set-env-vars API_KEY=원하는_긴_비밀값
+```
+
+API Key를 켠 뒤 probe:
+
+```bat
+python tools\probe_server_link.py --base https://voiceguide-135456731041.asia-northeast3.run.app --api-key 원하는_긴_비밀값
+```
+
+Android 앱 설정창에도 같은 API Key를 입력해야 서버 기능이 동작합니다.
+
 ## 4. Android Studio에서 앱 실행
 
 Android Studio에서 열어야 하는 폴더:
@@ -97,6 +115,7 @@ C:\VoiceGuide\android
 3. Android Studio에서 `C:\VoiceGuide\VoiceGuide\android` 열기
 4. 상단 `Run` 버튼 실행
 5. 앱 우상단 설정에서 서버 URL 입력
+6. 서버에서 `API_KEY`를 켠 경우 같은 API Key 입력
 
 ```text
 https://voiceguide-135456731041.asia-northeast3.run.app

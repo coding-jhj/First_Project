@@ -45,13 +45,21 @@ def _warmup_tts():
 
 app = FastAPI(title="VoiceGuide API", lifespan=lifespan)
 
-# CORS: 대시보드 브라우저 접속을 위해 필요
-# ALLOWED_ORIGINS 환경변수로 제한 가능 (기본: 개발용 전체 허용)
+# CORS: Android 앱은 CORS가 필요 없고, 브라우저 대시보드 origin만 허용합니다.
+# ALLOWED_ORIGINS 환경변수로 추가 허용 origin을 지정할 수 있습니다.
 # 예) ALLOWED_ORIGINS=https://myapp.ngrok-free.app,http://localhost:8000
-_origins = os.getenv("ALLOWED_ORIGINS", "*")
+_default_origins = (
+    "http://localhost:8000,"
+    "http://127.0.0.1:8000,"
+    "https://voiceguide-135456731041.asia-northeast3.run.app"
+)
+_origins = os.getenv("ALLOWED_ORIGINS", _default_origins)
+_allow_origins = ["*"] if _origins == "*" else [
+    origin.strip() for origin in _origins.split(",") if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if _origins == "*" else _origins.split(","),
+    allow_origins=_allow_origins,
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )

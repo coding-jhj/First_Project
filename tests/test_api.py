@@ -3,6 +3,7 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 from fastapi.testclient import TestClient
 from src.api.main import app
+from src.api import routes
 
 client = TestClient(app)
 
@@ -47,3 +48,12 @@ def test_stt_endpoint_exists():
     assert "text"    in body
     assert "mode"    in body
     assert "success" in body
+
+
+def test_protected_status_requires_api_key(monkeypatch):
+    monkeypatch.setattr(routes, "_API_KEY", "test-secret")
+    response = client.get("/status/test_ssid")
+    assert response.status_code == 401
+
+    ok = client.get("/status/test_ssid", headers={"X-API-Key": "test-secret"})
+    assert ok.status_code == 200

@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import time
 from pathlib import Path
 
@@ -48,17 +49,20 @@ def main() -> int:
     parser.add_argument("--mode", default="장애물", help="Mode sent to /detect")
     parser.add_argument("--lat", default="37.5665")
     parser.add_argument("--lng", default="126.9780")
+    parser.add_argument("--api-key", default=os.getenv("VOICEGUIDE_API_KEY", ""),
+                        help="Optional API key. Also read from VOICEGUIDE_API_KEY.")
     parser.add_argument("--timeout", type=float, default=30.0)
     args = parser.parse_args()
 
     base = args.base.rstrip("/")
+    headers = {"X-API-Key": args.api_key} if args.api_key else {}
     request_id = f"probe-{int(time.time() * 1000)}"
     image_bytes = load_image(args.image)
 
     print(f"[probe] base={base}")
     print(f"[probe] request_id={request_id} session={args.session} image_bytes={len(image_bytes)}")
 
-    health = requests.get(f"{base}/health", timeout=args.timeout)
+    health = requests.get(f"{base}/health", headers=headers, timeout=args.timeout)
     print(f"[health] HTTP {health.status_code}: {health.text[:300]}")
     health.raise_for_status()
 
@@ -75,6 +79,7 @@ def main() -> int:
             "lng": args.lng,
             "request_id": request_id,
         },
+        headers=headers,
         timeout=args.timeout,
     )
     round_trip_ms = int((time.perf_counter() - t0) * 1000)
@@ -94,7 +99,7 @@ def main() -> int:
     if body.get("request_id") != request_id:
         raise SystemExit(f"request_id mismatch: sent={request_id}, got={body.get('request_id')}")
 
-    status = requests.get(f"{base}/status/{args.session}", timeout=args.timeout)
+    status = requests.get(f"{base}/status/{args.session}", headers=headers, timeout=args.timeout)
     print(f"[status] HTTP {status.status_code}")
     status.raise_for_status()
     status_body = status.json()
@@ -105,7 +110,7 @@ def main() -> int:
         "track_points": len(status_body.get("track", [])),
     }, ensure_ascii=False, indent=2))
 
-    dashboard = requests.get(f"{base}/dashboard", timeout=args.timeout)
+    dashboard = requests.get(f"{base}/dashboard", headers=headers, timeout=args.timeout)
     print(f"[dashboard] HTTP {dashboard.status_code} contains VoiceGuide={'VoiceGuide' in dashboard.text}")
     dashboard.raise_for_status()
 
