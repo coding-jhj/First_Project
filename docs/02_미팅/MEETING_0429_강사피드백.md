@@ -32,7 +32,7 @@
 1. GCP Compute Engine 인스턴스 생성 (상세: `docs/GCP_SERVER_SETUP.md`)
 2. IP 나오면 VS Code SSH 연결
 3. 서버 코드 올리고 uvicorn 실행
-4. Android 앱 서버 URL 입력창에 IP 입력
+4. Android 앱 우상단 설정(⚙) → 서버 URL에 IP 입력
 5. LTE 환경에서 외부 접속 확인
 
 **현재 상황:** 신유득 로컬에서만 동작 중, Supabase 연동은 됨

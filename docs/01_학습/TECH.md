@@ -14,10 +14,12 @@
     ↓ 1초마다 JPEG + WiFi SSID + 카메라방향(가속도센서 자동감지)
 [STT 음성 명령] ──────────────────────────── (정환주)
     ↓ "주변 알려줘/찾아줘/이거 뭐야" → 장애물/찾기/확인 모드
-[FastAPI /detect 서버]
+[분석 경로]
+    ├─ 장애물/찾기: Android ONNX 우선 (서버 URL이 있어도 기본 탐지 유지)
+    └─ 질문/색상/신호등 등: FastAPI /detect 서버
     ↓
-[yolo11m_indoor.pt 탐지] ─────────────────── (김재현)
-    ↓ bbox + class (COCO 80클래스, conf=0.50 / 계단 제외 → Depth 맵으로 대체)
+[yolo11m_indoor.pt 또는 Android yolo11m.onnx 탐지] ── (김재현)
+    ↓ bbox + class (서버 conf=0.50 / Android conf=0.35, 계단은 Depth + StairsDetector 보완)
 [방향 판단] bbox 중심 x → 8시~4시 9구역 ──── (김재현)
     ↓
 [Depth Anything V2 GPU] ─────────────────── (문수찬)

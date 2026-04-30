@@ -39,7 +39,8 @@
 
 ### captureAndProcess() 서버 우선 구조로 변경
 - **기존**: `yoloDetector != null` 이면 무조건 온디바이스 (서버 URL 입력해도 서버 안 씀)
-- **수정**: 서버 URL 있으면 서버 우선, 실패하면 온디바이스 fallback
+- **당시 수정**: 서버 URL 있으면 서버 우선, 실패하면 온디바이스 fallback
+- **현재 상태(위 긴급 수정 이후)**: `장애물`/`찾기`는 ONNX 우선, 서버 전용 기능만 서버 사용
 
 ### BoundingBoxOverlay BuildConfig 오류 수정
 - `BuildConfig` import 제거, confidence % 항상 숨김 (Android Studio 빌드 오류 해결)

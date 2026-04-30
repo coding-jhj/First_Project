@@ -33,7 +33,7 @@
 
 ### 외부 서버 배포 후 앱 연결
 
-1. Android 앱 서버 URL 입력창에 아래 URL 입력:
+1. Android 앱 우상단 설정(⚙) → 서버 URL에 아래 URL 입력:
    ```
    https://voiceguide-135456731041.asia-northeast3.run.app
    ```
@@ -523,7 +523,7 @@ VoiceGuide/
 │   └── app/src/main/java/com/voiceguide/
 │       ├── MainActivity.kt         카메라+STT+TTS+GPS+질문모드+suppressPeriodic
 │       ├── BoundingBoxOverlay.kt   탐지 결과 바운딩박스 오버레이
-│       ├── StairsDetector.kt       계단 전용 감지기 (미사용 — 오탐률 높아 Depth 맵으로 대체)
+│       ├── StairsDetector.kt       온디바이스 계단 보조 감지기 (서버 Depth 맵 보완)
 │       ├── YoloDetector.kt         온디바이스 ONNX 추론 (letterbox 좌표 보정)
 │       ├── SentenceBuilder.kt      온디바이스 문장 생성
 │       └── VoiceGuideConstants.kt  클래스명·방향·STT 키워드 상수

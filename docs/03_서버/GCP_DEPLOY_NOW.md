@@ -85,7 +85,7 @@ https://voiceguide-xxxx-an.a.run.app/health
 → {"status":"ok","db":"ok"} 나오면 성공
 ```
 
-Android 앱 서버 URL 입력창에 해당 URL 붙여넣기.
+Android 앱 우상단 설정(⚙) → 서버 URL에 해당 URL 붙여넣기.
 
 ### 코드 수정 후 재배포
 

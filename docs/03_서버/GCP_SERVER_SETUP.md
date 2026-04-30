@@ -157,7 +157,7 @@ curl http://[외부IP]:8000/health
 
 ## 9단계: Android 앱 연결
 
-앱 서버 URL 입력창에:
+앱 우상단 설정(⚙) → 서버 URL에:
 ```
 http://[외부IP]:8000
 ```
