@@ -1,8 +1,10 @@
 from contextlib import asynccontextmanager
+import os
 from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from src.api.routes import router
 from src.api import db
@@ -42,6 +44,17 @@ def _warmup_tts():
 
 
 app = FastAPI(title="VoiceGuide API", lifespan=lifespan)
+
+# CORS: 대시보드 브라우저 접속을 위해 필요
+# ALLOWED_ORIGINS 환경변수로 제한 가능 (기본: 개발용 전체 허용)
+# 예) ALLOWED_ORIGINS=https://myapp.ngrok-free.app,http://localhost:8000
+_origins = os.getenv("ALLOWED_ORIGINS", "*")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"] if _origins == "*" else _origins.split(","),
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/health")

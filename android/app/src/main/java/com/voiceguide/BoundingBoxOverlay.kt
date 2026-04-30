@@ -9,23 +9,43 @@ import android.util.AttributeSet
 import android.view.View
 
 /**
- * 디버깅용 바운드박스 오버레이 View.
+ * 바운드박스 오버레이 View.
  * 카메라 프리뷰 위에 겹쳐서 배치되며, YOLO 탐지 결과를
- * 사각형과 레이블(클래스명 + 신뢰도)로 시각화한다.
+ * 위험도별 색상으로 시각화한다.
+ *
+ * 색상 체계 (sentence.py get_alert_mode와 동일):
+ *   빨강 — critical (차량·계단·칼 등 즉각 위험)
+ *   노랑 — caution  (칼·가위·바닥 장애물 등 주의)
+ *   초록 — info     (키보드·마우스·TV 등 정보성)
  */
 class BoundingBoxOverlay @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : View(context, attrs) {
 
-    // 바운드박스 테두리용 Paint (외곽선만 그림)
+    // ── 위험도별 색상 ──────────────────────────────────────────────────────────
+    private val COLOR_CRITICAL = Color.parseColor("#E53935")  // 빨강 — 긴급
+    private val COLOR_CAUTION  = Color.parseColor("#FDD835")  // 노랑 — 주의
+    private val COLOR_INFO     = Color.parseColor("#43A047")  // 초록 — 정보
+
+    // sentence.py _VEHICLE_KO + 계단·낙차 위험 클래스
+    private val CRITICAL_CLASSES = setOf(
+        "자동차", "오토바이", "버스", "트럭", "기차", "자전거",
+        "곰", "코끼리", "계단"
+    )
+    // 날카로운 물체 + 바닥 장애물
+    private val CAUTION_CLASSES = setOf(
+        "칼", "가위", "유리잔", "야구 방망이",
+        "배낭", "핸드백", "여행가방", "공"
+    )
+
+    // ── Paint ─────────────────────────────────────────────────────────────────
     private val boxPaint = Paint().apply {
         style = Paint.Style.STROKE
         strokeWidth = 4f
         isAntiAlias = true
     }
 
-    // 클래스명 + 신뢰도 텍스트용 Paint
     private val textPaint = Paint().apply {
         textSize = 36f
         isAntiAlias = true
@@ -33,33 +53,16 @@ class BoundingBoxOverlay @JvmOverloads constructor(
         isFakeBoldText = true
     }
 
-    // 텍스트 뒤에 깔리는 반투명 검정 배경 Paint (가독성 향상)
     private val bgPaint = Paint().apply {
         style = Paint.Style.FILL
         color = Color.argb(160, 0, 0, 0)
     }
 
-    // 탐지 결과가 여러 개일 때 각 박스를 구별하기 위한 색상 팔레트
-    private val colors = intArrayOf(
-        Color.RED,
-        Color.GREEN,
-        Color.CYAN,
-        Color.YELLOW,
-        Color.MAGENTA,
-        Color.WHITE
-    )
-
-    // 현재 화면에 그릴 탐지 결과 목록
+    // ── 탐지 결과 ──────────────────────────────────────────────────────────────
     private var detections: List<Detection> = emptyList()
-
-    // 추론에 사용된 원본 이미지 크기 (EXIF 회전 적용 후)
     private var imageWidth  = 0
     private var imageHeight = 0
 
-    /**
-     * 새 탐지 결과를 받아 화면을 다시 그린다.
-     * imgW/imgH는 EXIF 회전이 적용된 원본 이미지 크기 — FILL_CENTER 보정에 사용.
-     */
     fun setDetections(detections: List<Detection>, imgW: Int, imgH: Int) {
         this.detections  = detections
         this.imageWidth  = imgW
@@ -67,10 +70,16 @@ class BoundingBoxOverlay @JvmOverloads constructor(
         invalidate()
     }
 
-    /** 분석 중지 시 오버레이를 비운다. */
     fun clearDetections() {
         detections = emptyList()
         invalidate()
+    }
+
+    /** classKo를 기반으로 위험도 색상 반환. sentence.py 색상 체계와 동일하게 유지. */
+    private fun hazardColor(classKo: String): Int = when {
+        classKo in CRITICAL_CLASSES -> COLOR_CRITICAL
+        classKo in CAUTION_CLASSES  -> COLOR_CAUTION
+        else                        -> COLOR_INFO
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -79,24 +88,18 @@ class BoundingBoxOverlay @JvmOverloads constructor(
         val vh = height.toFloat()
         if (vw == 0f || vh == 0f || imageWidth == 0 || imageHeight == 0) return
 
-        // PreviewView의 기본 ScaleType = FILL_CENTER:
-        // 이미지를 비율 유지하며 뷰를 꽉 채우고 넘치는 부분은 잘라냄.
-        // 탐지 좌표(원본 이미지 [0,1])를 뷰 픽셀로 정확히 변환하기 위해
-        // 동일한 변환을 직접 계산한다.
-        val scaleX = vw / imageWidth
-        val scaleY = vh / imageHeight
-        val fillScale  = maxOf(scaleX, scaleY)        // FILL_CENTER: 더 큰 비율로 채움
-        val displayW   = imageWidth  * fillScale
-        val displayH   = imageHeight * fillScale
-        val offsetX    = (vw - displayW) / 2f          // 음수 → 좌우 잘림
-        val offsetY    = (vh - displayH) / 2f          // 음수 → 상하 잘림
+        // PreviewView FILL_CENTER 변환
+        val fillScale = maxOf(vw / imageWidth, vh / imageHeight)
+        val displayW  = imageWidth  * fillScale
+        val displayH  = imageHeight * fillScale
+        val offsetX   = (vw - displayW) / 2f
+        val offsetY   = (vh - displayH) / 2f
 
-        detections.forEachIndexed { i, det ->
-            val color = colors[i % colors.size]
+        detections.forEach { det ->
+            val color = hazardColor(det.classKo)
             boxPaint.color  = color
             textPaint.color = color
 
-            // [0,1] 정규화 좌표 → 뷰 픽셀 (FILL_CENTER 오프셋 포함)
             val left   = offsetX + (det.cx - det.w / 2f) * displayW
             val top    = offsetY + (det.cy - det.h / 2f) * displayH
             val right  = offsetX + (det.cx + det.w / 2f) * displayW
@@ -104,17 +107,17 @@ class BoundingBoxOverlay @JvmOverloads constructor(
 
             canvas.drawRect(RectF(left, top, right, bottom), boxPaint)
 
-            val label = "${det.classKo} ${"%.0f".format(det.confidence * 100)}%"
+            // 디버그 빌드에서만 confidence % 표시 (배포 시 클래스명만)
+            val label = if (BuildConfig.DEBUG) {
+                "${det.classKo} ${"%.0f".format(det.confidence * 100)}%"
+            } else {
+                det.classKo
+            }
             val textH = textPaint.textSize
             val textW = textPaint.measureText(label)
-
             val labelY = if (top > textH + 8f) top - 4f else bottom + textH + 4f
 
-            canvas.drawRect(
-                left, labelY - textH - 2f,
-                left + textW + 10f, labelY + 4f,
-                bgPaint
-            )
+            canvas.drawRect(left, labelY - textH - 2f, left + textW + 10f, labelY + 4f, bgPaint)
             canvas.drawText(label, left + 5f, labelY, textPaint)
         }
     }
