@@ -4,13 +4,13 @@ import cv2
 import numpy as np
 from src.depth.depth import detect_and_depth
 from src.nlg.sentence import build_sentence, build_hazard_sentence
-from src.voice.tts import speak
+from src.voice.tts import get_tts_audio
 from src.nlg.templates import CLOCK_TO_DIRECTION
 
 
 def process_image(image, mode: str = "장애물"):
     if image is None:
-        return None, "이미지를 업로드해주세요."
+        return None, "이미지를 업로드해주세요.", None
 
     t0 = time.time()
     img_np = np.array(image)
@@ -44,7 +44,7 @@ def process_image(image, mode: str = "장애물"):
         sentence = sentence + " " + " ".join(extras)
 
     elapsed_ms = (time.time() - t0) * 1000
-    speak(sentence)
+    audio_path = get_tts_audio(sentence)
 
     # 바운딩 박스 시각화
     annotated = img_np.copy()
@@ -88,7 +88,7 @@ def process_image(image, mode: str = "장애물"):
     else:
         lines.append("탐지된 장애물 없음")
 
-    return annotated, "\n".join(lines)
+    return annotated, "\n".join(lines), audio_path
 
 
 demo = gr.Interface(
@@ -104,6 +104,7 @@ demo = gr.Interface(
     outputs=[
         gr.Image(label="탐지 결과 (YOLO + 바닥 위험)"),
         gr.Textbox(label="음성 안내 / 상세 정보", lines=14),
+        gr.Audio(autoplay=True, label="음성 안내"),
     ],
     title="VoiceGuide — 시각장애인 실내 보행 음성 안내 시스템",
     description=(
@@ -118,4 +119,4 @@ if __name__ == "__main__":
     parser.add_argument("--share", action="store_true")
     args = parser.parse_args()
     demo.launch(server_name="0.0.0.0", server_port=7860,
-                show_api=False, inbrowser=not args.share, share=args.share)
+                show_api=False,inbrowser=not args.share, share=args.share)
