@@ -1,7 +1,6 @@
-# GCP Cloud Run 배포용 — 서버 동작에 필요한 것만 포함
-# Gradio, pygame, pyaudio 제외 → 이미지 크기 절감
+# GCP Cloud Run 배포용 — 핵심 기능만 포함 (빌드 시간 최소화)
 
-# 딥러닝 (CPU 버전 — Cloud Run은 GPU 없음)
+# 딥러닝 (CPU 버전)
 torch==2.4.1
 torchvision==0.19.1
 numpy==1.26.4
@@ -19,14 +18,11 @@ uvicorn==0.32.1
 python-multipart==0.0.12
 python-dotenv>=1.0.0
 
-# TTS (gTTS만 — ElevenLabs는 환경변수로 선택)
+# TTS
 gTTS==2.5.3
 requests>=2.32.0
 elevenlabs>=2.0.0
 
-# OCR
-easyocr>=1.7.0
-
-# DB
+# DB (없으면 SQLite 자동 사용)
 psycopg[binary]>=3.1.0
 psycopg-pool>=3.1.0
