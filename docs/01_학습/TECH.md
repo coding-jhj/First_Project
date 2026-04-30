@@ -18,7 +18,7 @@
     ├─ 장애물/찾기: Android ONNX 우선 (서버 URL이 있어도 기본 탐지 유지)
     └─ 질문/색상/신호등 등: FastAPI /detect 서버
     ↓
-[yolo11m_indoor.pt 또는 Android yolo11m.onnx 탐지] ── (김재현)
+[yolo11m_indoor.pt 또는 Android ONNX(yolo11m 있으면 사용, 없으면 yolo11n) 탐지] ── (김재현)
     ↓ bbox + class (서버 conf=0.50 / Android conf=0.35, 계단은 Depth + StairsDetector 보완)
 [방향 판단] bbox 중심 x → 8시~4시 9구역 ──── (김재현)
     ↓

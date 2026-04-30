@@ -226,7 +226,7 @@ COCO 80클래스를 기반으로 하며, 실환경 테스트에서 오인식이 
 | 기능 | 상태 | 상세 |
 |------|------|------|
 | **완전 독립 동작** ⭐ | ✅ | 서버 URL 없이 즉시 실행 |
-| **ONNX 온디바이스 추론** | ✅ | **yolo11m.onnx** 앱 내장 — 장애물/찾기 모드는 서버 URL이 있어도 ONNX 우선 |
+| **ONNX 온디바이스 추론** | ✅ | 기본 배포는 **yolo11n.onnx**, 로컬에 `yolo11m.onnx`가 있으면 자동 사용 — 장애물/찾기 모드는 서버 URL이 있어도 ONNX 우선 |
 | CameraX 1초 자동 캡처 | ✅ | 즉시 첫 캡처 |
 | **TTS AtomicBoolean 완전 잠금** ⭐ | ✅ | 동시 TTS 원천 차단, 차량만 즉시 끊고 재생 |
 | **거리 기반 음성/비프 분리** ⭐ | ✅ | 가까이→음성, 멀리→비프 (경고 피로 방지) |
@@ -377,7 +377,7 @@ http://서버IP:8000/dashboard
 ```kotlin
 // MainActivity.kt — 핵심 흐름
 CameraX 1초 자동 캡처
-  → YoloDetector.kt (ONNX Runtime, yolo11m.onnx)  // 온디바이스, 서버 불필요
+  → YoloDetector.kt (ONNX Runtime, yolo11m 있으면 사용 / 없으면 yolo11n fallback)  // 온디바이스, 서버 불필요
   → SentenceBuilder.kt (한국어 문장 생성)
   → Android TextToSpeech (한국어, 속도 1.1배)
 

@@ -106,7 +106,7 @@
 | 실기기 | Samsung Galaxy Z Fold 4 (SM-F936N, Android 14) |
 | 서버 PC | Intel Core Ultra 7 265K, Windows 11 |
 | 연결 방식 | 같은 Wi-Fi 로컬 IP (`http://172.30.1.36:8000`) |
-| 온디바이스 모드 | yolo11m.onnx 탑재, 서버 없이 폰 단독 동작 |
+| 온디바이스 모드 | 기본 yolo11n.onnx, 로컬 yolo11m.onnx 있으면 자동 사용, 서버 없이 폰 단독 동작 |
 | 데모 시나리오 | 폰 들고 장애물 앞 이동 → **1초**마다 자동 분석 → 음성 안내 |
 
 ### 실행 순서
