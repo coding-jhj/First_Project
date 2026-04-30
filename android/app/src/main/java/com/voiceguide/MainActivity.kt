@@ -1023,7 +1023,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 yoloDetector = YoloDetector(this)  // assets에서 ONNX 로드
                 runOnUiThread { tvStatus.text = "온디바이스 준비 완료 — 분석 시작을 누르세요" }
             } catch (_: Exception) {
-                // yolo11m.onnx 파일이 assets에 없는 경우 → 서버 모드 안내
+                // assets에 yolo11n.onnx 없는 경우 → 서버 모드 안내
                 runOnUiThread { tvStatus.text = "ONNX 모델 없음 — 서버 URL을 입력하세요" }
             }
         }.start()
@@ -1156,9 +1156,19 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                     isSending.set(true)
-                    // yoloDetector 있으면 온디바이스, 없으면 서버로
-                    if (yoloDetector != null) processOnDevice(file)
-                    else sendToServer(file)
+                    val serverUrl = etServerUrl.text.toString().trim()
+                    when {
+                        // 서버 URL이 있으면 서버 우선 (YOLO11m + Depth V2 + 공간기억 활용)
+                        serverUrl.isNotEmpty() -> sendToServer(file)
+                        // URL 없고 온디바이스 모델 있으면 폰 단독 추론
+                        yoloDetector != null   -> processOnDevice(file)
+                        // 둘 다 없으면 안내 후 종료
+                        else -> {
+                            isSending.set(false)
+                            file.delete()
+                            runOnUiThread { speak("서버 URL을 입력하거나 앱을 재시작해 주세요.") }
+                        }
+                    }
                 }
                 override fun onError(e: ImageCaptureException) {
                     isSending.set(false)
@@ -1266,6 +1276,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         Thread {
             val t0 = System.currentTimeMillis()
             var bmp: android.graphics.Bitmap? = null
+            var usedServerFallback = false
             try {
                 val tDecode = System.currentTimeMillis()
                 bmp = decodeBitmapUpright(imageFile)
@@ -1313,7 +1324,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 }
 
                 bmp.recycle(); bmp = null
-                imageFile.delete()
+                // imageFile은 finally에서 삭제 (catch의 서버 fallback이 먼저 파일 필요)
 
                 Log.d("VG_DETECT", "=== 탐지 결과 ===")
                 Log.d("VG_DETECT", "raw: ${rawDetections.size}개 → dedup: ${voted.size}개")
@@ -1369,8 +1380,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 }
             } catch (_: Exception) {
                 bmp?.recycle()
-                // 온디바이스 실패 → 파일은 삭제하지 않고 서버로 fallback
+                // 온디바이스 실패 → 파일이 아직 존재하므로 서버로 fallback
+                // (sendToServer가 finally에서 파일 삭제 담당)
+                usedServerFallback = true
                 sendToServer(imageFile)
+            } finally {
+                // 서버 fallback을 쓰지 않은 경우(정상 완료)에만 여기서 파일 삭제
+                if (!usedServerFallback) imageFile.delete()
             }
         }.start()
     }

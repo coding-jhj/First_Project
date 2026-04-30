@@ -189,6 +189,24 @@ async def detect(
             "depth_source": objects[0].get("depth_source","bbox") if objects else "bbox",
         }
 
+    # ── 색상 모드: 가장 큰 물체의 색상 안내 ─────────────────────────────────
+    if mode == "색상":
+        if objects:
+            top = objects[0]  # 위험도 기준 1위 (가장 크거나 가까운 물체)
+            color = top.get("color", "")
+            name  = top.get("class_ko", "물체")
+            sentence = f"{name}는 {color} 계열이에요." if color else f"{name}의 색상을 인식하지 못했어요."
+        else:
+            sentence = "색상을 확인할 물체가 보이지 않아요. 카메라를 물체에 가까이 대주세요."
+        return {
+            "sentence":    sentence,
+            "alert_mode":  "silent",
+            "objects":     objects,
+            "hazards":     hazards,
+            "changes":     [],
+            "depth_source": objects[0].get("depth_source","bbox") if objects else "bbox",
+        }
+
     # ── 찾기 모드: 특정 물체를 타깃으로 탐색 ────────────────────────────────
     if mode == "찾기":
         target = _extract_find_target(query_text)  # "의자 찾아줘" → "의자"

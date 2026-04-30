@@ -46,12 +46,14 @@ class YoloDetector(context: Context) {
 
     init {
         // assets 폴더에서 ONNX 모델 로드
-        // yolo11m.onnx 우선, 없으면 yolo11n.onnx (더 작은 모델) fallback
+        // 실제 배포 모델: yolo11n.onnx (10.7MB, 경량)
+        // 고정밀 모델:    yolo11m.onnx (없으면 n으로 fallback)
+        // 발표 시: "앱 내장 모델은 YOLO11n ONNX, 서버는 YOLO11m PyTorch"
         val modelName = try {
             context.assets.open("yolo11m.onnx").close()
-            "yolo11m.onnx"  // m 모델: 더 정확 (38MB)
+            "yolo11m.onnx"  // 고정밀 모델 (있을 때만)
         } catch (_: Exception) {
-            "yolo11n.onnx"  // n 모델: 더 빠름 (5.4MB), 오탐 많음
+            "yolo11n.onnx"  // 기본 경량 모델 (현재 배포 기준)
         }
         val bytes = context.assets.open(modelName).readBytes()
         val opts = OrtSession.SessionOptions().apply {
