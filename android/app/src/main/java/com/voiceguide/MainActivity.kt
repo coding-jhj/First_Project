@@ -1429,13 +1429,14 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         Thread {
             var sentImgW = 0
             var sentImgH = 0
+            var currentFile = imageFile   // 최적화 후 파일 추적
+            var fallbackStarted = false
             try {
-                // FPS 측정 시작 — 요청 전송 시각 기록
                 val reqStart = System.currentTimeMillis()
                 lastRequestTime = reqStart
 
-                // 이미지 최적화 + 크기를 동시에 반환 (별도 디코딩 불필요)
                 val (optimized, w, h) = optimizeImageForUpload(imageFile)
+                currentFile = optimized   // 이제 최적화된 파일이 현재 파일
                 sentImgW = w.coerceAtLeast(1)
                 sentImgH = h.coerceAtLeast(1)
 
@@ -1525,10 +1526,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 handleSuccess(sentence, alertMode)
             } catch (e: Exception) {
                 android.util.Log.e("VG_SERVER", "FAIL url=$serverUrl | ${e.javaClass.simpleName}: ${e.message}")
-                handleFail()
+                // 서버 실패 → 온디바이스 fallback (콜드스타트 타임아웃 등)
+                if (yoloDetector != null && currentFile.exists()) {
+                    fallbackStarted = true
+                    android.util.Log.d("VG_SERVER", "서버 실패 → 온디바이스 fallback")
+                    processOnDevice(currentFile)
+                } else {
+                    handleFail()
+                }
             } finally {
-                imageFile.delete()
-                isSending.set(false)  // 예외로 handleFail 미호출 시 안전망
+                if (!fallbackStarted) currentFile.delete()
+                if (!fallbackStarted) isSending.set(false)
             }
         }.start()
     }
