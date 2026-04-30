@@ -1,0 +1,26 @@
+# 도커 빌드 제외 목록
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.env
+*.db
+*.log
+*.csv
+
+# 큰 모델 파일 (Depth V2 제외 — bbox fallback 사용)
+depth_anything_v2_vits.pth
+
+# 개발용 폴더
+train/
+data/
+results/
+legacy/
+android/
+tools/
+tests/
+docs/
+
+# 임시 파일
+*.tmp
+__tts_cache__/
