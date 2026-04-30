@@ -23,7 +23,6 @@ KEYWORDS: dict[str, list[str]] = {
 # 기본값을 unknown으로 변경하여 비명령어 발화 시 분석 방지
 _DEFAULT_MODE = "unknown"
 
-
 def _normalize_text(text: str) -> str:
     """STT 결과를 키워드 매칭하기 쉬운 형태로 정규화."""
     return (text or "").strip().lower()

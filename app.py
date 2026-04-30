@@ -5,7 +5,11 @@ import cv2
 import numpy as np
 from src.depth.depth import detect_and_depth
 from src.nlg.sentence import build_sentence, build_hazard_sentence
+<<<<<<< HEAD
 from src.voice.tts import speak, _cache_path, _generate
+=======
+from src.voice.tts import get_tts_audio
+>>>>>>> 58e9121 (tts 모델 azure로 변경 / 웹 작동확인완료)
 from src.nlg.templates import CLOCK_TO_DIRECTION
 
 
@@ -47,6 +51,7 @@ def process_image(image, mode: str = "장애물"):
         sentence = sentence + " " + " ".join(extras)
 
     elapsed_ms = (time.time() - t0) * 1000
+<<<<<<< HEAD
     speak(sentence)  # 로컬 실행 시 서버 머신 스피커로 재생
 
     # 브라우저 재생용 MP3 생성
@@ -54,6 +59,9 @@ def process_image(image, mode: str = "장애물"):
     if not os.path.exists(audio_path):
         _generate(sentence, audio_path)
     audio_out = audio_path if os.path.exists(audio_path) else None
+=======
+    audio_path = get_tts_audio(sentence)
+>>>>>>> 58e9121 (tts 모델 azure로 변경 / 웹 작동확인완료)
 
     # 바운딩 박스 시각화
     annotated = img_np.copy()
@@ -97,7 +105,11 @@ def process_image(image, mode: str = "장애물"):
     else:
         lines.append("탐지된 장애물 없음")
 
+<<<<<<< HEAD
     return annotated, "\n".join(lines), audio_out
+=======
+    return annotated, "\n".join(lines), audio_path
+>>>>>>> 58e9121 (tts 모델 azure로 변경 / 웹 작동확인완료)
 
 
 # Gradio 웹 UI 구성 — 브라우저에서 이미지 업로드 후 분석 결과 확인 가능
@@ -112,9 +124,15 @@ demo = gr.Interface(
         ),
     ],
     outputs=[
+<<<<<<< HEAD
         gr.Image(label="탐지 결과 (YOLO + 바닥 위험)"),     # 바운딩 박스가 그려진 이미지
         gr.Textbox(label="음성 안내 / 상세 정보", lines=14), # 상세 로그 출력
         gr.Audio(label="음성 안내 듣기", autoplay=True),     # 자동 재생 MP3
+=======
+        gr.Image(label="탐지 결과 (YOLO + 바닥 위험)"),
+        gr.Textbox(label="음성 안내 / 상세 정보", lines=14),
+        gr.Audio(autoplay=True, label="음성 안내"),
+>>>>>>> 58e9121 (tts 모델 azure로 변경 / 웹 작동확인완료)
     ],
     title="VoiceGuide — 시각장애인 실내 보행 음성 안내 시스템",
     description=(
@@ -131,4 +149,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     # server_name="0.0.0.0": 로컬 네트워크에서도 접근 가능 (서버 IP로 브라우저 접속)
     demo.launch(server_name="0.0.0.0", server_port=7860,
-                show_api=False, inbrowser=not args.share, share=args.share)
+                show_api=False,inbrowser=not args.share, share=args.share)
