@@ -262,14 +262,21 @@ postgresql://postgres.xxx:pass@aws-1-ap-northeast-2.pooler.supabase.com:5432/pos
 
 ---
 
-### 22. Railway/Render 배포 후 첫 요청이 느릴 때 (Cold Start)
+### 22. GCP Cloud Run 배포 후 첫 요청이 느릴 때 (Cold Start)
 
-**원인**: 무료 플랜은 일정 시간 비활성 시 sleep → 첫 요청에서 30~60초 지연
+**원인**: 일정 시간 비활성 시 컨테이너가 종료됨 → 다음 요청에서 컨테이너 재시작(30~60초) + YOLO 워밍업
 
 **해결**:
-1. 앱 사용 전 `/health`로 warm-up 요청 먼저 보내기
-2. [Uptime Robot](https://uptimerobot.com) 무료 계정 → 5분마다 `/health` ping 설정 (sleep 방지)
-3. Railway Hobby 플랜($5/월)은 sleep 없음
+1. 앱 사용 전 브라우저에서 `/health` 먼저 열기 (컨테이너 깨우기)
+2. GCP Cloud Run 콘솔 → 서비스 설정 → "최소 인스턴스 수 1"로 설정 (항상 켜짐, 유료)
+
+### 22-1. GCP 서버 연결 정상인데 장애물이 전혀 감지 안 될 때
+
+**원인**: Android `optimizeImageForUpload()`에서 EXIF 회전 태그를 무시 → 이미지가 90도 회전된 채로 서버 전송 → YOLO 감지 실패
+
+**증상**: `/health`·`/dashboard` 정상, 앱 응답도 오는데(700~800ms) 항상 "장애물 없음"
+
+**수정 (2026-04-30 적용)**: `BitmapFactory.decodeFile()` → `decodeBitmapUpright()`로 교체. APK 재빌드 후 재설치 필요
 
 ---
 

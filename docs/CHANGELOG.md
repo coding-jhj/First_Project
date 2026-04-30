@@ -2,6 +2,21 @@
 
 ---
 
+## 2026-04-30 (GCP 배포 + EXIF 회전 버그 수정)
+
+### GCP Cloud Run 배포로 전환
+- Railway → GCP Cloud Run으로 배포 플랫폼 전환
+- `railway.toml` 삭제
+- README.md에서 Railway 관련 URL·설명 제거, GCP 기준으로 통일
+
+### Android 서버 전송 이미지 EXIF 회전 버그 수정 (치명적 버그)
+- **원인**: `optimizeImageForUpload()`가 `BitmapFactory.decodeFile()`로 이미지를 읽을 때 EXIF 회전 태그를 무시 → Android 카메라가 저장한 세로 사진이 90도 돌아간 가로 이미지로 GCP 서버에 전송됨 → YOLO가 회전된 이미지에서 아무것도 감지하지 못함
+- **증상**: GCP 서버 연결은 정상(729ms 응답)이지만 항상 "장애물 없음" 반환
+- **수정**: `BitmapFactory.decodeFile()` → `decodeBitmapUpright()`로 교체 (EXIF 회전 보정 적용)
+- **참고**: 온디바이스 경로는 이미 `decodeBitmapUpright()` 사용 중이었으나 서버 전송 경로만 누락되어 있었음
+
+---
+
 ## 2026-04-29 (디버깅 세션 — TTS·바운딩박스·분석중지 전면 수정)
 
 ### TTS 무음 버그 3개 수정
