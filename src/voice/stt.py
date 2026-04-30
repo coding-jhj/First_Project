@@ -13,7 +13,11 @@ Android 앱은 SpeechRecognizer(내장)를 직접 쓰고,
   (KEYWORDS 기준 — Android와 동일한 키워드)
 """
 
-import speech_recognition as sr
+try:
+    import speech_recognition as sr
+    _SR_AVAILABLE = True
+except ImportError:
+    _SR_AVAILABLE = False  # 서버/Cloud Run 환경 — PC 데모에서만 필요
 
 # ── 모드별 키워드 ─────────────────────────────────────────────────────────────
 # 인식된 텍스트에 이 키워드가 포함되면 해당 모드로 분류됨
@@ -116,11 +120,14 @@ def listen_and_classify() -> tuple[str, str]:
     """
     PC 마이크로 음성을 1회 녹음하고 모드를 분류.
     Gradio 데모의 /stt 엔드포인트에서 호출됨.
+    Cloud Run 환경에서는 speech_recognition 미설치로 항상 ("", "unknown") 반환.
 
     Returns:
         (인식된 텍스트, 모드명)
         인식 실패: ("", "unknown")
     """
+    if not _SR_AVAILABLE:
+        return "", "unknown"
     r = sr.Recognizer()
     with sr.Microphone() as source:
         # 주변 소음 수준을 0.5초 동안 측정해서 민감도 자동 조정
