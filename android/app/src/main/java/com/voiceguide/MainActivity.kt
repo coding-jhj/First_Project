@@ -1250,8 +1250,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // Triple<최적화파일, 너비, 높이> 반환 — 크기를 따로 디코딩하지 않아도 됨
     private fun optimizeImageForUpload(file: File): Triple<File, Int, Int> {
         return try {
-            val bmp = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
-                ?: return Triple(file, 0, 0)
+            val bmp = decodeBitmapUpright(file)
 
             val maxW = 640
             val scaled = if (bmp.width > maxW) {
