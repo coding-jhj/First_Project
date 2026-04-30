@@ -92,7 +92,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // → 순간 오탐(인형·노트북 등)이 단발로 잡혀도 TTS 안내 안 됨
     private val detectionHistory = ArrayDeque<Set<String>>()
     private val VOTE_WINDOW    = 3
-    private val VOTE_MIN_COUNT = 1
+    private val VOTE_MIN_COUNT = 2  // 3프레임 중 2회 이상 등장해야 안내 (오탐 차단)
     private val ALWAYS_PASS    = setOf("자동차","오토바이","버스","트럭","기차","자전거",
                                        "칼","가위","개","말","곰","코끼리")
 
@@ -257,7 +257,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         private const val PREFS_NAME       = "voiceguide"  // SharedPreferences 이름
         private const val PREF_URL         = "server_url"  // 저장된 서버 URL 키
         private const val PREF_LOCATIONS   = "saved_locations"  // 저장 장소 JSON 배열 키
-        private const val INTERVAL_MS      = 50L           // 캡처 간격: 0.05초 (20fps 목표)
+        private const val INTERVAL_MS      = 700L          // 캡처 간격: 0.7초 (발열·배터리 절감)
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
         private const val FAIL_WARN_COUNT  = 3             // 연속 3회 실패 시 경고
         private const val CSV_LOG_ENABLED  = true          // 성능 CSV 로깅 (항상 활성화)

@@ -136,6 +136,9 @@ def get_snapshot(space_id: str) -> list[dict] | None:
             return json.loads(row[0]) if row else None
 
 
+_SNAPSHOT_KEEP = 20  # 공간별 스냅샷 최대 보관 수
+
+
 def save_snapshot(space_id: str, objects: list[dict]):
     ts  = datetime.now().isoformat()
     obj = json.dumps(objects, ensure_ascii=False)
@@ -145,10 +148,22 @@ def save_snapshot(space_id: str, objects: list[dict]):
                 cur.execute(
                     "INSERT INTO snapshots (space_id, timestamp, objects) "
                     "VALUES (%s, %s, %s)", (space_id, ts, obj))
+                # 공간별 최근 N개만 유지 (DB 무한 증가 방지)
+                cur.execute(
+                    "DELETE FROM snapshots WHERE space_id = %s AND id NOT IN "
+                    "(SELECT id FROM snapshots WHERE space_id = %s "
+                    " ORDER BY id DESC LIMIT %s)",
+                    (space_id, space_id, _SNAPSHOT_KEEP))
         else:
             conn.execute(
                 "INSERT INTO snapshots (space_id, timestamp, objects) "
                 "VALUES (?, ?, ?)", (space_id, ts, obj))
+            # 공간별 최근 N개만 유지 (DB 무한 증가 방지)
+            conn.execute(
+                "DELETE FROM snapshots WHERE space_id = ? AND id NOT IN "
+                "(SELECT id FROM snapshots WHERE space_id = ? "
+                " ORDER BY id DESC LIMIT ?)",
+                (space_id, space_id, _SNAPSHOT_KEEP))
 
 
 # ── 개인 장소 저장 ────────────────────────────────────────────────────────────

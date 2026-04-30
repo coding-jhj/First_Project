@@ -73,21 +73,23 @@ KEYWORDS: dict[str, list[str]] = {
     ],
 }
 
-# 어떤 키워드에도 안 걸리면 기본 장애물 모드로 fallback
-# → "배고파" 같은 엉뚱한 말을 해도 안내가 멈추지 않음
-_DEFAULT_MODE = "장애물"
+# 어떤 키워드에도 안 걸리면 unknown 반환
+# → 엉뚱한 말("배고파" 등)이 장애물 분석을 트리거하지 않도록 분리
+# → 호출부에서 unknown 수신 시 "다시 말씀해 주세요" 안내 또는 무시 처리
+_DEFAULT_MODE = "unknown"
 
 
 def _classify(text: str) -> str:
     """
     인식된 텍스트에서 모드를 분류.
-    순서: 장애물 → 찾기 → 확인 → 저장 → 위치목록
+    순서: 질문 → 장애물 → 찾기 → 확인 → 저장 → 위치목록
     (먼저 매칭되는 모드로 결정 — 키워드 중복 방지 설계)
+    미매칭 시 "unknown" 반환 (호출부에서 처리)
     """
     for mode, keywords in KEYWORDS.items():
         if any(kw in text for kw in keywords):
             return mode
-    return _DEFAULT_MODE  # 미매칭 시 장애물 모드
+    return _DEFAULT_MODE
 
 
 def extract_label(text: str) -> str:
@@ -138,4 +140,5 @@ def listen_and_classify() -> tuple[str, str]:
         return "", "unknown"
 
     mode = _classify(text)
+    # unknown 모드: 인식은 됐지만 지원 명령어 아님 → 호출부에서 재청취 안내
     return text, mode

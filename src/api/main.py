@@ -46,15 +46,33 @@ app = FastAPI(title="VoiceGuide API", lifespan=lifespan)
 
 @app.get("/health")
 async def health():
-    """서버 상태 + Depth V2 모델 로드 여부 확인."""
+    """서버 상태 + Depth V2 모델 로드 여부 + DB 연결 확인."""
     from src.depth.depth import _check_model, _DEVICE
     depth_ok = _check_model()
+    db_status = _check_db()
+    overall = "ok" if db_status == "ok" else "degraded"
     return {
-        "status":   "ok",
+        "status":   overall,
         "depth_v2": "loaded" if depth_ok else "fallback (bbox)",
         "device":   _DEVICE,
         "db_mode":  "postgresql" if db._IS_POSTGRES else "sqlite",
+        "db":       db_status,
     }
+
+
+def _check_db() -> str:
+    """DB에 간단한 쿼리를 날려 연결 상태를 확인한다."""
+    try:
+        from src.api.db import _conn, _IS_POSTGRES
+        with _conn() as conn:
+            if _IS_POSTGRES:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+            else:
+                conn.execute("SELECT 1")
+        return "ok"
+    except Exception as e:
+        return f"error: {e}"
 
 
 # 예외가 나도 Android가 음성 안내를 받을 수 있도록 안전 응답 반환
