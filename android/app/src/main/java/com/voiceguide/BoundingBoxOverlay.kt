@@ -27,6 +27,7 @@ class BoundingBoxOverlay @JvmOverloads constructor(
     private val COLOR_CRITICAL = Color.parseColor("#E53935")  // 빨강 — 긴급
     private val COLOR_CAUTION  = Color.parseColor("#FDD835")  // 노랑 — 주의
     private val COLOR_INFO     = Color.parseColor("#43A047")  // 초록 — 정보
+    private val COLOR_FOUND    = Color.WHITE                  // 흰색 — 찾기 모드 발견 대상
 
     // sentence.py _VEHICLE_KO + 계단·낙차 위험 클래스
     private val CRITICAL_CLASSES = setOf(
@@ -75,8 +76,9 @@ class BoundingBoxOverlay @JvmOverloads constructor(
         invalidate()
     }
 
-    /** classKo를 기반으로 위험도 색상 반환. sentence.py 색상 체계와 동일하게 유지. */
-    private fun hazardColor(classKo: String): Int = when {
+    /** 위험도 색상 반환. 찾기 모드 발견 대상은 흰색, 나머지는 클래스 기반 색상. */
+    private fun hazardColor(classKo: String, isFound: Boolean): Int = when {
+        isFound                     -> COLOR_FOUND
         classKo in CRITICAL_CLASSES -> COLOR_CRITICAL
         classKo in CAUTION_CLASSES  -> COLOR_CAUTION
         else                        -> COLOR_INFO
@@ -96,7 +98,7 @@ class BoundingBoxOverlay @JvmOverloads constructor(
         val offsetY   = (vh - displayH) / 2f
 
         detections.forEach { det ->
-            val color = hazardColor(det.classKo)
+            val color = hazardColor(det.classKo, det.isFound)
             boxPaint.color  = color
             textPaint.color = color
 

@@ -66,7 +66,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     // ── UI 뷰 참조 ─────────────────────────────────────────────────────
     private lateinit var tts: TextToSpeech
-    private lateinit var etServerUrl: EditText   // 서버 IP 입력 (없어도 온디바이스 동작)
     private lateinit var tvStatus: TextView      // 현재 안내 문장 표시
     private lateinit var tvMode: TextView        // 현재 모드 + 카메라 방향 표시
     private lateinit var btnToggle: Button       // 분석 시작/중지
@@ -274,7 +273,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
         tts = TextToSpeech(this, this)
 
-        etServerUrl = findViewById(R.id.etServerUrl)
         tvStatus    = findViewById(R.id.tvStatus)
         tvMode      = findViewById(R.id.tvMode)
         btnToggle   = findViewById(R.id.btnToggle)
@@ -282,17 +280,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         previewView         = findViewById(R.id.previewView)
         boundingBoxOverlay  = findViewById(R.id.boundingBoxOverlay)
 
-        // 디버그 오버레이 — tvMode 길게 누르면 토글
-        val tvDebug = findViewById<android.widget.TextView>(R.id.tvDebug)
-        tvMode.setOnLongClickListener {
-            debugVisible = !debugVisible
-            tvDebug.visibility = if (debugVisible) android.view.View.VISIBLE else android.view.View.GONE
-            true
+        // 우상단 설정 아이콘 — 서버 URL 입력 + 디버그 모드 토글
+        findViewById<android.widget.Button>(R.id.btnSettings).setOnClickListener {
+            showSettingsDialog()
         }
-
-        // 저장된 서버 URL 복원 (없어도 무관)
-        etServerUrl.setText(
-            getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_URL, ""))
 
         sensorManager   = getSystemService(SENSOR_SERVICE) as SensorManager
         locationManager = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
@@ -309,20 +300,55 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             "com.voiceguide.ACTION_SOS"   -> handler.postDelayed({ triggerSOS() }, 1500)
         }
 
-        // 서버 URL 유무와 관계없이 바로 시작 가능
         btnToggle.setOnClickListener {
-            if (isAnalyzing.get()) {
-                stopAnalysis()
-            } else {
-                val url = etServerUrl.text.toString().trim()
-                if (url.isNotEmpty()) {
-                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                        .edit().putString(PREF_URL, url).apply()
-                }
-                requestPermissions()
-            }
+            if (isAnalyzing.get()) stopAnalysis() else requestPermissions()
         }
         btnStt.setOnClickListener { startListening() }
+    }
+
+    private fun getSavedServerUrl(): String =
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_URL, "") ?: ""
+
+    private fun showSettingsDialog() {
+        val ctx = this
+        val layout = android.widget.LinearLayout(ctx).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(64, 32, 64, 16)
+        }
+
+        val etUrl = android.widget.EditText(ctx).apply {
+            hint = "서버 URL (비우면 온디바이스 모드)"
+            inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI
+            setText(getSavedServerUrl())
+            setSingleLine(true)
+        }
+        val tvUrlLabel = android.widget.TextView(ctx).apply { text = "서버 URL" }
+
+        val swDebug = android.widget.Switch(ctx).apply {
+            text = "디버그 모드 (FPS / 추론속도)"
+            isChecked = debugVisible
+        }
+
+        layout.addView(tvUrlLabel)
+        layout.addView(etUrl)
+        layout.addView(android.widget.Space(ctx).apply {
+            minimumHeight = 32
+        })
+        layout.addView(swDebug)
+
+        androidx.appcompat.app.AlertDialog.Builder(ctx)
+            .setTitle("설정")
+            .setView(layout)
+            .setPositiveButton("저장") { _, _ ->
+                val url = etUrl.text.toString().trim()
+                getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                    .edit().putString(PREF_URL, url).apply()
+                debugVisible = swDebug.isChecked
+                val tvDebug = findViewById<android.widget.TextView>(R.id.tvDebug)
+                tvDebug.visibility = if (debugVisible) android.view.View.VISIBLE else android.view.View.GONE
+            }
+            .setNegativeButton("취소", null)
+            .show()
     }
 
     override fun onResume() {
@@ -782,7 +808,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     }
 
     private fun sendBusOcrToServer(imageFile: File) {
-        val serverUrl = etServerUrl.text.toString().trim().trimEnd('/')
+        val serverUrl = getSavedServerUrl().trimEnd('/')
         if (serverUrl.isEmpty()) {
             speak("버스 번호를 읽지 못했어요. 서버를 연결하면 더 잘 인식돼요.")
             imageFile.delete()
@@ -884,7 +910,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // ── 옷 매칭·패턴 (서버 GPT Vision) ───────────────────────────────
 
     private fun captureForClothingAdvice(type: String) {
-        val serverUrl = etServerUrl.text.toString().trim().trimEnd('/')
+        val serverUrl = getSavedServerUrl().trimEnd('/')
         if (serverUrl.isEmpty()) {
             speak("옷 분석은 서버 연결이 필요해요."); return
         }
@@ -1161,7 +1187,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                     isSending.set(true)
-                    val serverUrl = etServerUrl.text.toString().trim()
+                    val serverUrl = getSavedServerUrl()
                     when {
                         // 서버 URL이 있으면 서버 우선 (YOLO11m + Depth V2 + 공간기억 활용)
                         serverUrl.isNotEmpty() -> sendToServer(file)
@@ -1206,7 +1232,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
      * 특정 모드로 서버에 전송. 질문 모드 등 currentMode를 바꾸지 않고 1회성 전송 시 사용.
      */
     private fun sendToServerWithMode(imageFile: File, mode: String) {
-        val serverUrl = etServerUrl.text.toString().trim().trimEnd('/')
+        val serverUrl = getSavedServerUrl().trimEnd('/')
         if (serverUrl.isEmpty()) {
             imageFile.delete()
             speak("서버가 연결되어 있지 않아요. 서버 URL을 입력해 주세요.")
@@ -1337,11 +1363,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     Log.d("VG_DETECT", "  [$i] ${d.classKo} | conf=${String.format("%.2f", d.confidence)} | cx=${String.format("%.2f", d.cx)} | w=${String.format("%.2f", d.w)} h=${String.format("%.2f", d.h)} | area=${String.format("%.3f", d.w * d.h)}")
                 }
 
+                // 찾기 모드에서 대상 물체에 흰색 박스 표시
+                val markedDetections = if (currentMode == "찾기" && findTarget.isNotEmpty()) {
+                    voted.map { it.copy(isFound = it.classKo.contains(findTarget)) }
+                } else voted
                 runOnUiThread {
-                    if (voted.isEmpty()) {
-                        boundingBoxOverlay.clearDetections()  // 탐지 없을 때만 박스 제거
+                    if (markedDetections.isEmpty()) {
+                        boundingBoxOverlay.clearDetections()
                     } else {
-                        boundingBoxOverlay.setDetections(voted, imgW, imgH)
+                        boundingBoxOverlay.setDetections(markedDetections, imgW, imgH)
                     }
                 }
 
@@ -1419,7 +1449,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // ── 서버 전송 (선택 — URL 입력 시 Depth V2 정확도 향상) ──────────────
 
     private fun sendToServer(imageFile: File) {
-        val serverUrl = etServerUrl.text.toString().trim().trimEnd('/')
+        val serverUrl = getSavedServerUrl().trimEnd('/')
         if (serverUrl.isEmpty()) {
             imageFile.delete()
             handleFail()
@@ -1476,13 +1506,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         val y1 = bbox.optDouble(1).toFloat()
                         val x2 = bbox.optDouble(2).toFloat()
                         val y2 = bbox.optDouble(3).toFloat()
+                        val classKo = obj.optString("class_ko", "물체")
                         detections.add(Detection(
-                            classKo    = obj.optString("class_ko", "물체"),
+                            classKo    = classKo,
                             confidence = obj.optDouble("conf", 0.5).toFloat(),
                             cx = ((x1 + x2) / 2f) / sentImgW,
                             cy = ((y1 + y2) / 2f) / sentImgH,
                             w  = (x2 - x1).coerceAtLeast(1f) / sentImgW,
-                            h  = (y2 - y1).coerceAtLeast(1f) / sentImgH
+                            h  = (y2 - y1).coerceAtLeast(1f) / sentImgH,
+                            isFound = currentMode == "찾기" && findTarget.isNotEmpty()
+                                      && classKo.contains(findTarget)
                         ))
                     }
                 }
