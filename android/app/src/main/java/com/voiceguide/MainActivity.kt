@@ -91,7 +91,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // → 순간 오탐(인형·노트북 등)이 단발로 잡혀도 TTS 안내 안 됨
     private val detectionHistory = ArrayDeque<Set<String>>()
     private val VOTE_WINDOW    = 3
-    private val VOTE_MIN_COUNT = 1  // 1회 이상 등장하면 즉시 안내 (2→1: 휴대폰 등 일반 물체 누락 방지)
+    private val VOTE_MIN_COUNT = 2
     private val ALWAYS_PASS    = setOf("자동차","오토바이","버스","트럭","기차","자전거",
                                        "칼","가위","개","말","곰","코끼리")
 
@@ -179,14 +179,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // connectTimeout: 서버 연결 최대 대기 5초
     // readTimeout: 서버 응답 최대 대기 8초 (YOLO+Depth 추론 시간 고려)
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
         .build()
     // AtomicInteger: 연속 실패 횟수 (3회 이상이면 경고 음성)
     private val consecutiveFails = AtomicInteger(0)
     private var lastSuccessTime  = System.currentTimeMillis()
     private var lastDetectionTime  = 0L   // 마지막으로 실제 장애물이 탐지된 시간
     private var lastCriticalTime   = 0L   // 마지막 critical TTS 발화 시간 (5초 쿨다운)
+    private var lastBeepTime       = 0L   // 마지막 beep TTS 발화 시간 (10초 쿨다운)
     @Volatile private var speakCooldownUntil = 0L  // TTS 종료 후 700ms 쉬어가기
 
     // ── 가속도 센서: 카메라 방향 자동 감지 ────────────────────────────
@@ -259,7 +260,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         private const val PREFS_NAME       = "voiceguide"  // SharedPreferences 이름
         private const val PREF_URL         = "server_url"  // 저장된 서버 URL 키
         private const val PREF_LOCATIONS   = "saved_locations"  // 저장 장소 JSON 배열 키
-        private const val INTERVAL_MS      = 700L          // 캡처 간격: 0.7초 (발열·배터리 절감)
+        private const val INTERVAL_MS      = 800L          // 캡처 간격: 0.8초 (빠른 응답)
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
         private const val FAIL_WARN_COUNT  = 3             // 연속 3회 실패 시 경고
         private const val CSV_LOG_ENABLED  = true          // 성능 CSV 로깅 (항상 활성화)
@@ -1187,19 +1188,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                     isSending.set(true)
-                    val serverUrl = getSavedServerUrl()
-                    when {
-                        // 서버 URL이 있으면 서버 우선 (YOLO11m + Depth V2 + 공간기억 활용)
-                        serverUrl.isNotEmpty() -> sendToServer(file)
-                        // URL 없고 온디바이스 모델 있으면 폰 단독 추론
-                        yoloDetector != null   -> processOnDevice(file)
-                        // 둘 다 없으면 안내 후 종료
-                        else -> {
-                            isSending.set(false)
-                            file.delete()
-                            runOnUiThread { speak("서버 URL을 입력하거나 앱을 재시작해 주세요.") }
-                        }
-                    }
+                    val useServer = etServerUrl.text.toString().trim().isNotEmpty()
+                    if (yoloDetector != null && !useServer) processOnDevice(file)
+                    else sendToServer(file)
                 }
                 override fun onError(e: ImageCaptureException) {
                     isSending.set(false)
@@ -1273,10 +1264,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
      * 전송 크기 약 40~60% 감소 → 네트워크 지연 단축 → 체감 FPS 향상
      * YOLO 입력은 어차피 640×640으로 리사이즈되므로 품질 손실 없음
      */
-    // Triple<최적화파일, 너비, 높이> 반환 — 크기를 따로 디코딩하지 않아도 됨
-    private fun optimizeImageForUpload(file: File): Triple<File, Int, Int> {
+    private fun optimizeImageForUpload(file: File): File {
         return try {
-            val bmp = decodeBitmapUpright(file)
+            val bmp = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
+                ?: return file
 
             val maxW = 640
             val scaled = if (bmp.width > maxW) {
@@ -1286,17 +1277,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     .also { if (it != bmp) bmp.recycle() }
             } else bmp
 
-            val w = scaled.width
-            val h = scaled.height
             val out = File.createTempFile("vg_opt_", ".jpg", cacheDir)
             out.outputStream().use { stream ->
                 scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 75, stream)
             }
             scaled.recycle()
             file.delete()
-            Triple(out, w, h)
+            out
         } catch (_: Exception) {
-            Triple(file, 0, 0)
+            file
         }
     }
 
@@ -1414,13 +1403,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 }
             } catch (_: Exception) {
                 bmp?.recycle()
-                // 온디바이스 실패 → 파일이 아직 존재하므로 서버로 fallback
-                // (sendToServer가 finally에서 파일 삭제 담당)
-                usedServerFallback = true
-                sendToServer(imageFile)
-            } finally {
-                // 서버 fallback을 쓰지 않은 경우(정상 완료)에만 여기서 파일 삭제
-                if (!usedServerFallback) imageFile.delete()
+                sendToServer(imageFile)  // 온디바이스 실패 → 서버 시도 (서버도 실패시 handleFail)
             }
         }.start()
     }
@@ -1456,18 +1439,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }
 
         Thread {
-            var sentImgW = 0
-            var sentImgH = 0
-            var currentFile = imageFile   // 최적화 후 파일 추적
-            var fallbackStarted = false
             try {
                 val reqStart = System.currentTimeMillis()
                 lastRequestTime = reqStart
 
-                val (optimized, w, h) = optimizeImageForUpload(imageFile)
-                currentFile = optimized   // 이제 최적화된 파일이 현재 파일
-                sentImgW = w.coerceAtLeast(1)
-                sentImgH = h.coerceAtLeast(1)
+                val optimized = optimizeImageForUpload(imageFile)
 
                 val body = MultipartBody.Builder().setType(MultipartBody.FORM)
                     .addFormDataPart("image", "frame.jpg",
@@ -1494,81 +1470,19 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
                 checkWaitingBus(json)
 
-                // 서버 탐지 결과로 바운딩박스 즉시 갱신 — 화면에서 물체 사라지면 박스도 제거
-                val serverObjs = json.optJSONArray("objects")
-                val detections = mutableListOf<Detection>()
-                if (serverObjs != null && sentImgW > 0 && sentImgH > 0) {
-                    for (i in 0 until serverObjs.length()) {
-                        val obj  = serverObjs.getJSONObject(i)
-                        val bbox = obj.optJSONArray("bbox") ?: continue
-                        if (bbox.length() < 4) continue
-                        val x1 = bbox.optDouble(0).toFloat()
-                        val y1 = bbox.optDouble(1).toFloat()
-                        val x2 = bbox.optDouble(2).toFloat()
-                        val y2 = bbox.optDouble(3).toFloat()
-                        val classKo = obj.optString("class_ko", "물체")
-                        detections.add(Detection(
-                            classKo    = classKo,
-                            confidence = obj.optDouble("conf", 0.5).toFloat(),
-                            cx = ((x1 + x2) / 2f) / sentImgW,
-                            cy = ((y1 + y2) / 2f) / sentImgH,
-                            w  = (x2 - x1).coerceAtLeast(1f) / sentImgW,
-                            h  = (y2 - y1).coerceAtLeast(1f) / sentImgH,
-                            isFound = currentMode == "찾기" && findTarget.isNotEmpty()
-                                      && classKo.contains(findTarget)
-                        ))
-                    }
-                }
-                runOnUiThread {
-                    if (detections.isEmpty()) boundingBoxOverlay.clearDetections()
-                    else boundingBoxOverlay.setDetections(detections, sentImgW, sentImgH)
-                }
-
                 // FPS + 처리시간 UI 업데이트
                 val netMs = if (processMs > 0) roundTripMs - processMs else roundTripMs
-                android.util.Log.d("VG_PERF",
-                    "mode|server|server_ms|$processMs|net_ms|$netMs|total|$roundTripMs")
-                android.util.Log.d("VG_SERVER",
-                    "OK url=$serverUrl | mode=$currentMode | sentence=\"$sentence\" | alert=$alertMode")
                 runOnUiThread {
-                    val fps   = calcFps()
-                    val spark = buildSparkline()
-                    val serverTag = if (processMs > 0) "☁ ${processMs}ms" else "☁ ${roundTripMs}ms"
-                    lastFpsText = "${fps}fps $spark | $serverTag"
+                    val fps = calcFps()
+                    lastFpsText = "${fps}fps | 서버:${processMs}ms 네트:${netMs}ms"
                     tvMode.text = "[$currentMode] $lastFpsText"
-                    if (debugVisible) {
-                        val tv = findViewById<android.widget.TextView>(R.id.tvDebug)
-                        tv.text = "FPS      : ${fps}\n" +
-                                  "서버처리 : ${if (processMs > 0) "${processMs}ms" else "-"}\n" +
-                                  "네트워크 : ${netMs}ms\n" +
-                                  "전체왕복 : ${roundTripMs}ms"
-                    }
-                }
-
-                // CSV 성능 로그 (CSV_LOG_ENABLED=true 시 활성화)
-                if (CSV_LOG_ENABLED) {
-                    try {
-                        val fps = currentFps
-                        val line = "${System.currentTimeMillis()},fps=$fps," +
-                            "total=${roundTripMs}ms,server=${processMs}ms,net=${netMs}ms\n"
-                        java.io.File(getExternalFilesDir(null), "vg_perf.csv").appendText(line)
-                    } catch (_: Exception) {}
                 }
 
                 handleSuccess(sentence, alertMode)
-            } catch (e: Exception) {
-                android.util.Log.e("VG_SERVER", "FAIL url=$serverUrl | ${e.javaClass.simpleName}: ${e.message}")
-                // 서버 실패 → 온디바이스 fallback (콜드스타트 타임아웃 등)
-                if (yoloDetector != null && currentFile.exists()) {
-                    fallbackStarted = true
-                    android.util.Log.d("VG_SERVER", "서버 실패 → 온디바이스 fallback")
-                    processOnDevice(currentFile)
-                } else {
-                    handleFail()
-                }
+            } catch (_: Exception) {
+                handleFail()
             } finally {
-                if (!fallbackStarted) currentFile.delete()
-                if (!fallbackStarted) isSending.set(false)
+                imageFile.delete()
             }
         }.start()
     }
