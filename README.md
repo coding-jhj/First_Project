@@ -249,29 +249,52 @@ COCO 80클래스를 기반으로 하며, 실환경 테스트에서 오인식이 
 
 ---
 
-## 빠른 시작 (서버/Gradio 데모 — 발표용 PC)
+## 빠른 시작 (서버 + ngrok 외부 접속)
 
-> Android 앱만 쓸 때는 이 단계 불필요. SETUP.md → APK 설치만 하면 됨.
+> Android 앱만 쓸 때는 이 단계 불필요 — SETUP.md → APK 설치만 하면 됨.
 
-### 1단계: 설치
+### 한 번에 시작 (권장)
 
-```bash
-git clone https://github.com/coding-jhj/VoiceGuide.git && cd VoiceGuide
+```bat
+REM 1. 처음 1회만: 의존성 설치
 conda activate ai_env
 pip install -r requirements.txt
-python tools/patch_gradio_client.py   # 딱 1회
+python tools/patch_gradio_client.py
+
+REM 2. 매번: 서버 + ngrok 동시 실행 (CMD 창 2개 자동 열림)
+start.bat
 ```
 
-### 2단계: 환경변수 설정 (.env)
+`start.bat` 실행 시 자동으로:
+1. `VoiceGuide-Server` 창 — FastAPI 서버 (`:8000`)
+2. `VoiceGuide-ngrok` 창 — ngrok 터널 (외부 URL 생성)
+
+```bat
+REM 종료 시
+stop.bat
+```
+
+### 수동 실행 (개별)
 
 ```bash
-# .env 파일에서 필요한 항목만 채우기
-# ELEVENLABS_API_KEY — Naver/ElevenLabs TTS 사용 시 (없어도 gTTS로 동작)
-# DATABASE_URL      — Supabase 사용 시 (없으면 자동으로 SQLite 사용)
-# 나머지는 비워도 됨
+# 창 1: FastAPI 서버
+conda activate ai_env
+uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+
+# 창 2: ngrok 외부 터널
+ngrok http 8000
+# → Forwarding https://xxxx.ngrok-free.app 로 표시된 URL을 앱에 입력
 ```
 
-### 3단계: Depth V2 모델 다운로드 (선택, 없으면 bbox fallback)
+### 환경변수 (.env)
+
+```bash
+# 없어도 동작, 필요 시만 설정
+ELEVENLABS_API_KEY=    # TTS 품질 향상 (없으면 gTTS 자동 사용)
+DATABASE_URL=          # Supabase PostgreSQL (없으면 SQLite 자동 사용)
+```
+
+### Depth V2 모델 (선택, 없으면 bbox 거리 추정 fallback)
 
 ```bash
 python -c "
@@ -283,37 +306,24 @@ print('완료')
 "
 ```
 
-### 4단계: 서버 실행
-
-```bash
-uvicorn src.api.main:app --host 0.0.0.0 --port 8000
-
-# 확인: http://localhost:8000/health
-# {"status":"ok","depth_v2":"loaded","device":"cuda","db_mode":"sqlite"}
-```
-
-### 5단계: 앱 연결
+### 앱 연결
 
 | 환경 | 서버 URL |
 |------|---------|
 | 같은 WiFi (로컬) | `http://192.168.x.x:8000` (`ipconfig`로 확인) |
-| LTE / 외부 | Railway·GCP·AWS 배포 후 생성된 URL — [DEPLOY_GUIDE.md](docs/DEPLOY_GUIDE.md) |
+| 외부 접속 (ngrok) | `start.bat` → ngrok 창의 `Forwarding https://...` URL |
+| 외부 서버 | Railway/GCP 배포 후 URL — [DEPLOY_GUIDE.md](docs/DEPLOY_GUIDE.md) |
 
 ```bash
-# 대시보드 (브라우저에서)
+# 헬스체크
+http://서버IP:8000/health
+# → {"status":"ok","depth_v2":"loaded","db":"ok","db_mode":"sqlite"}
+
+# 대시보드
 http://서버IP:8000/dashboard
 
-# Gradio 데모
-python app.py          # localhost:7860
-python app.py --share  # 폰 접속 가능한 공개 URL
-```
-
-### LTE 테스트 (외부 서버)
-
-```bash
-# Railway 배포 — GitHub 연동 후 클릭 한 번으로 배포 (무료)
-# 상세: docs/DEPLOY_GUIDE.md
-# 배포 완료 후 https://voiceguide-xxx.up.railway.app/health 로 확인
+# 성능 로그 확인 (서버 터미널)
+# [PERF] detect=Xms | tracker=Yms | nlg+rest=Zms | TOTAL=Wms | objs=N
 ```
 
 ---

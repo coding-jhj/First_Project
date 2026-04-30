@@ -146,24 +146,27 @@ try {
 
 ---
 
-### 방법 D — 서버 터미널 타이밍 로그
+### 방법 D — 서버 터미널 타이밍 로그 (이미 적용됨)
 
-`src/api/routes.py`의 `/detect` 엔드포인트에 이미 `process_ms` 측정이 포함돼 있습니다.
+`src/api/routes.py`의 `/detect`에 단계별 타이밍이 이미 출력됩니다.
 
-서버 터미널에서 직접 확인하려면:
-
-```python
-# routes.py detect() 함수 안에 임시 추가
-import time
-t_yolo = time.monotonic()
-objects, hazards, scene = detect_and_depth(image_bytes)
-print(f"[PERF] YOLO+Depth={int((time.monotonic()-t_yolo)*1000)}ms")
+```
+[PERF] detect=XXXms | tracker=Yms | nlg+rest=Zms | TOTAL=WWWms | objs=N
 ```
 
-YOLO ms와 Depth ms를 분리해서 보려면 `depth.py`에도 추가:
+| 필드 | 의미 | 목표 |
+|------|------|------|
+| `detect` | YOLO + Depth V2 처리 시간 | < 200ms (GPU 사용 시) |
+| `tracker` | EMA 추적기 처리 시간 | < 5ms |
+| `nlg+rest` | 문장 생성 + DB + 응답 조립 | < 30ms |
+| `TOTAL` | 서버 내부 전체 처리 시간 | < 300ms |
+
+`detect`가 크면(500ms+) → Depth V2 GPU 미사용 가능성 → Step 3(GPU 확인)으로.  
+`TOTAL`이 작은데 Android 체감이 느리면 → 네트워크 지연 → WiFi 환경 개선.
+
+YOLO와 Depth를 분리해서 보려면 `src/depth/depth.py`의 `detect_and_depth()` 안에 추가:
 
 ```python
-# detect_and_depth() 안에
 t0 = time.monotonic()
 objects, scene = detect_objects(image_bytes)
 print(f"[PERF] YOLO={int((time.monotonic()-t0)*1000)}ms")

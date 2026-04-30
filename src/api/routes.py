@@ -131,12 +131,12 @@ async def detect(
     _t_detect = _time.monotonic()
     objects, hazards, scene = detect_and_depth(image_bytes)
     _detect_ms = int((_time.monotonic() - _t_detect) * 1000)
-    print(f"[PERF] YOLO+Depth={_detect_ms}ms | objs={len(objects)} | hazards={len(hazards)}")
 
     # EMA 추적기: 프레임 간 거리 흔들림 제거 + 접근 감지
-    # wifi_ssid가 없으면 "__default__" 세션으로 처리
+    _t_tracker = _time.monotonic()
     tracker = get_tracker(wifi_ssid or "__default__")
     objects, motion_changes = tracker.update(objects)
+    _tracker_ms = int((_time.monotonic() - _t_tracker) * 1000)
 
     # 공간 기억: 이전 방문과 비교해서 달라진 것 감지
     previous = db.get_snapshot(wifi_ssid)
@@ -220,8 +220,10 @@ async def detect(
     if _should_suppress(sid, sentence, alert_mode):
         alert_mode = "silent"
 
-    # FPS 측정: 전체 처리 시간 계산 (Android 앱 UI에 표시용)
+    # 전체 서버 처리 시간 + 단계별 분석 로그
     process_ms = int((_time.monotonic() - _t0) * 1000)
+    _nlg_ms = process_ms - _detect_ms - _tracker_ms
+    print(f"[PERF] detect={_detect_ms}ms | tracker={_tracker_ms}ms | nlg+rest={_nlg_ms}ms | TOTAL={process_ms}ms | objs={len(objects)}")
 
     return {
         "sentence":      sentence,
