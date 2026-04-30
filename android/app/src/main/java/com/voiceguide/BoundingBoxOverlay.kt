@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
+import com.voiceguide.BuildConfig
 
 /**
  * 바운드박스 오버레이 View.
