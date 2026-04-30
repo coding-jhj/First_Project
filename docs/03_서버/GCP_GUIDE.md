@@ -84,28 +84,12 @@ docker --version
 # Docker Desktop이 없으면 https://www.docker.com/products/docker-desktop 에서 설치
 ```
 
-### 3단계: Dockerfile 만들기
+### 3단계: Dockerfile 확인
 
-프로젝트 루트(`c:\VoiceGuide\VoiceGuide\`)에 `Dockerfile` 생성:
+프로젝트 루트에 `Dockerfile`이 이미 존재합니다 ✅  
+`requirements-server.txt`도 이미 존재합니다 ✅
 
-```dockerfile
-FROM python:3.10-slim
-
-WORKDIR /app
-
-# 시스템 패키지 (opencv 등 필요)
-RUN apt-get update && apt-get install -y \
-    libglib2.0-0 libsm6 libxext6 libxrender-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-
-# Cloud Run은 8080 포트 사용
-CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8080"]
-```
+> 자세한 배포 방법은 [GCP_DEPLOY_NOW.md](GCP_DEPLOY_NOW.md) 참조
 
 ### 4단계: 배포 (명령어 딱 하나)
 
