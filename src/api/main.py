@@ -14,13 +14,6 @@ from src.api import db
 async def lifespan(app: FastAPI):
     # DB 초기화는 동기적으로 (빠름)
     db.init_db()
-<<<<<<< HEAD
-    # YOLO·Depth·OCR·TTS 워밍업은 모두 백그라운드 — 서버가 즉시 8080 포트를 열도록
-    import threading
-    threading.Thread(target=_warmup_yolo, daemon=True).start()
-    threading.Thread(target=_warmup_depth, daemon=True).start()
-    threading.Thread(target=_warmup_ocr, daemon=True).start()
-=======
     import numpy as np
     from src.vision.detect import model, CONF_THRESHOLD
     # 640×640 더미 이미지로 YOLO 첫 추론 실행 — JIT 컴파일 및 GPU 초기화 완료
@@ -31,7 +24,6 @@ async def lifespan(app: FastAPI):
     # EasyOCR·TTS 워밍업: 느려도 무관하므로 백그라운드 스레드 (서버 준비 완료를 막지 않음)
     import threading
     threading.Thread(target=_warmup_ocr, daemon=True).start()  # daemon=True: 서버 종료 시 함께 종료
->>>>>>> 7b61ba760bb92937657a46275420651922b133c8
     threading.Thread(target=_warmup_tts, daemon=True).start()
     yield  # 서버 실행 중 (이 이후는 종료 시 실행)
 

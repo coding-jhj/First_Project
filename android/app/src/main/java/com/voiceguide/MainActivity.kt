@@ -340,15 +340,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private fun getSavedServerUrl(): String =
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_URL, "") ?: ""
 
-    private fun getSavedApiKey(): String =
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_API_KEY, "") ?: ""
-
-    private fun Request.Builder.withSavedApiKey(): Request.Builder {
-        val apiKey = getSavedApiKey()
-        if (apiKey.isNotBlank()) header("X-API-Key", apiKey)
-        return this
-    }
-
     private fun showSettingsDialog() {
         val ctx = this
         val layout = android.widget.LinearLayout(ctx).apply {
@@ -364,14 +355,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }
         val tvUrlLabel = android.widget.TextView(ctx).apply { text = "서버 URL" }
 
-        val etApiKey = android.widget.EditText(ctx).apply {
-            hint = "API Key (optional)"
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setText(getSavedApiKey())
-            setSingleLine(true)
-        }
-        val tvApiKeyLabel = android.widget.TextView(ctx).apply { text = "API Key" }
-
         val swDebug = android.widget.Switch(ctx).apply {
             text = "디버그 모드 (FPS / 추론속도)"
             isChecked = debugVisible
@@ -379,8 +362,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
         layout.addView(tvUrlLabel)
         layout.addView(etUrl)
-        layout.addView(tvApiKeyLabel)
-        layout.addView(etApiKey)
         layout.addView(android.widget.Space(ctx).apply {
             minimumHeight = 32
         })
@@ -396,7 +377,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                         .edit()
                         .putString(PREF_URL, url)
-                        .putString(PREF_API_KEY, apiKey)
                         .apply()
                     debugVisible = swDebug.isChecked
                     val tvDebug = findViewById<android.widget.TextView>(R.id.tvDebug)
@@ -669,7 +649,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 // "37번 버스 기다려줘" → "37" 추출
                 val num = Regex("\\d{1,4}").find(text)?.value ?: ""
                 if (num.isEmpty()) {
-                    speak("몇 번 버스를 기다릴까요? 예) 37번 버스 기다려줘.")
+                    speak("몇 번 버스를 기다릴까요? 예 : 37번 버스 기다려줘.")
                 } else {
                     waitingBusNumber = num
                     speak("${num}번 버스를 기다릴게요. 가까이 오면 알려드릴게요.")
@@ -723,7 +703,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 // "8시에 약 먹어야 해" → 시간 추출
                 val hour = Regex("(\\d{1,2})시").find(text)?.groupValues?.get(1)?.toIntOrNull()
                 if (hour != null) setMedicationAlarm(hour)
-                else speak("몇 시에 약을 드실 건가요? 예) 8시에 약 먹어야 해.")
+                else speak("몇 시에 약을 드실 건가요? 예 : 8시에 약 먹어야 해.")
             }
             "하차알림" -> requestLocationPermission {
                 speak("현재 위치를 기준으로 200미터 이내에 도착하면 알려드릴게요.")
