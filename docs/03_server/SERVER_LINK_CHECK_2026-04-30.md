@@ -10,13 +10,13 @@ GCP 서버 엔드포인트는 살아 있습니다. 다만 대시보드에 보일
 ## 확인한 서버 URL
 
 ```text
-https://voiceguide-1063164560758.asia-northeast3.run.app
+https://voiceguide-135456731041.asia-northeast3.run.app
 ```
 
 Android 앱에는 마지막 `/` 없이 아래처럼 입력합니다.
 
 ```text
-https://voiceguide-1063164560758.asia-northeast3.run.app
+https://voiceguide-135456731041.asia-northeast3.run.app
 ```
 
 ## 임명광 공유 로그 기준

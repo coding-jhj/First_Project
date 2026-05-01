@@ -17,7 +17,7 @@ docs/00_run/CMD_RUNBOOK.md
 
 ```bat
 cd /d C:\VoiceGuide\VoiceGuide
-python tools\probe_server_link.py --base https://voiceguide-1063164560758.asia-northeast3.run.app
+python tools\probe_server_link.py --base https://voiceguide-135456731041.asia-northeast3.run.app
 gcloud run services logs tail voiceguide --region asia-northeast3
 ```
 
@@ -152,7 +152,7 @@ Android를 빼고 Python 더미 클라이언트로 GCP 서버, `/status`, `/dash
 
 ```powershell
 cd C:\VoiceGuide\VoiceGuide
-python tools\probe_server_link.py --base https://voiceguide-1063164560758.asia-northeast3.run.app
+python tools\probe_server_link.py --base https://voiceguide-135456731041.asia-northeast3.run.app
 ```
 
 성공하면 서버/DB/대시보드는 붙어 있습니다. 그 다음 Android Logcat에서 같은 `request_id`가 서버 로그에 찍히는지 확인합니다.

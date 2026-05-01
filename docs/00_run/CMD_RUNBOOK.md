@@ -30,7 +30,7 @@ gcloud run deploy voiceguide ^
 배포가 끝나면 아래 서버 URL을 사용합니다.
 
 ```text
-https://voiceguide-1063164560758.asia-northeast3.run.app
+https://voiceguide-135456731041.asia-northeast3.run.app
 ```
 
 한 줄로 실행하고 싶으면:
@@ -45,7 +45,7 @@ Android를 실행하기 전에 더미 클라이언트로 `/detect`, `/status`, `
 
 ```bat
 cd /d C:\VoiceGuide\VoiceGuide
-python tools\probe_server_link.py --base https://voiceguide-1063164560758.asia-northeast3.run.app
+python tools\probe_server_link.py --base https://voiceguide-135456731041.asia-northeast3.run.app
 ```
 
 정상 기준:
@@ -87,7 +87,7 @@ gcloud run services update voiceguide ^
 API Key를 켠 뒤 probe:
 
 ```bat
-python tools\probe_server_link.py --base https://voiceguide-1063164560758.asia-northeast3.run.app --api-key 원하는_긴_비밀값
+python tools\probe_server_link.py --base https://voiceguide-135456731041.asia-northeast3.run.app --api-key 원하는_긴_비밀값
 ```
 
 Android 앱 설정창에도 같은 API Key를 입력해야 서버 기능이 동작합니다.
@@ -118,7 +118,7 @@ C:\VoiceGuide\android
 6. 서버에서 `API_KEY`를 켠 경우 같은 API Key 입력
 
 ```text
-https://voiceguide-1063164560758.asia-northeast3.run.app
+https://voiceguide-135456731041.asia-northeast3.run.app
 ```
 
 ## 5. Android Logcat 확인

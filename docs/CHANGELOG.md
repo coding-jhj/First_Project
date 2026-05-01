@@ -23,7 +23,7 @@
 ## 2026-04-30 (GCP 배포 완료 + 가이드라인 전 Phase 반영 + 다수 버그 수정)
 
 ### GCP Cloud Run 서버 배포 완료
-- 서버 URL: `https://voiceguide-1063164560758.asia-northeast3.run.app`
+- 서버 URL: `https://voiceguide-135456731041.asia-northeast3.run.app`
 - `Dockerfile`, `requirements-server.txt`, `.dockerignore` 추가
 - 콜드스타트 방지: `min-instances=1` 설정
 - 빌드 오류 수정: `libgl1-mesa-glx` → `libgl1`, `speech_recognition` 조건부 import
