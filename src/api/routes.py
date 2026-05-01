@@ -18,6 +18,7 @@ Android 앱과 Gradio 데모가 호출하는 API 엔드포인트를 정의합니
 """
 
 import os
+import asyncio
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, UploadFile, Form, Header, HTTPException
@@ -185,8 +186,11 @@ async def detect(
         db.save_gps(session_id, lat, lng)
 
     # YOLO 탐지 + Depth V2 거리 추정 + 바닥 위험 감지
+    # run_in_executor: CPU-bound 작업을 별도 스레드에서 실행 → FastAPI 이벤트 루프 차단 방지
+    # 동시 요청이 들어와도 다른 요청을 처리할 수 있음 (Phase 8 - STUDENT_DEVELOPMENT_GUIDELINE)
     _t_detect = _time.monotonic()
-    objects, hazards, scene = detect_and_depth(image_bytes)
+    loop = asyncio.get_event_loop()
+    objects, hazards, scene = await loop.run_in_executor(None, detect_and_depth, image_bytes)
     _detect_ms = int((_time.monotonic() - _t_detect) * 1000)
 
     # EMA 추적기: 프레임 간 거리 흔들림 제거 + 접근 감지
