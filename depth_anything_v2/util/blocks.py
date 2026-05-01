@@ -1,7 +1,10 @@
+# Depth Anything V2 DPT 디코더 블록 — FeatureFusionBlock과 scratch 레이어 생성 유틸리티
+# dpt.py에서 import해서 다중 스케일 피처 융합(RefineNet)에 사용
 import torch.nn as nn
 
 
 def _make_scratch(in_shape, out_shape, groups=1, expand=False):
+    # 4개 DINOv2 중간 레이어를 동일한 채널 수로 변환하는 컨볼루션 레이어 생성
     scratch = nn.Module()
 
     out_shape1 = out_shape

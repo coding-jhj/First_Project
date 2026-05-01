@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider 경로 설정 — 카메라 캡처 임시 파일을 외부에 안전하게 공유 -->
 <paths>
+    <!-- cache-path: getCacheDir() 하위 디렉터리 — 앱 종료 시 자동 삭제 -->
     <cache-path name="voiceguide_images" path="." />
 </paths>

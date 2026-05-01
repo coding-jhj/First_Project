@@ -136,12 +136,12 @@ def get_snapshot(space_id: str) -> list[dict] | None:
             return json.loads(row[0]) if row else None
 
 
-_SNAPSHOT_KEEP = 20  # 공간별 스냅샷 최대 보관 수
+_SNAPSHOT_KEEP = 20  # 공간별 스냅샷 최대 보관 수 (이 이상이면 오래된 것부터 삭제)
 
 
 def save_snapshot(space_id: str, objects: list[dict]):
-    ts  = datetime.now().isoformat()
-    obj = json.dumps(objects, ensure_ascii=False)
+    ts  = datetime.now().isoformat()          # ISO 8601 형식 타임스탬프
+    obj = json.dumps(objects, ensure_ascii=False)  # 한국어 유지하여 JSON 직렬화
     with _conn() as conn:
         if _IS_POSTGRES:
             with conn.cursor() as cur:
@@ -288,9 +288,11 @@ def get_last_gps(session_id: str) -> dict | None:
 
 
 def get_gps_track(session_id: str, limit: int = 100) -> list[dict]:
+    """대시보드 지도에 표시할 이동 경로 포인트 목록 반환."""
     with _conn() as conn:
         if _IS_POSTGRES:
             with conn.cursor() as cur:
+                # DESC로 최신 100개 조회 후 reversed()로 시간순 정렬
                 cur.execute(
                     "SELECT lat, lng, timestamp FROM gps_history "
                     "WHERE session_id = %s ORDER BY id DESC LIMIT %s",
@@ -305,4 +307,4 @@ def get_gps_track(session_id: str, limit: int = 100) -> list[dict]:
                 (session_id, limit)).fetchall()
             result = [{"lat": r[0], "lng": r[1], "timestamp": r[2]}
                       for r in rows]
-    return list(reversed(result))  # 시간순 오름차순 반환
+    return list(reversed(result))  # 시간순 오름차순 반환 (지도 경로 그리기 위해)

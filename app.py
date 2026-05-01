@@ -10,14 +10,16 @@ from src.nlg.templates import CLOCK_TO_DIRECTION
 
 
 def process_image(image, mode: str = "장애물"):
+    # 이미지 없이 제출하면 안내 메시지만 반환
     if image is None:
         return None, "이미지를 업로드해주세요.", None
 
-    t0 = time.time()
-    img_np = np.array(image)
-    _, encoded = cv2.imencode(".jpg", img_np)
+    t0 = time.time()  # 전체 처리 시간 측정 시작
+    img_np = np.array(image)                      # PIL Image → numpy 배열
+    _, encoded = cv2.imencode(".jpg", img_np)      # numpy → JPEG bytes
     image_bytes = encoded.tobytes()
 
+    # YOLO 탐지 + Depth V2 거리 추정 + 바닥 위험 감지 (메인 파이프라인)
     objects, hazards, scene = detect_and_depth(image_bytes)
 
     # 모드별 문장 생성
@@ -98,20 +100,21 @@ def process_image(image, mode: str = "장애물"):
     return annotated, "\n".join(lines), audio_out
 
 
+# Gradio 웹 UI 구성 — 브라우저에서 이미지 업로드 후 분석 결과 확인 가능
 demo = gr.Interface(
     fn=process_image,
     inputs=[
         gr.Image(label="카메라 이미지"),
         gr.Radio(
             choices=["장애물", "찾기", "확인"],
-            value="장애물",
+            value="장애물",     # 기본 모드: 장애물 탐지
             label="분석 모드",
         ),
     ],
     outputs=[
-        gr.Image(label="탐지 결과 (YOLO + 바닥 위험)"),
-        gr.Textbox(label="음성 안내 / 상세 정보", lines=14),
-        gr.Audio(label="음성 안내 듣기", autoplay=True),
+        gr.Image(label="탐지 결과 (YOLO + 바닥 위험)"),     # 바운딩 박스가 그려진 이미지
+        gr.Textbox(label="음성 안내 / 상세 정보", lines=14), # 상세 로그 출력
+        gr.Audio(label="음성 안내 듣기", autoplay=True),     # 자동 재생 MP3
     ],
     title="VoiceGuide — 시각장애인 실내 보행 음성 안내 시스템",
     description=(
@@ -123,7 +126,9 @@ demo = gr.Interface(
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
+    # --share: ngrok 터널로 외부 접근 허용 (발표용)
     parser.add_argument("--share", action="store_true")
     args = parser.parse_args()
+    # server_name="0.0.0.0": 로컬 네트워크에서도 접근 가능 (서버 IP로 브라우저 접속)
     demo.launch(server_name="0.0.0.0", server_port=7860,
                 show_api=False, inbrowser=not args.share, share=args.share)

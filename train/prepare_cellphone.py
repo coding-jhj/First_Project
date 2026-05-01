@@ -15,24 +15,25 @@ import json, os, time, urllib.request, shutil
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"  # Windows OpenMP 충돌 방지
 
+# 데이터셋 디렉터리 구조 (YOLO 학습 포맷)
 DATASET_DIR = Path("datasets/cellphone_fix")
 IMG_TRAIN   = DATASET_DIR / "images/train"
 IMG_VAL     = DATASET_DIR / "images/val"
 LBL_TRAIN   = DATASET_DIR / "labels/train"
 LBL_VAL     = DATASET_DIR / "labels/val"
 
-VAL_RATIO   = 0.15
-CONF_THRESH = 0.30
-CELL_PHONE_CLS  = 67   # COCO cell phone
-LAPTOP_CLS      = 63   # COCO laptop
-TEDDY_BEAR_CLS  = 77   # COCO teddy bear (폰과 혼동 빈번)
+VAL_RATIO   = 0.15   # 전체의 15%를 검증 세트로 분리
+CONF_THRESH = 0.30   # pseudo-label 신뢰도 임계값 (낮게 설정해 더 많이 잡음)
+CELL_PHONE_CLS  = 67   # COCO cell phone 클래스 인덱스
+LAPTOP_CLS      = 63   # COCO laptop 클래스 인덱스
+TEDDY_BEAR_CLS  = 77   # COCO teddy bear — 폰과 오인식 빈번하여 교정 대상
 
 # (검색어, 실제_클래스, 목표_장수)
 # 실제_클래스: 이 검색어 이미지의 주 피사체가 무엇인지 → bbox 강제 라벨에 사용
 SEARCH_QUERIES = [
-    # 휴대폰 — 노트북과 헷갈리는 각도/배치 위주
+    # 휴대폰 — 노트북과 헷갈리는 각도/배치 위주로 수집
     ("smartphone lying flat on table",  CELL_PHONE_CLS, 70),
     ("cell phone on desk top view",     CELL_PHONE_CLS, 60),
     ("phone screen face up",            CELL_PHONE_CLS, 60),
@@ -40,13 +41,13 @@ SEARCH_QUERIES = [
     ("mobile phone close up",           CELL_PHONE_CLS, 50),
     ("phone in hand screen visible",    CELL_PHONE_CLS, 50),
     ("cell phone tilted angle",         CELL_PHONE_CLS, 50),
-    # 노트북 — 구별 학습용
+    # 노트북 — 폰과의 구별 능력 유지를 위한 음성 샘플
     ("open laptop on desk",             LAPTOP_CLS,     60),
     ("notebook computer screen",        LAPTOP_CLS,     50),
     ("laptop computer keyboard visible",LAPTOP_CLS,     50),
 ]
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}  # 봇 차단 우회
 
 
 def collect_urls() -> list[tuple[str, int]]:

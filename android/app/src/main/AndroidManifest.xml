@@ -1,18 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- VoiceGuide Android 앱 매니페스트 — 권한·컴포넌트 선언 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- 카메라: 이미지 캡처 (필수) -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- 인터넷: 서버 /detect API 연동 (온디바이스 모드에서는 불필요하지만 선언 필요) -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 마이크: SpeechRecognizer 음성 명령 인식 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- 네트워크 상태: 서버 연결 여부 확인 -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- WiFi 상태: SSID 읽기 (공간 기억 / 장소 저장 기능) -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- GPS: 정밀 위치 (하차 알림·대시보드 지도) -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- GPS: 대략 위치 (배터리 절약 모드) -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- SMS: SOS 보호자 긴급 문자 발송 -->
     <uses-permission android:name="android.permission.SEND_SMS" />
+    <!-- 진동: 위험 경고·알림 피드백 -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- 정확한 알람: 약 복용 알림 (API 31+) -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- 부팅 완료 수신: 재부팅 후 알람 복원 -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- 카메라 없는 기기 설치 차단 -->
     <uses-feature android:name="android.hardware.camera" android:required="true" />
 
     <application
@@ -22,12 +35,12 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.AppCompat.Light.DarkActionBar"
-        android:usesCleartextTraffic="true">
+        android:usesCleartextTraffic="true"> <!-- HTTP 서버 접속 허용 (로컬 ngrok 등) -->
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:screenOrientation="portrait">
+            android:screenOrientation="portrait"> <!-- 세로 고정: 가로 회전 시 레이아웃 깨짐 방지 -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -38,6 +51,7 @@
                 android:resource="@xml/shortcuts" />
         </activity>
 
+        <!-- FileProvider: 카메라 캡처 임시 파일을 외부에 안전하게 공유하기 위한 컨텐츠 프로바이더 -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="com.voiceguide.fileprovider"

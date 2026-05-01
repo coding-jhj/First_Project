@@ -1,11 +1,11 @@
-# VoiceGuide 변경 이력
+﻿# VoiceGuide 변경 이력
 
 ---
 
 ## 2026-04-30 (Android 장애물 인식/디버그 모드 긴급 수정)
 
 ### 장애물 인식이 서버 상태에 묶이던 문제 수정
-- **원인**: Android 앱에 서버 URL이 저장되어 있으면 기본 장애물 분석도 서버 경로로만 전송되어, ngrok/GCP/로컬 서버가 느리거나 꺼져 있으면 "장애물 인식이 전혀 안 되는" 것처럼 보였음
+- **원인**: Android 앱에 서버 URL이 저장되어 있으면 기본 장애물 분석도 서버 경로로만 전송되어, GCP/로컬 서버가 느리거나 꺼져 있으면 "장애물 인식이 전혀 안 되는" 것처럼 보였음
 - **수정**: `장애물`/`찾기` 모드는 서버 URL 저장 여부와 관계없이 온디바이스 ONNX를 우선 사용
 - 서버는 질문/색상/신호등/텍스트 등 서버 전용 기능이나 ONNX 실패 시 fallback 경로로 유지
 
@@ -23,7 +23,7 @@
 ## 2026-04-30 (GCP 배포 완료 + 가이드라인 전 Phase 반영 + 다수 버그 수정)
 
 ### GCP Cloud Run 서버 배포 완료
-- 서버 URL: `https://voiceguide-135456731041.asia-northeast3.run.app`
+- 서버 URL: `https://voiceguide-1063164560758.asia-northeast3.run.app`
 - `Dockerfile`, `requirements-server.txt`, `.dockerignore` 추가
 - 콜드스타트 방지: `min-instances=1` 설정
 - 빌드 오류 수정: `libgl1-mesa-glx` → `libgl1`, `speech_recognition` 조건부 import
@@ -46,7 +46,7 @@
 - `BuildConfig` import 제거, confidence % 항상 숨김 (Android Studio 빌드 오류 해결)
 
 ### 가이드라인(06_student_development_guideline.md) 전 Phase 반영
-- Phase 1: `서버_DB/`, `서버_DB_수정/` → `legacy/` 이동
+- Phase 1: `server_db/`, `server_db_modified/` → `legacy/` 이동
 - Phase 3: 권한 분리 (카메라/마이크 즉시, GPS/SMS는 기능 사용 시), STT fallback `unknown`
 - Phase 3.5: `_INFO_ONLY_KO` 추가 (키보드/TV 등 비위험 물체 "위험!" 제거), beep 구간 2.5~7m
 - Phase 4: `benchmark.py` Precision/Recall/F1 측정 함수 추가
@@ -61,9 +61,9 @@
 ## 2026-04-30 (GCP 배포 + EXIF 회전 버그 수정)
 
 ### GCP Cloud Run 배포로 전환
-- Railway → GCP Cloud Run으로 배포 플랫폼 전환
+- 외부 배포 기준을 GCP Cloud Run으로 통일
 - `railway.toml` 삭제
-- README.md에서 Railway 관련 URL·설명 제거, GCP 기준으로 통일
+- README.md에서 과거 외부 배포 URL·설명 제거, GCP 기준으로 통일
 
 ### Android 서버 전송 이미지 EXIF 회전 버그 수정 (치명적 버그)
 - **원인**: `optimizeImageForUpload()`가 `BitmapFactory.decodeFile()`로 이미지를 읽을 때 EXIF 회전 태그를 무시 → Android 카메라가 저장한 세로 사진이 90도 돌아간 가로 이미지로 GCP 서버에 전송됨 → YOLO가 회전된 이미지에서 아무것도 감지하지 못함
@@ -139,7 +139,7 @@
 
 ### GCP 서버 가이드
 - `docs/GCP_SERVER_SETUP.md` 추가: 강사 지정 스펙 (GPU 없음, 30GB 이하, 서울 리전, Ubuntu 22)
-- `docs/MEETING_0429_강사피드백.md` 추가: 미팅 전체 내용 기록
+- `docs/MEETING_0429_INSTRUCTOR_FEEDBACK.md` 추가: 미팅 전체 내용 기록
 
 ---
 
@@ -264,7 +264,7 @@
 - `tracker.py`: `update()`에서 `direction` 필드 누락 수정 → `get_current_state()` 방향 정보 포함
 - `routes.py`: `build_question_sentence` import 추가, 질문 모드 분기 추가
 
-### feature/nlg 브랜치 merge
+### NLG 브랜치 merge
 
 - myungkwang PR: 비프음 인식 수정, 바운딩박스 인식 오류 수정
 - `StairsDetector.kt` 추가

@@ -1,15 +1,19 @@
+# Depth Anything V2 메인 모델 파일
+# DINOv2 인코더 + DPT(Dense Prediction Transformer) 디코더 구조
+# 단안 이미지에서 픽셀별 상대 깊이를 추정 (depth.py에서 import해서 사용)
 import cv2
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.transforms import Compose
 
-from .dinov2 import DINOv2
-from .util.blocks import FeatureFusionBlock, _make_scratch
-from .util.transform import Resize, NormalizeImage, PrepareForNet
+from .dinov2 import DINOv2                                       # Vision Transformer 인코더
+from .util.blocks import FeatureFusionBlock, _make_scratch       # DPT 디코더 블록
+from .util.transform import Resize, NormalizeImage, PrepareForNet  # 입력 전처리
 
 
 def _make_fusion_block(features, use_bn, size=None):
+    # DPT 디코더의 각 스케일에서 피처를 융합하는 RefineNet 블록 생성
     return FeatureFusionBlock(
         features,
         nn.ReLU(False),
@@ -24,13 +28,13 @@ def _make_fusion_block(features, use_bn, size=None):
 class ConvBlock(nn.Module):
     def __init__(self, in_feature, out_feature):
         super().__init__()
-        
+        # Conv → BN → ReLU 표준 블록 (채널 변환 + 정규화 + 활성화)
         self.conv_block = nn.Sequential(
             nn.Conv2d(in_feature, out_feature, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(out_feature),
             nn.ReLU(True)
         )
-    
+
     def forward(self, x):
         return self.conv_block(x)
 
@@ -152,30 +156,34 @@ class DPTHead(nn.Module):
 
 class DepthAnythingV2(nn.Module):
     def __init__(
-        self, 
-        encoder='vitl', 
-        features=256, 
-        out_channels=[256, 512, 1024, 1024], 
-        use_bn=False, 
-        use_clstoken=False
+        self,
+        encoder='vitl',  # 'vits'(경량) / 'vitb' / 'vitl' / 'vitg'(고정밀)
+        features=256,    # DPT 헤드 내부 채널 수
+        out_channels=[256, 512, 1024, 1024],  # 4개 스케일의 출력 채널 수
+        use_bn=False,    # BatchNorm 사용 여부 (False: 추론 시 더 안정적)
+        use_clstoken=False  # 클래스 토큰 readout 사용 여부
     ):
         super(DepthAnythingV2, self).__init__()
-        
+
+        # 인코더 크기별 중간 레이어 인덱스 (DINOv2 트랜스포머 블록 번호)
         self.intermediate_layer_idx = {
-            'vits': [2, 5, 8, 11],
-            'vitb': [2, 5, 8, 11], 
-            'vitl': [4, 11, 17, 23], 
-            'vitg': [9, 19, 29, 39]
+            'vits': [2, 5, 8, 11],        # ViT-S: 12블록
+            'vitb': [2, 5, 8, 11],        # ViT-B: 12블록
+            'vitl': [4, 11, 17, 23],      # ViT-L: 24블록
+            'vitg': [9, 19, 29, 39]       # ViT-G: 40블록
         }
-        
+
         self.encoder = encoder
-        self.pretrained = DINOv2(model_name=encoder)
-        
+        self.pretrained = DINOv2(model_name=encoder)  # DINOv2 Vision Transformer 인코더
+
+        # DPT 디코더 헤드: 4스케일 피처 → 단채널 깊이 맵
         self.depth_head = DPTHead(self.pretrained.embed_dim, features, use_bn, out_channels=out_channels, use_clstoken=use_clstoken)
-    
+
     def forward(self, x):
+        # 14: ViT 패치 크기(픽셀), 패치 격자 크기 계산
         patch_h, patch_w = x.shape[-2] // 14, x.shape[-1] // 14
-        
+
+        # DINOv2 인코더에서 4개 중간 레이어의 피처 추출 (멀티스케일)
         features = self.pretrained.get_intermediate_layers(x, self.intermediate_layer_idx[self.encoder], return_class_token=True)
         
         depth = self.depth_head(features, patch_h, patch_w)

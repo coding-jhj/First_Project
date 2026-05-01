@@ -55,33 +55,34 @@ def analyze_clothing(image_bytes: bytes, request_type: str) -> str:
                 "한국어로, 한 문장으로, '~어요' 어체로 말해주세요."
             )
 
+        # GPT-4o Vision API 요청 페이로드 구성
         payload = json.dumps({
             "model": "gpt-4o",
             "messages": [{
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
+                    {"type": "text", "text": prompt},        # 텍스트 프롬프트
                     {"type": "image_url", "image_url": {
-                        "url": f"data:image/jpeg;base64,{_encode_image(image_bytes)}",
-                        "detail": "low"   # 비용 절약: low = 85 token
+                        "url": f"data:image/jpeg;base64,{_encode_image(image_bytes)}",  # base64 인라인 이미지
+                        "detail": "low"   # 비용 절약: low = 85 token (high는 최대 1105 token)
                     }}
                 ]
             }],
-            "max_tokens": 100
-        }).encode("utf-8")
+            "max_tokens": 100  # 짧은 안내 문장만 필요 → 100 토큰으로 제한
+        }).encode("utf-8")  # JSON 직렬화 → bytes (HTTP 요청 body)
 
         req = urllib.request.Request(
             "https://api.openai.com/v1/chat/completions",
             data=payload,
             headers={
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}"
+                "Authorization": f"Bearer {api_key}"  # OpenAI Bearer 토큰 인증
             },
             method="POST"
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:  # 10초 타임아웃
             result = json.loads(resp.read().decode("utf-8"))
-            return result["choices"][0]["message"]["content"].strip()
+            return result["choices"][0]["message"]["content"].strip()  # 첫 번째 응답 텍스트 추출
 
     except urllib.error.HTTPError as e:
         if e.code == 401:

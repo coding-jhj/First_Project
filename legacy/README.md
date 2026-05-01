@@ -1,4 +1,4 @@
-# Legacy 보관 폴더
+﻿# Legacy 보관 폴더
 
 이 폴더는 과거 실험 코드와 별도 서버 시도를 보관하는 곳입니다.
 
@@ -25,8 +25,9 @@ gcloud run deploy voiceguide --source . --region asia-northeast3 --memory 2Gi --
 
 | 폴더 | 의미 |
 |---|---|
-| `서버_DB/` | Supabase 연결 테스트용 과거 FastAPI 서버 |
-| `서버_DB_수정/` | 블러/도로 관련 실험 서버 |
+| `server_db/` | Supabase 연결 테스트용 과거 FastAPI 서버 |
+| `server_db_modified/` | 블러/도로 관련 실험 서버 |
+| `ngrok_reference.md` | GCP 이전 로컬 터널 참고 기록 |
 
 주의:
 
