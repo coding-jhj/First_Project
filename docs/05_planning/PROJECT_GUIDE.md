@@ -69,6 +69,7 @@ VoiceGuide는 Android 카메라와 음성 안내를 사용해 시각장애인의
 | `README.md` | 외부에 보여줄 현재 기준 요약 |
 | `docs/PROJECT_STRUCTURE.md` | 폴더 구조 |
 | `docs/01_study/FUNCTION_LOGIC_STUDY.md` | 함수 흐름 학습 |
+| `docs/01_study/FUNCTION_DEEP_DIVE.md` | 함수별 세부 로직 학습 |
 | `docs/03_server/DEPLOY_GUIDE.md` | GCP 배포 |
 | `docs/04_team/ROLE_GUIDE.md` | 역할별 작업 지침 |
 | `docs/04_team/ANDROID_PERFORMANCE_GUIDE.md` | Android FPS/오탐 개선 |

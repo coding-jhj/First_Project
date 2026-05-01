@@ -91,7 +91,7 @@ Android MainActivity
        -> Android TTS
 ```
 
-함수별 상세 학습 문서는 [FUNCTION_LOGIC_STUDY.md](docs/01_study/FUNCTION_LOGIC_STUDY.md)에 정리했습니다.
+전체 흐름 요약은 [FUNCTION_LOGIC_STUDY.md](docs/01_study/FUNCTION_LOGIC_STUDY.md), 함수별 세부 학습은 [FUNCTION_DEEP_DIVE.md](docs/01_study/FUNCTION_DEEP_DIVE.md)에 정리했습니다.
 
 ## 핵심 문서
 
@@ -102,6 +102,7 @@ Android MainActivity
 | [docs/04_team/ROLE_GUIDE.md](docs/04_team/ROLE_GUIDE.md) | 역할별 개발·조사 지침 |
 | [docs/04_team/ANDROID_PERFORMANCE_GUIDE.md](docs/04_team/ANDROID_PERFORMANCE_GUIDE.md) | Android FPS/오탐 개선 지침 |
 | [docs/01_study/FUNCTION_LOGIC_STUDY.md](docs/01_study/FUNCTION_LOGIC_STUDY.md) | 함수와 전체 로직 학습 |
+| [docs/01_study/FUNCTION_DEEP_DIVE.md](docs/01_study/FUNCTION_DEEP_DIVE.md) | 파일별 함수 역할, 입력/출력, 연결 관계 상세 학습 |
 | [docs/06_presentation/QA_SHEET.md](docs/06_presentation/QA_SHEET.md) | 발표 Q&A 시트 |
 | [docs/04_team/STUDENT_DEVELOPMENT_GUIDELINE.md](docs/04_team/STUDENT_DEVELOPMENT_GUIDELINE.md) | 강사 피드백 기반 개선 가이드 |
 
