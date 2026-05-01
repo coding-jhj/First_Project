@@ -187,17 +187,11 @@ async def detect(
         db.save_gps(session_id, lat, lng)
 
     # YOLO 탐지 + Depth V2 거리 추정 + 바닥 위험 감지
-<<<<<<< HEAD
-    # to_thread: CPU 집약 작업을 스레드에서 실행해 이벤트 루프 블록 방지
-    _t_detect = _time.monotonic()
-    objects, hazards, scene = await asyncio.to_thread(detect_and_depth, image_bytes)
-=======
     # run_in_executor: CPU-bound 작업을 별도 스레드에서 실행 → FastAPI 이벤트 루프 차단 방지
     # 동시 요청이 들어와도 다른 요청을 처리할 수 있음 (Phase 8 - STUDENT_DEVELOPMENT_GUIDELINE)
     _t_detect = _time.monotonic()
     loop = asyncio.get_event_loop()
     objects, hazards, scene = await loop.run_in_executor(None, detect_and_depth, image_bytes)
->>>>>>> 2e59907e4fe81266343e2162f00362b4e32c5216
     _detect_ms = int((_time.monotonic() - _t_detect) * 1000)
 
     # EMA 추적기: 프레임 간 거리 흔들림 제거 + 접근 감지
