@@ -187,9 +187,11 @@ def bench_sentence_generation() -> dict:
 
 # ── 실험 5: Depth 모델 상태 확인 ─────────────────────────────────────────────
 def bench_depth_model() -> dict:
-    from src.depth.depth import _check_model, _DEVICE
+    from src.depth.depth import _check_model, _DEVICE, is_depth_enabled
+    enabled = is_depth_enabled()
     model_available = _check_model()
     return {
+        "enabled":           enabled,
         "model_file_exists": model_available,
         "device":            _DEVICE,
         "mode":              "Depth Anything V2" if model_available else "bbox 면적 기반 fallback",

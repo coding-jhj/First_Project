@@ -38,11 +38,18 @@ if _USE_YOLO_WORLD:
     _model.set_classes(_WORLD_CLASSES)
     print(f"[YOLO-World] 모델 로드: yolov8x-worldv2.pt ({len(_WORLD_CLASSES)}클래스)")
 else:
-    _src = "yolo11m_indoor.pt" if os.path.exists("yolo11m_indoor.pt") else "yolo11m.pt"
+    _src = os.environ.get("YOLO_MODEL_PATH") or (
+        "yolo11m_indoor.pt" if os.path.exists("yolo11m_indoor.pt") else "yolo11m.pt"
+    )
     _model = YOLO(_src)
     print(f"[YOLO] 모델 로드: {_src}")
 
 model = _model
+
+try:
+    YOLO_IMGSZ = int(os.environ.get("YOLO_IMGSZ", "640"))
+except ValueError:
+    YOLO_IMGSZ = 640
 
 # ── 방향 구역 (9구역, 시계 방향) ─────────────────────────────────────────────
 ZONE_BOUNDARIES = [
@@ -357,7 +364,7 @@ def detect_objects(image_bytes: bytes) -> tuple[list[dict], dict]:
     h, w  = img.shape[:2]      # 이미지 높이, 너비
 
     # YOLO 추론: conf=CONF_THRESHOLD 미만 박스는 자동 필터링
-    results    = model(img, conf=CONF_THRESHOLD)[0]
+    results    = model(img, conf=CONF_THRESHOLD, imgsz=YOLO_IMGSZ, verbose=False)[0]
     all_detections = []
 
     for box in results.boxes:

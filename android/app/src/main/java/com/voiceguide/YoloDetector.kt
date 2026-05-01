@@ -5,6 +5,10 @@ import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Rect
+import android.os.SystemClock
 import java.nio.FloatBuffer
 
 /**
@@ -36,6 +40,35 @@ data class Detection(
     val h: Float             // 바운딩 박스 높이 (0.0~1.0)
 )
 
+data class YoloTiming(
+    val preprocessMs: Long = 0,
+    val yoloMs: Long = 0,
+    val postprocessMs: Long = 0,
+    val totalMs: Long = 0,
+    val rawCandidates: Int = 0,
+    val keptCount: Int = 0
+)
+
+data class YoloInput(
+    val buffer: FloatBuffer,
+    val preprocessMs: Long,
+    val totalStartNs: Long
+)
+
+data class YoloRawOutput(
+    val values: FloatArray,
+    val numFeatures: Int,
+    val numDet: Int,
+    val preprocessMs: Long,
+    val yoloMs: Long,
+    val totalStartNs: Long
+)
+
+data class YoloDetectionResult(
+    val detections: List<Detection>,
+    val timing: YoloTiming
+)
+
 class YoloDetector(context: Context) {
 
     private val env = OrtEnvironment.getEnvironment()  // ONNX 실행 환경 (앱당 1개)
@@ -43,6 +76,16 @@ class YoloDetector(context: Context) {
     private val inputSize   = 640       // YOLO 입력 해상도 (640×640)
     private val confThreshold = 0.50f   // 서버(detect.py)의 CONF_THRESHOLD와 동일하게 맞춤
     private val iouThreshold  = 0.45f   // NMS IoU 임계값: 겹치는 박스 제거 기준
+    private val inputArea = inputSize * inputSize
+    private val inputPixels = IntArray(inputArea)
+    private val inputData = FloatArray(3 * inputArea)
+    private val inputBuffer = FloatBuffer.wrap(inputData)
+    private val resizedBitmap = Bitmap.createBitmap(inputSize, inputSize, Bitmap.Config.ARGB_8888)
+    private val resizeCanvas = Canvas(resizedBitmap)
+    private val resizePaint = Paint().apply { isFilterBitmap = false }
+    private val resizeDst = Rect(0, 0, inputSize, inputSize)
+    var lastTiming = YoloTiming()
+        private set
 
     init {
         // assets 폴더에서 ONNX 모델 로드
@@ -55,25 +98,42 @@ class YoloDetector(context: Context) {
         }
         val bytes = context.assets.open(modelName).readBytes()
         // SessionOptions: 쓰레드 수, 가속기(GPU/NNAPI) 설정 가능
-        session = env.createSession(bytes, OrtSession.SessionOptions())
+        val options = OrtSession.SessionOptions().apply {
+            setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+            setInterOpNumThreads(1)
+            setIntraOpNumThreads(4)
+        }
+        session = env.createSession(bytes, options)
     }
 
-    fun detect(bitmap: Bitmap): List<Detection> {
+    fun preprocess(bitmap: Bitmap): YoloInput {
+        val totalStart = SystemClock.elapsedRealtimeNanos()
+        val preprocessStart = SystemClock.elapsedRealtimeNanos()
         // 1. 이미지를 640×640으로 리사이즈 (YOLO 고정 입력 해상도)
-        val resized = Bitmap.createScaledBitmap(bitmap, inputSize, inputSize, true)
+        val resizeSrc = Rect(0, 0, bitmap.width, bitmap.height)
+        resizeCanvas.drawBitmap(bitmap, resizeSrc, resizeDst, resizePaint)
         // 2. Android Bitmap → ONNX Float 텐서 포맷으로 변환
-        val inputBuffer = bitmapToNCHW(resized)
-        resized.recycle()  // 메모리 해제 (Android에서 Bitmap 메모리 누수 방지)
+        val prepared = FloatArray(inputData.size)
+        bitmapToNCHW(resizedBitmap, prepared)
+        return YoloInput(
+            buffer = FloatBuffer.wrap(prepared),
+            preprocessMs = nanosToMs(SystemClock.elapsedRealtimeNanos() - preprocessStart),
+            totalStartNs = totalStart
+        )
+    }
 
+    fun runInference(input: YoloInput): YoloRawOutput {
         // 3. ONNX 세션에 입력 이름 확인 (YOLO11은 보통 "images")
         val inputName = session.inputNames.iterator().next()
         // 텐서 shape: [1, 3, 640, 640] = [batch, RGB채널, H, W]
         val tensor = OnnxTensor.createTensor(
-            env, inputBuffer, longArrayOf(1, 3, inputSize.toLong(), inputSize.toLong())
+            env, input.buffer, longArrayOf(1, 3, inputSize.toLong(), inputSize.toLong())
         )
 
         // 4. 추론 실행
+        val yoloStart = SystemClock.elapsedRealtimeNanos()
         val output = session.run(mapOf(inputName to tensor))
+        val yoloMs = nanosToMs(SystemClock.elapsedRealtimeNanos() - yoloStart)
         val outputTensor = output[0] as ai.onnxruntime.OnnxTensor
 
         // YOLO 출력 shape: [1, numFeatures, 8400]
@@ -83,11 +143,41 @@ class YoloDetector(context: Context) {
         val numFeatures = shape[1].toInt()  // 84(COCO80) 또는 85(indoor81)
         val numDet      = shape[2].toInt()  // 8400
         val flatBuf     = outputTensor.floatBuffer  // 1D float 배열
+        val values      = FloatArray(numFeatures * numDet)
+        flatBuf.get(values)
 
         tensor.close()
         output.close()
 
-        return postProcess(flatBuf, numFeatures, numDet)
+        return YoloRawOutput(
+            values = values,
+            numFeatures = numFeatures,
+            numDet = numDet,
+            preprocessMs = input.preprocessMs,
+            yoloMs = yoloMs,
+            totalStartNs = input.totalStartNs
+        )
+    }
+
+    fun postprocess(raw: YoloRawOutput): YoloDetectionResult {
+        val postStart = SystemClock.elapsedRealtimeNanos()
+        val result = postProcess(FloatBuffer.wrap(raw.values), raw.numFeatures, raw.numDet)
+        val postMs = nanosToMs(SystemClock.elapsedRealtimeNanos() - postStart)
+        val timing = YoloTiming(
+            preprocessMs = raw.preprocessMs,
+            yoloMs = raw.yoloMs,
+            postprocessMs = postMs,
+            totalMs = nanosToMs(SystemClock.elapsedRealtimeNanos() - raw.totalStartNs),
+            rawCandidates = result.rawCandidates,
+            keptCount = result.detections.size
+        )
+        lastTiming = timing
+        return YoloDetectionResult(result.detections, timing)
+    }
+
+    fun detect(bitmap: Bitmap): List<Detection> {
+        val result = postprocess(runInference(preprocess(bitmap)))
+        return result.detections
     }
 
     /**
@@ -100,29 +190,23 @@ class YoloDetector(context: Context) {
      * 메모리 배치: R채널 전체 → G채널 전체 → B채널 전체
      * (인터리브 방식 RGBRGBㆍㆍㆍ이 아님)
      */
-    private fun bitmapToNCHW(bitmap: Bitmap): FloatBuffer {
-        val pixels = IntArray(inputSize * inputSize)
+    private fun bitmapToNCHW(bitmap: Bitmap, target: FloatArray) {
         // getPixels: 픽셀을 ARGB Int 배열로 읽음
-        bitmap.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
+        bitmap.getPixels(inputPixels, 0, inputSize, 0, 0, inputSize, inputSize)
 
-        // 채널별 FloatArray 준비
-        val buf = FloatBuffer.allocate(3 * inputSize * inputSize)
-        val r = FloatArray(inputSize * inputSize)
-        val g = FloatArray(inputSize * inputSize)
-        val b = FloatArray(inputSize * inputSize)
-
-        for (i in pixels.indices) {
+        for (i in inputPixels.indices) {
             // ARGB Int에서 각 채널 추출 (비트 시프트 + AND 마스크)
-            r[i] = ((pixels[i] shr 16) and 0xFF) / 255f  // R: 비트 16~23
-            g[i] = ((pixels[i] shr 8)  and 0xFF) / 255f  // G: 비트 8~15
-            b[i] = ((pixels[i])        and 0xFF) / 255f  // B: 비트 0~7
+            val pixel = inputPixels[i]
+            target[i] = ((pixel shr 16) and 0xFF) / 255f
+            target[inputArea + i] = ((pixel shr 8) and 0xFF) / 255f
+            target[inputArea * 2 + i] = (pixel and 0xFF) / 255f
         }
-
-        // NCHW 순서로 버퍼에 쓰기: R 전체 → G 전체 → B 전체
-        buf.put(r); buf.put(g); buf.put(b)
-        buf.rewind()  // position을 0으로 리셋 (읽기 시작점으로)
-        return buf
     }
+
+    private data class PostProcessResult(
+        val detections: List<Detection>,
+        val rawCandidates: Int
+    )
 
     /**
      * YOLO 출력 후처리: 박스 필터링 + NMS
@@ -139,7 +223,7 @@ class YoloDetector(context: Context) {
      *   3. COCO_KO 맵에서 한국어 이름 찾기
      *   4. NMS로 겹치는 박스 제거
      */
-    private fun postProcess(buf: java.nio.FloatBuffer, numFeatures: Int, numDet: Int): List<Detection> {
+    private fun postProcess(buf: java.nio.FloatBuffer, numFeatures: Int, numDet: Int): PostProcessResult {
         val numClasses = numFeatures - 4  // bbox 4개를 제외한 나머지 = 클래스 수
         val candidates = mutableListOf<Detection>()
 
@@ -167,8 +251,11 @@ class YoloDetector(context: Context) {
         }
 
         // confidence 높은 순 정렬 후 NMS 적용, 최대 2개 반환
-        return nms(candidates.sortedByDescending { it.confidence }).take(2)
+        val kept = nms(candidates.sortedByDescending { it.confidence }).take(2)
+        return PostProcessResult(kept, candidates.size)
     }
+
+    private fun nanosToMs(nanos: Long): Long = nanos / 1_000_000
 
     /**
      * NMS (Non-Maximum Suppression) — 겹치는 박스 제거
@@ -213,6 +300,7 @@ class YoloDetector(context: Context) {
     }
 
     fun close() {
+        resizedBitmap.recycle()
         session.close()
         env.close()
     }

@@ -18,6 +18,7 @@ _depth_model = None
 _model_available: bool | None = None  # None = 아직 확인 안 함
 
 _MODEL_PATH = "depth_anything_v2_vits.pth"  # 프로젝트 루트에 있어야 함
+_DEPTH_DISABLED_VALUES = {"0", "false", "no", "off"}
 
 # ── 캘리브레이션 파라미터 ────────────────────────────────────────────────────
 # Depth V2의 출력은 "상대적 깊이"라 직접 미터가 아님
@@ -33,9 +34,19 @@ DIST_MID_M       = 4.0
 DIST_FAR_M       = 7.0
 
 
+def is_depth_enabled() -> bool:
+    """DEPTH_ENABLED=0/false/no/off이면 Depth V2 추론을 건너뜀."""
+    return os.environ.get("DEPTH_ENABLED", "1").strip().lower() not in _DEPTH_DISABLED_VALUES
+
+
 def _check_model() -> bool:
     """모델 파일 존재 여부 확인 (최초 1회만 파일시스템 접근)."""
     global _model_available
+    if not is_depth_enabled():
+        if _model_available is None:
+            print("[Depth V2] DEPTH_ENABLED=0 → bbox 기반 거리 사용")
+        _model_available = False
+        return False
     if _model_available is None:
         _model_available = os.path.exists(_MODEL_PATH)
         if _model_available:
@@ -170,7 +181,7 @@ def detect_and_depth(image_bytes: bytes) -> tuple[list[dict], list[dict], dict]:
     objects, scene = detect_objects(image_bytes)  # YOLO + scene 분석
     hazards: list[dict] = []
 
-    if _check_model():
+    if is_depth_enabled() and _check_model():
         depth_map = _infer_depth_map(image_np)
         if depth_map is not None:
             # Depth V2 사용 가능 → bbox 기반 거리를 더 정확한 값으로 교체

@@ -3,6 +3,8 @@ package com.voiceguide
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -13,17 +15,21 @@ import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.util.Size
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -34,14 +40,17 @@ import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 
 /**
@@ -69,20 +78,35 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private lateinit var tvStatus: TextView      // 현재 안내 문장 표시
     private lateinit var tvDetected: TextView    // 탐지된 물체 목록 표시
     private lateinit var tvMode: TextView        // 현재 모드 + 카메라 방향 표시
+    private lateinit var tvDebug: TextView       // debug 빌드에서 서버/디바이스 경로 표시
     private lateinit var btnToggle: Button       // 분석 시작/중지
     private lateinit var btnStt: Button          // 음성 명령 버튼
+    private lateinit var btnServerMode: Button   // 서버 모드 ON/OFF 버튼
     private lateinit var previewView: PreviewView // 카메라 라이브 프리뷰
+    private lateinit var detectionOverlay: BoundingBoxOverlay // 탐지 박스 표시
 
     // ── 카메라 & 분석 루프 ─────────────────────────────────────────────
     private var imageCapture: ImageCapture? = null
+    private var imageAnalysis: ImageAnalysis? = null
     // newSingleThreadExecutor: 카메라 캡처를 UI 스레드와 분리 (UI 멈춤 방지)
     private val cameraExecutor = Executors.newSingleThreadExecutor()
+    private val preprocessExecutor = Executors.newSingleThreadExecutor()
+    private val inferenceExecutor = Executors.newSingleThreadExecutor()
+    private val postprocessExecutor = Executors.newSingleThreadExecutor()
     // Handler: 메인 스레드에서 지연 작업 예약 (1초 간격 루프, Watchdog)
     private val handler = Handler(Looper.getMainLooper())
     // AtomicBoolean: 여러 스레드가 동시에 접근해도 안전한 boolean
     private val isAnalyzing = AtomicBoolean(false) // 분석 중인지 여부
     private val isSending   = AtomicBoolean(false) // 현재 요청 전송 중인지 (중복 방지)
     private var lastSentence = ""                  // 직전 안내 문장 (반복 방지)
+    private var lastFrameAnalyzeMs = 0L
+    private var lastFastGuideMs = 0L
+    private val latestFrame = AtomicReference<PipelineFrame?>(null)
+    private val latestInput = AtomicReference<YoloInput?>(null)
+    private val latestRawOutput = AtomicReference<YoloRawOutput?>(null)
+    private val preprocessing = AtomicBoolean(false)
+    private val inferencing = AtomicBoolean(false)
+    private val postprocessing = AtomicBoolean(false)
 
     // ── HTTP 클라이언트 (서버 연동 — 선택 사항) ────────────────────────
     // connectTimeout: 서버 연결 최대 대기 5초
@@ -141,15 +165,36 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     // ── ONNX 온디바이스 추론 ───────────────────────────────────────────
     private var yoloDetector: YoloDetector? = null
+    private var serverModeEnabled = false
+    private var lastPerfUpdateMs = 0L
+    private var lastPerfOverlayRenderMs = 0L
+
+    private data class PreparedServerImage(
+        val bytes: ByteArray,
+        val width: Int,
+        val height: Int
+    )
+
+    private data class PipelineFrame(
+        val bitmap: Bitmap,
+        val captureMs: Long
+    )
 
     companion object {
         private const val PERM_CODE        = 100           // 권한 요청 코드 (임의 숫자)
         private const val PREFS_NAME       = "voiceguide"  // SharedPreferences 이름
         private const val PREF_URL         = "server_url"  // 저장된 서버 URL 키
         private const val PREF_LOCATIONS   = "saved_locations"  // 저장 장소 JSON 배열 키
+        private const val PREF_SERVER_MODE = "server_mode"  // 서버 모드 사용 여부
+        private const val DEFAULT_SERVER_URL = "https://voiceguide-135456731041.asia-northeast3.run.app/"
         private const val INTERVAL_MS      = 1000L         // 캡처 간격: 1초
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
         private const val FAIL_WARN_COUNT  = 3             // 연속 3회 실패 시 경고
+        private const val SERVER_IMAGE_MAX_SIDE = 768      // 서버 전송용 최대 변 길이(px)
+        private const val SERVER_JPEG_QUALITY   = 75       // 서버 전송용 JPEG 품질
+        private const val PERF_OVERLAY_MIN_UPDATE_MS = 1500L
+        private const val FAST_ANALYSIS_INTERVAL_MS = 100L
+        private const val FAST_GUIDE_MIN_INTERVAL_MS = 1800L
     }
 
     // ── 생명주기 ─────────────────────────────────────────────────────────
@@ -164,13 +209,20 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         tvStatus    = findViewById(R.id.tvStatus)
         tvDetected  = findViewById(R.id.tvDetected)
         tvMode      = findViewById(R.id.tvMode)
+        tvDebug     = findViewById(R.id.tvDebug)
         btnToggle   = findViewById(R.id.btnToggle)
         btnStt      = findViewById(R.id.btnStt)
+        btnServerMode = findViewById(R.id.btnServerMode)
         previewView = findViewById(R.id.previewView)
+        detectionOverlay = findViewById(R.id.detectionOverlay)
 
         // 저장된 서버 URL 복원 (없어도 무관)
-        etServerUrl.setText(
-            getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_URL, ""))
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        etServerUrl.setText(DEFAULT_SERVER_URL)
+        prefs.edit().putString(PREF_URL, DEFAULT_SERVER_URL).apply()
+        serverModeEnabled = prefs.getBoolean(PREF_SERVER_MODE, false)
+        updateServerModeButton()
+        updatePerfOverlay("확인 중", "대기", 0.0, 0, 0, 0, 0, 0)
 
         sensorManager   = getSystemService(SENSOR_SERVICE) as SensorManager
         locationManager = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
@@ -201,6 +253,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             }
         }
         btnStt.setOnClickListener { startListening() }
+        btnServerMode.setOnClickListener {
+            serverModeEnabled = !serverModeEnabled
+            getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .edit()
+                .putBoolean(PREF_SERVER_MODE, serverModeEnabled)
+                .apply()
+            updateServerModeButton()
+            val route = if (serverModeEnabled) "서버" else "디바이스"
+            val state = if (serverModeEnabled) "서버 모드 ON" else "디바이스 모드"
+            updatePerfOverlay(route, state, 0.0, 0, 0, 0, 0, 0)
+        }
     }
 
     override fun onResume() {
@@ -227,6 +290,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         speechRecognizer.destroy()
         yoloDetector?.close()         // ONNX 세션 닫기
         cameraExecutor.shutdown()     // 카메라 스레드 종료
+        preprocessExecutor.shutdown()
+        inferenceExecutor.shutdown()
+        postprocessExecutor.shutdown()
+        clearPipelineQueues()
         handler.removeCallbacksAndMessages(null)  // 예약된 루프 전부 취소
         super.onDestroy()
     }
@@ -906,11 +973,55 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             try {
                 yoloDetector = YoloDetector(this)  // assets에서 ONNX 로드
                 runOnUiThread { tvStatus.text = "온디바이스 준비 완료 — 분석 시작을 누르세요" }
+                updatePerfOverlay("디바이스", "ONNX 준비 완료", 0.0, 0, 0, 0, 0, 0)
             } catch (_: Exception) {
                 // yolo11m.onnx 파일이 assets에 없는 경우 → 서버 모드 안내
                 runOnUiThread { tvStatus.text = "ONNX 모델 없음 — 서버 URL을 입력하세요" }
+                updatePerfOverlay("디바이스", "ONNX 없음", 0.0, 0, 0, 0, 0, 0)
             }
         }.start()
+    }
+
+    private fun updateServerModeButton() {
+        btnServerMode.text = if (serverModeEnabled) "서버 ON" else "서버 OFF"
+        btnServerMode.setBackgroundColor(
+            if (serverModeEnabled) android.graphics.Color.rgb(21, 101, 192)
+            else android.graphics.Color.rgb(66, 66, 66)
+        )
+    }
+
+    private fun updatePerfOverlay(
+        route: String,
+        state: String,
+        fps: Double,
+        decodeMs: Long,
+        yoloMs: Long,
+        postMs: Long,
+        totalMs: Long,
+        count: Int
+    ) {
+        val nowMs = SystemClock.elapsedRealtime()
+        val forceUpdate = state.contains("준비 완료") ||
+            state.contains("없음") ||
+            state.contains("실패") ||
+            state == "대기" ||
+            state.contains("모드")
+        if (!forceUpdate && nowMs - lastPerfOverlayRenderMs < PERF_OVERLAY_MIN_UPDATE_MS) return
+        lastPerfOverlayRenderMs = nowMs
+
+        runOnUiThread {
+            tvDebug.text = String.format(
+                Locale.KOREA,
+                "모드 : %s / %s\nFPS : %.1f\n디코딩 : %dms\nYOLO : %dms\n후처리 : %dms\n전체 : %dms\n탐지수 : %d",
+                route, state, fps, decodeMs, yoloMs, postMs, totalMs, count
+            )
+        }
+    }
+
+    private fun currentFps(nowMs: Long): Double {
+        val prev = lastPerfUpdateMs
+        lastPerfUpdateMs = nowMs
+        return if (prev > 0 && nowMs > prev) 1000.0 / (nowMs - prev).toDouble() else 0.0
     }
 
     // ── 카메라 & 분석 루프 ──────────────────────────────────────────────
@@ -936,9 +1047,25 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 .also { it.setSurfaceProvider(previewView.surfaceProvider) }
             imageCapture = ImageCapture.Builder()
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build()
+            imageAnalysis = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                .setTargetResolution(Size(640, 480))
+                .build()
+                .also { analysis ->
+                    analysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                        analyzeOnDeviceFrame(imageProxy)
+                    }
+                }
             try {
                 provider.unbindAll()
-                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageCapture)
+                provider.bindToLifecycle(
+                    this,
+                    CameraSelector.DEFAULT_BACK_CAMERA,
+                    preview,
+                    imageCapture,
+                    imageAnalysis
+                )
                 startAnalysis()
             } catch (e: Exception) {
                 tvStatus.text = "카메라 오류: ${e.message}"
@@ -955,7 +1082,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         btnToggle.text = "분석 중지"
         tvStatus.text  = "분석 중..."
         tvDetected.text = "인식: 분석 중"
-        captureAndProcess()
+        if (serverModeEnabled) captureAndProcess()
         scheduleNext()
         scheduleWatchdog()
     }
@@ -966,13 +1093,18 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         btnToggle.text = "분석 시작"
         tvStatus.text  = "분석 중지됨"
         tvDetected.text = "인식: 대기 중"
+        detectionOverlay.clear()
+        clearPipelineQueues()
     }
 
     private fun scheduleNext() {
         // postDelayed: INTERVAL_MS(1초) 후에 실행, 재귀 호출로 루프 구성
         // isAnalyzing 체크: 분석 중지 버튼을 누르면 루프 종료
         handler.postDelayed({
-            if (isAnalyzing.get()) { captureAndProcess(); scheduleNext() }
+            if (isAnalyzing.get()) {
+                if (serverModeEnabled) captureAndProcess()
+                scheduleNext()
+            }
         }, INTERVAL_MS)
     }
 
@@ -1000,9 +1132,18 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                     isSending.set(true)
-                    // yoloDetector 있으면 온디바이스, 없으면 서버로
-                    if (yoloDetector != null) processOnDevice(file)
-                    else sendToServer(file)
+                    // 서버 모드 ON이면 서버 우선, OFF이면 온디바이스 사용
+                    val useServer = serverModeEnabled && etServerUrl.text.toString().trim().isNotEmpty()
+                    if (useServer) {
+                        updatePerfOverlay("서버", "요청 준비", 0.0, 0, 0, 0, 0, 0)
+                        sendToServer(file)
+                    } else if (yoloDetector != null) {
+                        updatePerfOverlay("디바이스", "ONNX 추론 준비", 0.0, 0, 0, 0, 0, 0)
+                        processOnDevice(file)
+                    } else {
+                        updatePerfOverlay("서버", "ONNX 없음", 0.0, 0, 0, 0, 0, 0)
+                        sendToServer(file)
+                    }
                 }
                 override fun onError(e: ImageCaptureException) {
                     isSending.set(false)
@@ -1013,13 +1154,168 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     // ── 온디바이스 추론 ─────────────────────────────────────────────────
 
+    private fun analyzeOnDeviceFrame(imageProxy: ImageProxy) {
+        try {
+            if (!isAnalyzing.get() || serverModeEnabled || yoloDetector == null) {
+                imageProxy.close()
+                return
+            }
+
+            val nowMs = SystemClock.elapsedRealtime()
+            if (nowMs - lastFrameAnalyzeMs < FAST_ANALYSIS_INTERVAL_MS) {
+                imageProxy.close()
+                return
+            }
+            lastFrameAnalyzeMs = nowMs
+
+            val captureStart = SystemClock.elapsedRealtime()
+            val bmp = imageProxyToBitmap(imageProxy)
+            imageProxy.close()
+            latestFrame.getAndSet(PipelineFrame(bmp, SystemClock.elapsedRealtime() - captureStart))
+                ?.bitmap
+                ?.recycle()
+            schedulePreprocess()
+        } catch (_: Exception) {
+            imageProxy.close()
+            handleFail()
+        }
+    }
+
+    private fun schedulePreprocess() {
+        if (!preprocessing.compareAndSet(false, true)) return
+        preprocessExecutor.execute {
+            try {
+                while (isAnalyzing.get() && !serverModeEnabled) {
+                    val frame = latestFrame.getAndSet(null) ?: break
+                    val input = yoloDetector?.preprocess(frame.bitmap)
+                    frame.bitmap.recycle()
+                    if (input != null) {
+                        latestInput.set(input)
+                        scheduleInference()
+                    }
+                }
+            } finally {
+                preprocessing.set(false)
+                if (latestFrame.get() != null) schedulePreprocess()
+            }
+        }
+    }
+
+    private fun scheduleInference() {
+        if (!inferencing.compareAndSet(false, true)) return
+        inferenceExecutor.execute {
+            try {
+                while (isAnalyzing.get() && !serverModeEnabled) {
+                    val input = latestInput.getAndSet(null) ?: break
+                    val raw = yoloDetector?.runInference(input)
+                    if (raw != null) {
+                        latestRawOutput.set(raw)
+                        schedulePostprocess()
+                    }
+                }
+            } finally {
+                inferencing.set(false)
+                if (latestInput.get() != null) scheduleInference()
+            }
+        }
+    }
+
+    private fun schedulePostprocess() {
+        if (!postprocessing.compareAndSet(false, true)) return
+        postprocessExecutor.execute {
+            try {
+                while (isAnalyzing.get() && !serverModeEnabled) {
+                    val raw = latestRawOutput.getAndSet(null) ?: break
+                    val result = yoloDetector?.postprocess(raw) ?: continue
+                    renderPipelineResult(result)
+                }
+            } finally {
+                postprocessing.set(false)
+                if (latestRawOutput.get() != null) schedulePostprocess()
+            }
+        }
+    }
+
+    private fun renderPipelineResult(result: YoloDetectionResult) {
+        val detections = result.detections
+        val timing = result.timing
+        val sentence = when (currentMode) {
+            "찾기" -> SentenceBuilder.buildFind(findTarget, detections)
+            else -> SentenceBuilder.build(detections)
+        }
+        val fps = currentFps(SystemClock.elapsedRealtime())
+
+        runOnUiThread {
+            detectionOverlay.setDetections(detections)
+            tvDetected.text = formatOnDeviceDetections(detections)
+            tvStatus.text = if (sentence == "주변에 장애물이 없어요.") "장애물 없음" else sentence
+            val speechNow = SystemClock.elapsedRealtime()
+            if (sentence != "주변에 장애물이 없어요." &&
+                speechNow - lastFastGuideMs >= FAST_GUIDE_MIN_INTERVAL_MS &&
+                !tts.isSpeaking
+            ) {
+                lastFastGuideMs = speechNow
+                lastSentence = sentence
+                tts.setSpeechRate(1.15f)
+                speak(sentence)
+            }
+        }
+
+        updatePerfOverlay(
+            "디바이스",
+            "파이프라인 ONNX",
+            fps,
+            timing.preprocessMs,
+            timing.yoloMs,
+            timing.postprocessMs,
+            timing.totalMs,
+            detections.size
+        )
+        consecutiveFails.set(0)
+        lastSuccessTime = System.currentTimeMillis()
+    }
+
+    private fun clearPipelineQueues() {
+        latestFrame.getAndSet(null)?.bitmap?.recycle()
+        latestInput.set(null)
+        latestRawOutput.set(null)
+    }
+
+    private fun imageProxyToBitmap(imageProxy: ImageProxy): Bitmap {
+        val plane = imageProxy.planes[0]
+        val buffer = plane.buffer
+        buffer.rewind()
+        val pixelStride = plane.pixelStride
+        val rowStride = plane.rowStride
+        val rowPadding = rowStride - pixelStride * imageProxy.width
+        val bitmap = Bitmap.createBitmap(
+            imageProxy.width + rowPadding / pixelStride,
+            imageProxy.height,
+            Bitmap.Config.ARGB_8888
+        )
+        bitmap.copyPixelsFromBuffer(buffer)
+        return if (rowPadding == 0) {
+            bitmap
+        } else {
+            val cropped = Bitmap.createBitmap(bitmap, 0, 0, imageProxy.width, imageProxy.height)
+            bitmap.recycle()
+            cropped
+        }
+    }
+
     private fun processOnDevice(imageFile: File) {
         // 백그라운드 스레드: 추론이 느려서 UI 스레드에서 하면 앱 멈춤
         Thread {
             try {
+                val totalStart = SystemClock.elapsedRealtime()
+                updatePerfOverlay("디바이스", "ONNX 추론 중", 0.0, 0, 0, 0, 0, 0)
                 // BitmapFactory: EXIF 회전 정보를 자동 적용 (서버의 cv2.imdecode와 다른 점)
+                val decodeStart = SystemClock.elapsedRealtime()
                 val bmp        = android.graphics.BitmapFactory.decodeFile(imageFile.absolutePath)
+                val decodeMs   = SystemClock.elapsedRealtime() - decodeStart
                 val detections = yoloDetector!!.detect(bmp)
+                val timing     = yoloDetector!!.lastTiming
+                runOnUiThread { detectionOverlay.setDetections(detections) }
                 bmp.recycle()      // 메모리 해제 (Android Bitmap 누수 방지)
                 imageFile.delete() // 임시 파일 삭제
 
@@ -1027,13 +1323,27 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     "찾기"  -> SentenceBuilder.buildFind(findTarget, detections)
                     else   -> SentenceBuilder.build(detections)
                 }
+                val totalMs = SystemClock.elapsedRealtime() - totalStart
+                val fps = currentFps(SystemClock.elapsedRealtime())
+                updatePerfOverlay(
+                    "디바이스",
+                    "ONNX 연결",
+                    fps,
+                    decodeMs,
+                    timing.yoloMs,
+                    timing.postprocessMs,
+                    totalMs,
+                    detections.size
+                )
                 handleSuccess(sentence, detectedText = formatOnDeviceDetections(detections))
             } catch (_: Exception) {
                 imageFile.delete()
                 // 온디바이스 실패(모델 오류 등) → 서버로 fallback 시도
                 try {
+                    updatePerfOverlay("디바이스", "실패, 서버 fallback", 0.0, 0, 0, 0, 0, 0)
                     sendToServer(File(imageFile.absolutePath))
                 } catch (_: Exception) {
+                    updatePerfOverlay("디바이스", "실패", 0.0, 0, 0, 0, 0, 0)
                     handleFail()
                 }
             }
@@ -1042,9 +1352,34 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     // ── 서버 전송 (선택 — URL 입력 시 Depth V2 정확도 향상) ──────────────
 
+    private fun prepareServerImage(imageFile: File): PreparedServerImage {
+        val source = BitmapFactory.decodeFile(imageFile.absolutePath)
+            ?: return PreparedServerImage(imageFile.readBytes(), 1, 1)
+        val maxSide = maxOf(source.width, source.height)
+        val uploadBitmap = if (maxSide > SERVER_IMAGE_MAX_SIDE) {
+            val scale = SERVER_IMAGE_MAX_SIDE.toFloat() / maxSide.toFloat()
+            Bitmap.createScaledBitmap(
+                source,
+                maxOf(1, (source.width * scale).toInt()),
+                maxOf(1, (source.height * scale).toInt()),
+                true
+            )
+        } else {
+            source
+        }
+
+        val out = ByteArrayOutputStream()
+        uploadBitmap.compress(Bitmap.CompressFormat.JPEG, SERVER_JPEG_QUALITY, out)
+        val result = PreparedServerImage(out.toByteArray(), uploadBitmap.width, uploadBitmap.height)
+        if (uploadBitmap !== source) uploadBitmap.recycle()
+        source.recycle()
+        return result
+    }
+
     private fun sendToServer(imageFile: File) {
         val serverUrl = etServerUrl.text.toString().trim().trimEnd('/')
         if (serverUrl.isEmpty()) {
+            updatePerfOverlay("서버", "URL 없음", 0.0, 0, 0, 0, 0, 0)
             imageFile.delete()
             handleFail()
             return
@@ -1052,26 +1387,50 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
         Thread {
             try {
+                val totalStart = SystemClock.elapsedRealtime()
+                updatePerfOverlay("서버", "요청 중", 0.0, 0, 0, 0, 0, 0)
+                val decodeStart = SystemClock.elapsedRealtime()
+                val uploadImage = prepareServerImage(imageFile)
+                val decodeMs = SystemClock.elapsedRealtime() - decodeStart
                 val body = MultipartBody.Builder().setType(MultipartBody.FORM)
                     .addFormDataPart("image", "frame.jpg",
-                        imageFile.asRequestBody("image/jpeg".toMediaType()))
+                        uploadImage.bytes.toRequestBody("image/jpeg".toMediaType()))
                     .addFormDataPart("camera_orientation", cameraOrientation)
                     .addFormDataPart("wifi_ssid", getWifiSsid())
                     .addFormDataPart("mode", currentMode)
                     .addFormDataPart("query_text", findTarget)
                     .build()
 
+                val yoloStart = SystemClock.elapsedRealtime()
                 val response = httpClient.newCall(
                     Request.Builder().url("$serverUrl/detect").post(body).build()
                 ).execute()
+                val yoloMs = SystemClock.elapsedRealtime() - yoloStart
 
+                val postStart = SystemClock.elapsedRealtime()
                 val json      = JSONObject(response.body?.string() ?: "{}")
                 val sentence  = json.optString("sentence", "주변에 장애물이 없어요.")
                 val alertMode = json.optString("alert_mode", "critical")
-                val detectedText = formatServerObjects(json.optJSONArray("objects"))
+                val objects = json.optJSONArray("objects")
+                val detectedText = formatServerObjects(objects)
+                updateDetectionOverlayFromServer(objects, uploadImage.width, uploadImage.height)
                 checkWaitingBus(json)   // 버스 대기 모드 자동 감지
+                val postMs = SystemClock.elapsedRealtime() - postStart
+                val totalMs = SystemClock.elapsedRealtime() - totalStart
+                val fps = currentFps(SystemClock.elapsedRealtime())
+                updatePerfOverlay(
+                    "서버",
+                    "연결됨 HTTP ${response.code}",
+                    fps,
+                    decodeMs,
+                    yoloMs,
+                    postMs,
+                    totalMs,
+                    objects?.length() ?: 0
+                )
                 handleSuccess(sentence, alertMode, detectedText)
             } catch (_: Exception) {
+                updatePerfOverlay("서버", "연결 실패", 0.0, 0, 0, 0, 0, 0)
                 handleFail()
             } finally {
                 imageFile.delete()
@@ -1131,6 +1490,41 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         return "인식: " + parts.joinToString(", ") + more
     }
 
+    private fun updateDetectionOverlayFromServer(objects: JSONArray?, imageWidth: Int, imageHeight: Int) {
+        if (objects == null || objects.length() == 0 || imageWidth <= 1 || imageHeight <= 1) {
+            runOnUiThread { detectionOverlay.clear() }
+            return
+        }
+
+        val detections = mutableListOf<Detection>()
+        for (i in 0 until objects.length()) {
+            val obj = objects.optJSONObject(i) ?: continue
+            val bbox = obj.optJSONArray("bbox") ?: continue
+            if (bbox.length() < 4) continue
+
+            val x1 = bbox.optDouble(0).toFloat()
+            val y1 = bbox.optDouble(1).toFloat()
+            val x2 = bbox.optDouble(2).toFloat()
+            val y2 = bbox.optDouble(3).toFloat()
+            val boxWidth = x2 - x1
+            val boxHeight = y2 - y1
+            if (boxWidth <= 0f || boxHeight <= 0f) continue
+
+            detections.add(
+                Detection(
+                    classKo = obj.optString("class_ko", obj.optString("class", "물체")),
+                    confidence = obj.optDouble("conf", 1.0).toFloat(),
+                    cx = ((x1 + x2) / 2f / imageWidth).coerceIn(0f, 1f),
+                    cy = ((y1 + y2) / 2f / imageHeight).coerceIn(0f, 1f),
+                    w = (boxWidth / imageWidth).coerceIn(0f, 1f),
+                    h = (boxHeight / imageHeight).coerceIn(0f, 1f)
+                )
+            )
+        }
+
+        runOnUiThread { detectionOverlay.setDetections(detections) }
+    }
+
     private fun formatOnDeviceDetections(detections: List<Detection>): String {
         if (detections.isEmpty()) return "인식: 없음"
 
@@ -1184,6 +1578,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     private fun handleFail() {
         isSending.set(false)
+        runOnUiThread { detectionOverlay.clear() }
         val fails = consecutiveFails.incrementAndGet()
         if (fails == FAIL_WARN_COUNT) {
             runOnUiThread {
