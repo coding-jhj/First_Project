@@ -37,7 +37,7 @@ gcloud run deploy voiceguide --source . --region asia-northeast3 --memory 2Gi --
 배포 확인:
 
 ```bat
-python tools\probe_server_link.py --base https://voiceguide-135456731041.asia-northeast3.run.app
+python tools\probe_server_link.py --base https://voiceguide-1063164560758.asia-northeast3.run.app
 ```
 
 ## 주요 엔드포인트
@@ -77,3 +77,25 @@ python tools\probe_server_link.py --base https://voiceguide-135456731041.asia-no
 - Cloud Run URL의 `/health`, `/detect`, `/dashboard`가 확인된다.
 - Android Logcat의 `VG_LINK` request_id와 서버 로그의 `[LINK]` request_id가 연결된다.
 - 서버가 실패해도 Android 온디바이스 fallback이 유지된다.
+
+## 2026-04-30 로그 확인 상태
+
+임명광이 공유한 GCP 로그와 Logcat 기준으로 다음이 확인됐습니다.
+
+| 항목 | 상태 |
+|---|---|
+| GCP `/status/__default__` | 200 OK |
+| GCP `/dashboard` referer | 확인됨 |
+| Android 온디바이스 탐지 | 사람 1개 탐지, 문장 생성, 음성 출력 확인 |
+| Android FPS | 1.4fps로 낮음. 김재현 Android/UX 담당 개선 필요 |
+| 대시보드 표시 | `/status/__default__`의 `objects`, `gps`, `track`이 비어 있어 화면에 표시할 데이터가 없음 |
+
+정환주 서버 담당 기준으로 추가 확인한 결과:
+
+| 엔드포인트 | 결과 |
+|---|---|
+| `/health` | 200 OK, `depth_v2=fallback (bbox)`, `db_mode=sqlite` |
+| `/status/__default__` | 200 OK, `objects=[]`, `gps=null`, `track=[]` |
+| `/dashboard` | 200 OK, HTML 반환 |
+
+따라서 서버와 대시보드 엔드포인트는 살아 있고, 대시보드가 비어 보이는 문제는 세션 데이터가 아직 들어오지 않은 상태로 보는 것이 맞습니다. 다음 확인은 Android에서 같은 `wifi_ssid/session_id`로 `/detect` 요청이 들어오고 GPS 또는 objects가 저장되는지입니다.

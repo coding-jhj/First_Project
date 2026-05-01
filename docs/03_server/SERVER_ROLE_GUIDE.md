@@ -1,4 +1,4 @@
-# Server Role Guide
+﻿# Server Role Guide
 
 현재 서버 담당은 정환주입니다. 임명광은 NLG 응답 문장과 문서 보조를 맡고, 신유득은 Vision/ML 결과가 서버 응답에 잘 들어가는지 검증합니다.
 
@@ -23,7 +23,7 @@
 ## 실행 확인
 
 ```bat
-python tools\probe_server_link.py --base https://voiceguide-135456731041.asia-northeast3.run.app
+python tools\probe_server_link.py --base https://voiceguide-1063164560758.asia-northeast3.run.app
 ```
 
 성공 기준:

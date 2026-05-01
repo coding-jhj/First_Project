@@ -1,4 +1,4 @@
-# Server Guide
+﻿# Server Guide
 
 > 현재 기준: 본 서버는 `src.api.main:app` 하나입니다.  
 > 과거 `legacy/server_db*` 코드는 학습/실험 기록이며 Android와 GCP 배포의 실행 진입점이 아닙니다.

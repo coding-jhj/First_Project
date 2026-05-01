@@ -1,4 +1,4 @@
-# VoiceGuide Master Study
+﻿# VoiceGuide Master Study
 
 이 문서는 팀원이 어떤 순서로 프로젝트를 공부해야 하는지 정리한 입구 문서입니다.
 

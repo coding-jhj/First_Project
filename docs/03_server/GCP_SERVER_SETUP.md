@@ -1,4 +1,4 @@
-# GCP Compute Engine 서버 셋업 가이드
+﻿# GCP Compute Engine 서버 셋업 가이드
 
 > 강사님 지정 스펙: GPU 없음, 30GB 이하, 서울 리전, Ubuntu 22/24
 

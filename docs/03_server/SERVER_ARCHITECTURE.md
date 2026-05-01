@@ -1,4 +1,4 @@
-# Server Architecture
+﻿# Server Architecture
 
 > 현재 구조는 단일 FastAPI 서버입니다. 과거 다중 서버/서브 서버 구조는 사용하지 않습니다.
 

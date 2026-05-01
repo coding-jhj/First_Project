@@ -1,4 +1,4 @@
-# Supabase Q&A
+﻿# Supabase Q&A
 
 현재 서버 기준은 GCP Cloud Run + `src.api.main:app`입니다. Supabase는 선택 DB입니다.
 

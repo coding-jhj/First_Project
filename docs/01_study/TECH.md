@@ -1,4 +1,4 @@
-# VoiceGuide Tech Notes
+﻿# VoiceGuide Tech Notes
 
 이 문서는 현재 코드 기준의 기술 요약입니다. 오래된 역할 분배나 과거 배포 방식은 쓰지 않습니다.
 

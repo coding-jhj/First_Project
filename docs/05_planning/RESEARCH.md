@@ -1,4 +1,4 @@
-# VoiceGuide Research Notes
+﻿# VoiceGuide Research Notes
 
 현재 기획 기준에 맞춘 자료조사 요약입니다. 구현 범위는 README의 MVP를 넘기지 않습니다.
 

@@ -9,6 +9,7 @@
 | [../README.md](../README.md) | 프로젝트 첫 진입, MVP, 실행 명령 |
 | [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) | 폴더 구조와 실행 진입점 |
 | [03_server/README.md](03_server/README.md) | GCP 기준 서버 문서 |
+| [03_server/SERVER_LINK_CHECK_2026-04-30.md](03_server/SERVER_LINK_CHECK_2026-04-30.md) | 임명광 로그 기반 서버/대시보드 확인 결과 |
 | [04_team/TEAM.md](04_team/TEAM.md) | 팀 역할 요약 |
 | [04_team/ROLE_GUIDE.md](04_team/ROLE_GUIDE.md) | 역할별 개발·조사 지침 |
 | [04_team/ANDROID_PERFORMANCE_GUIDE.md](04_team/ANDROID_PERFORMANCE_GUIDE.md) | Android FPS/오탐 개선 지침 |
@@ -42,6 +43,7 @@
 
 - 본 서버는 `src.api.main:app` 하나입니다.
 - 배포 기준은 GCP Cloud Run입니다.
+- 발표 MVP는 장애물 안내, 물건찾기, 물건 확인 3개입니다.
 - `legacy/server_db*`는 참고 코드이며 본 서버가 아닙니다.
 - README의 동작 확인 항목은 실제 시연 가능한 기능만 적습니다.
 - 안전 관련 기능은 검증 범위 밖으로 과장하지 않습니다.

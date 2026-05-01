@@ -1,4 +1,4 @@
-# Supabase(Postgres) DB 연결 가이드 (Windows + CMD)
+﻿# Supabase(Postgres) DB 연결 가이드 (Windows + CMD)
 
 이 문서는 `FastAPI + psycopg(커넥션풀)` 서버를 **Supabase Postgres**에 연결하고, API 동작까지 확인하는 과정을 정리한 공유용 가이드입니다.
 

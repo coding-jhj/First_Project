@@ -1,4 +1,4 @@
-# PRD: VoiceGuide
+﻿# PRD: VoiceGuide
 
 > **AI 도구 참고용**: 이 문서는 "왜 이 서비스를 만드는가"를 설명합니다.
 > 기술 구현 방법은 TECH.md를 참고하세요.

@@ -60,6 +60,7 @@
 |---|---|
 | `README.md` | 현재 MVP와 실행 진입점 |
 | `docs/03_server/README.md` | GCP 서버 기준 문서 |
+| `docs/03_server/SERVER_LINK_CHECK_2026-04-30.md` | 서버/대시보드 로그 확인 결과 |
 | `docs/04_team/TEAM.md` | 팀 역할 요약 |
 | `docs/04_team/ROLE_GUIDE.md` | 역할별 코드 작성·조사 지침 |
 | `docs/04_team/ANDROID_PERFORMANCE_GUIDE.md` | Android FPS/오탐 개선 지침 |

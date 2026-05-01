@@ -1,4 +1,4 @@
-# VoiceGuide Troubleshooting
+﻿# VoiceGuide Troubleshooting
 
 현재 기준의 문제 해결 문서입니다. 서버 배포는 GCP Cloud Run을 기준으로 봅니다.
 
@@ -93,7 +93,7 @@ GCP에서 PostgreSQL/Supabase를 쓰려면 Cloud Run 환경변수에 `DATABASE_U
 
 ```bat
 cd /d C:\VoiceGuide\VoiceGuide
-python tools\probe_server_link.py --base https://voiceguide-135456731041.asia-northeast3.run.app
+python tools\probe_server_link.py --base https://voiceguide-1063164560758.asia-northeast3.run.app
 ```
 
 Android:

@@ -1,4 +1,4 @@
-# Legacy Ngrok Reference
+﻿# Legacy Ngrok Reference
 
 현재 발표/배포 기준은 GCP Cloud Run입니다.
 

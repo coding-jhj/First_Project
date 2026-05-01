@@ -20,7 +20,7 @@ gcloud run deploy voiceguide ^
 배포 후 서버 연동 확인:
 
 ```bat
-python tools\probe_server_link.py --base https://voiceguide-135456731041.asia-northeast3.run.app
+python tools\probe_server_link.py --base https://voiceguide-1063164560758.asia-northeast3.run.app
 ```
 
 전체 실행 순서는 `docs/00_run/CMD_RUNBOOK.md`를 참고합니다.
@@ -100,7 +100,7 @@ gcloud run deploy voiceguide ^
 
 배포 완료 시:
 ```
-Service URL: https://voiceguide-135456731041.asia-northeast3.run.app
+Service URL: https://voiceguide-1063164560758.asia-northeast3.run.app
 ```
 > ✅ 현재 이 URL로 운영 중 (2026-04-30 배포 완료)
 

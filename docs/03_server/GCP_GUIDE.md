@@ -1,4 +1,4 @@
-# GCP (Google Cloud Platform) 완전 가이드
+﻿# GCP (Google Cloud Platform) 완전 가이드
 
 > VoiceGuide 팀 전용 — GCP 처음 쓰는 사람 기준으로 작성
 

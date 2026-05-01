@@ -54,7 +54,7 @@ docs/00_run/CMD_RUNBOOK.md
 
 ```bat
 cd /d C:\VoiceGuide\VoiceGuide
-python tools\probe_server_link.py --base https://voiceguide-135456731041.asia-northeast3.run.app
+python tools\probe_server_link.py --base https://voiceguide-1063164560758.asia-northeast3.run.app
 gcloud run services logs tail voiceguide --region asia-northeast3
 ```
 
@@ -74,7 +74,7 @@ gcloud run services logs tail voiceguide --region asia-northeast3
 
 ```powershell
 cd C:\VoiceGuide\VoiceGuide
-python tools\probe_server_link.py --base https://voiceguide-135456731041.asia-northeast3.run.app
+python tools\probe_server_link.py --base https://voiceguide-1063164560758.asia-northeast3.run.app
 ```
 
 정상 출력 예:

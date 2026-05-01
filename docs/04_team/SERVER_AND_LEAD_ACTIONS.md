@@ -36,7 +36,7 @@ gcloud run deploy voiceguide --source . --region asia-northeast3 --memory 2Gi --
 배포 확인:
 
 ```bat
-python tools\probe_server_link.py --base https://voiceguide-135456731041.asia-northeast3.run.app
+python tools\probe_server_link.py --base https://voiceguide-1063164560758.asia-northeast3.run.app
 ```
 
 성공 기준:
@@ -51,8 +51,10 @@ python tools\probe_server_link.py --base https://voiceguide-135456731041.asia-no
 
 | 결정 | 현재 기준 |
 |---|---|
-| MVP | 장애물 탐지, 방향 안내, 대략적 거리, TTS, 온디바이스 fallback, GCP 대시보드 |
-| 실험 기능 | OCR, 옷 매칭, SOS, 하차 알림, 신호등, 공간 기억 |
+| 핵심 MVP | 장애물 안내, 물건찾기, 물건 확인 |
+| 공통 기반 | 방향 안내, 대략적 거리, TTS, 온디바이스 fallback |
+| 서버 보조 | GCP `/health`, `/status`, `/dashboard` 연결 확인 |
+| 실험 기능 | OCR, 옷 매칭, SOS, 하차 알림, 신호등, 공간 기억, GPS 대시보드 |
 | 서버 진입점 | `src.api.main:app` |
 | 배포 경로 | GCP Cloud Run |
 | 표현 | 정확/보장 대신 대략/보조/실험 |

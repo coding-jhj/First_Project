@@ -1,4 +1,4 @@
-# VoiceGuide Project Guide
+﻿# VoiceGuide Project Guide
 
 이 문서는 프로젝트 운영 기준입니다. 기능 욕심을 줄이고, 강사 피드백에 맞춰 설명 가능한 MVP를 안정화하는 것을 우선합니다.
 
@@ -10,10 +10,13 @@ VoiceGuide는 Android 카메라와 음성 안내를 사용해 시각장애인의
 
 | 구분 | 포함 |
 |---|---|
-| 반드시 시연 | Android 카메라, 온디바이스 장애물 탐지, 방향/거리 안내, Android TTS |
-| 서버 시연 | GCP Cloud Run `/health`, `/detect`, `/dashboard` |
+| 핵심 MVP 1 | 장애물 안내 |
+| 핵심 MVP 2 | 물건찾기 |
+| 핵심 MVP 3 | 물건 확인 |
+| 공통 기반 | Android 카메라, ONNX 온디바이스 탐지, 방향/대략 거리 안내, Android TTS |
+| 서버 보조 | GCP Cloud Run `/health`, `/status`, `/dashboard` 연결 확인 |
 | 설명 가능 | 서버 실패 시 온디바이스 fallback |
-| 실험 기능 | OCR, 신호등, 옷 매칭, SOS, 하차 알림, 공간 기억 |
+| 실험 기능 | OCR, 신호등, 옷 매칭, SOS, 하차 알림, 공간 기억, GPS 대시보드 |
 
 실험 기능은 발표에서 핵심 성능처럼 말하지 않습니다.
 
@@ -33,9 +36,10 @@ VoiceGuide는 Android 카메라와 음성 안내를 사용해 시각장애인의
 
 1. 현재 코드가 실제로 도는지 확인합니다.
 2. README의 동작 확인 항목과 실제 코드가 맞는지 봅니다.
-3. Android FPS와 오탐을 먼저 줄입니다.
-4. GCP 서버 URL 기준으로 `/health`, `/detect`, `/dashboard`를 확인합니다.
-5. 기능 추가는 이 네 가지가 안정화된 뒤에만 합니다.
+3. 장애물 안내, 물건찾기, 물건 확인 3개가 실제 폰에서 되는지 먼저 봅니다.
+4. Android FPS와 오탐을 줄입니다.
+5. GCP 서버 URL 기준으로 `/health`, `/status`, `/dashboard`를 확인합니다.
+6. 기능 추가는 이 세 가지 핵심 MVP가 안정화된 뒤에만 합니다.
 
 ## 금지
 
@@ -54,7 +58,7 @@ VoiceGuide는 Android 카메라와 음성 안내를 사용해 시각장애인의
 | Android | 실제 폰에서 탐지, TTS, 중지/재시작 가능 |
 | FPS | `VG_PERF` 로그로 병목 설명 가능 |
 | Vision/ML | 오탐 사례와 threshold 조정 근거 정리 |
-| Server | GCP URL로 `/health`와 `/dashboard` 확인 |
+| Server | GCP URL로 `/health`, `/status`, `/dashboard` 확인 |
 | NLG | 위험도별 문장 예시를 담당자가 설명 가능 |
 | Voice/Q&A | 예상 질문과 답변 시트 준비 |
 
