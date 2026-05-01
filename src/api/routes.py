@@ -233,7 +233,7 @@ def _extract_find_target(text: str) -> str:
 
 @router.post("/tts")
 async def tts_endpoint(text: str = Form("")):
-    """ElevenLabs TTS — 텍스트를 음성 파일로 변환해 Android 앱에 반환."""
+    """Azure TTS — 텍스트를 음성 파일로 변환해 Android 앱에 반환."""
     from src.voice.tts import _cache_path, _generate, _api_key
     import os
     if not text:
@@ -244,7 +244,7 @@ async def tts_endpoint(text: str = Form("")):
     if not os.path.exists(path):
         if not _generate(text, path):
             return {"error": "TTS generation failed"}
-    return FileResponse(path, media_type="audio/mpeg")
+    return FileResponse(path, media_type="audio/wav")
 
 
 @router.post("/vision/clothing")

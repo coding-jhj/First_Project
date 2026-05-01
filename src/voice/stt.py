@@ -23,20 +23,54 @@ KEYWORDS: dict[str, list[str]] = {
 # 기본값을 unknown으로 변경하여 비명령어 발화 시 분석 방지
 _DEFAULT_MODE = "unknown"
 
+
+def _normalize_text(text: str) -> str:
+    """STT 결과를 키워드 매칭하기 쉬운 형태로 정규화."""
+    return (text or "").strip().lower()
+
 def _classify(text: str) -> str:
     """
     텍스트 분석 후 모드 결정. 
     사용자의 발화가 어떤 키워드와도 매칭되지 않으면 unknown 반환.
     """
-    if not text.strip():
+    text = _normalize_text(text)
+    if not text:
         return "unknown"
 
     # 우선순위: 찾기 -> 확인 -> 저장 -> 위치목록 -> 장애물
     for mode in ["찾기", "확인", "저장", "위치목록", "장애물"]:
-        if any(kw in text for kw in KEYWORDS[mode]):
+        if any(_normalize_text(kw) in text for kw in KEYWORDS[mode]):
             return mode
             
     return _DEFAULT_MODE
+
+
+def extract_label(text: str) -> str:
+    """
+    저장 명령에서 장소 이름(라벨)만 추출.
+    예) "여기 저장해줘 편의점" -> "편의점"
+    """
+    normalized = (text or "").strip()
+    if not normalized:
+        return ""
+
+    patterns = [
+        "여기 저장해줘",
+        "저장해줘",
+        "위치 등록",
+        "저장",
+    ]
+    label = normalized
+    for token in patterns:
+        label = label.replace(token, " ")
+
+    # 자주 붙는 불필요 어미 정리
+    for suffix in ["으로", "로", "좀", "요", "해줘"]:
+        if label.endswith(suffix):
+            label = label[: -len(suffix)]
+
+    label = " ".join(label.split()).strip()
+    return label
 
 
 def listen_and_classify() -> tuple[str, str]:
