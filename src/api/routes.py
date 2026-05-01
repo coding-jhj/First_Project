@@ -346,18 +346,28 @@ def _extract_find_target(text: str) -> str:
 
 @router.post("/tts", dependencies=[Depends(_verify_api_key)])
 async def tts_endpoint(text: str = Form("")):
+<<<<<<< HEAD
     """ElevenLabs / gTTS — 텍스트를 음성 파일(MP3)로 변환해 Android 앱에 반환.
     API 키 없으면 gTTS로 자동 폴백."""
     from src.voice.tts import _cache_path, _generate
     from fastapi.responses import JSONResponse
+=======
+    """Azure TTS — 텍스트를 음성 파일로 변환해 Android 앱에 반환."""
+    from src.voice.tts import _cache_path, _generate, _api_key
+>>>>>>> 5ee2040 (Q&A 대본 추가 / STT 라벨 추출 / 정규화 로직을 추가하고 TTS 인터페이스·캐시 포맷(wav)·SSML 이스케이프를 정리해 음성 파이프라인 연동 안정성을 개선)
     import os
     if not text:
         return JSONResponse({"error": "text is empty"}, status_code=400)
     path = _cache_path(text)
     if not os.path.exists(path):
         if not _generate(text, path):
+<<<<<<< HEAD
             return JSONResponse({"error": "TTS generation failed"}, status_code=500)
     return FileResponse(path, media_type="audio/mpeg")
+=======
+            return {"error": "TTS generation failed"}
+    return FileResponse(path, media_type="audio/wav")
+>>>>>>> 5ee2040 (Q&A 대본 추가 / STT 라벨 추출 / 정규화 로직을 추가하고 TTS 인터페이스·캐시 포맷(wav)·SSML 이스케이프를 정리해 음성 파이프라인 연동 안정성을 개선)
 
 
 @router.post("/vision/clothing", dependencies=[Depends(_verify_api_key)])
