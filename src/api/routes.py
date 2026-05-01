@@ -17,6 +17,7 @@ Android 앱과 Gradio 데모가 호출하는 API 엔드포인트를 정의합니
   - 이미지가 필요 없는 모드(저장/위치목록)는 빠르게 처리하고 반환
 """
 
+import asyncio
 import os
 from datetime import datetime
 
@@ -185,8 +186,9 @@ async def detect(
         db.save_gps(session_id, lat, lng)
 
     # YOLO 탐지 + Depth V2 거리 추정 + 바닥 위험 감지
+    # to_thread: CPU 집약 작업을 스레드에서 실행해 이벤트 루프 블록 방지
     _t_detect = _time.monotonic()
-    objects, hazards, scene = detect_and_depth(image_bytes)
+    objects, hazards, scene = await asyncio.to_thread(detect_and_depth, image_bytes)
     _detect_ms = int((_time.monotonic() - _t_detect) * 1000)
 
     # EMA 추적기: 프레임 간 거리 흔들림 제거 + 접근 감지

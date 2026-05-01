@@ -12,19 +12,34 @@ from src.api import db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 서버 시작 시: DB 초기화 + YOLO + Depth V2 워밍업
+    # DB 초기화는 동기적으로 (빠름)
     db.init_db()
-    import numpy as np
-    from src.vision.detect import model, CONF_THRESHOLD
-    model(np.zeros((640, 640, 3), dtype=np.uint8), conf=CONF_THRESHOLD, verbose=False)
-    # Depth V2 모델 미리 로드 — 안 하면 첫 /detect 요청에서 10~30초 걸려 Android timeout 발생
-    from src.depth.depth import _load_model
-    _load_model()
-    # EasyOCR·TTS 워밍업: 느려도 무관하므로 백그라운드 스레드
+    # YOLO·Depth·OCR·TTS 워밍업은 모두 백그라운드 — 서버가 즉시 8080 포트를 열도록
     import threading
+    threading.Thread(target=_warmup_yolo, daemon=True).start()
+    threading.Thread(target=_warmup_depth, daemon=True).start()
     threading.Thread(target=_warmup_ocr, daemon=True).start()
     threading.Thread(target=_warmup_tts, daemon=True).start()
     yield
+
+
+def _warmup_yolo():
+    try:
+        import numpy as np
+        from src.vision.detect import model, CONF_THRESHOLD
+        model(np.zeros((640, 640, 3), dtype=np.uint8), conf=CONF_THRESHOLD, verbose=False)
+        print("[main] YOLO 워밍업 완료")
+    except Exception as e:
+        print(f"[main] YOLO 워밍업 실패: {e}")
+
+
+def _warmup_depth():
+    try:
+        from src.depth.depth import _load_model
+        _load_model()
+        print("[main] Depth V2 워밍업 완료")
+    except Exception as e:
+        print(f"[main] Depth V2 워밍업 실패: {e}")
 
 
 def _warmup_ocr():
@@ -51,7 +66,7 @@ app = FastAPI(title="VoiceGuide API", lifespan=lifespan)
 _default_origins = (
     "http://localhost:8000,"
     "http://127.0.0.1:8000,"
-    "https://voiceguide-135456731041.asia-northeast3.run.app"
+    "https://voiceguide-1063164560758.asia-northeast3.run.app"
 )
 _origins = os.getenv("ALLOWED_ORIGINS", _default_origins)
 _allow_origins = ["*"] if _origins == "*" else [
