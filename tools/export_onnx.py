@@ -7,14 +7,17 @@ import os
 import shutil
 from pathlib import Path
 
+# 파인튜닝된 실내 특화 모델 우선 사용, 없으면 원본 COCO 모델 사용
 _src = "yolo11m_indoor.pt" if os.path.exists("yolo11m_indoor.pt") else "yolo11m.pt"
 print(f"내보낼 모델: {_src}")
 
 from ultralytics import YOLO
 model = YOLO(_src)
+# half=False: Android ONNX Runtime은 FP16 미지원 → FP32 필수
+# simplify=True: onnxsim으로 불필요한 노드 제거 → 추론 속도 향상
 model.export(format="onnx", imgsz=640, half=False, simplify=True)
 
-src = Path("yolo11m.onnx")
+src = Path("yolo11m.onnx")  # ultralytics가 현재 디렉터리에 생성한 ONNX 파일
 
 # android 폴더가 두 곳 — 둘 다 업데이트
 dst_dirs = [
@@ -23,7 +26,7 @@ dst_dirs = [
 ]
 
 for dst_dir in dst_dirs:
-    dst_dir.mkdir(parents=True, exist_ok=True)
+    dst_dir.mkdir(parents=True, exist_ok=True)   # 경로 없으면 자동 생성
     dst = dst_dir / "yolo11m.onnx"
-    shutil.copy(src, dst)
+    shutil.copy(src, dst)                         # 양쪽 폴더에 동일한 모델 복사
     print(f"완료: {dst.resolve()}  ({dst.stat().st_size / 1024 / 1024:.1f} MB)")

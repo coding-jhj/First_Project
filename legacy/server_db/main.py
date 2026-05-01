@@ -1,9 +1,11 @@
+# [레거시] PostgreSQL 직결 서버 초기 버전 — 현재 src/api/db.py로 대체됨
+# 이 파일은 SQLite/PostgreSQL 자동 전환 기능이 없음
 import os
 import re
 from typing import Any, Optional
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv()  # .env에서 PGHOST, PGPASSWORD 등 DB 접속 정보 로드
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -14,6 +16,7 @@ from urllib.parse import quote_plus
 app = FastAPI()
 
 def _get_env(name: str) -> str:
+    # 필수 환경변수 없으면 즉시 오류 (서버 시작 시 확인)
     value = os.getenv(name)
     if not value:
         raise RuntimeError(f"Missing required env var: {name}")
@@ -29,12 +32,13 @@ def _get_db_url() -> str:
 
     # 2) 없으면 개별 값으로 조립 (Supabase Postgres 직결/로컬 Postgres 모두 가능)
     host = _get_env("PGHOST")
-    port = int(os.getenv("PGPORT", "5432"))
+    port = int(os.getenv("PGPORT", "5432"))     # 기본 PostgreSQL 포트
     dbname = os.getenv("PGDATABASE", "postgres")
     user = os.getenv("PGUSER", "postgres")
     password = _get_env("PGPASSWORD")
     sslmode = os.getenv("PGSSLMODE", "require")  # Supabase는 보통 require 필요
 
+    # URL에 특수문자 포함된 비밀번호 안전하게 인코딩 (quote_plus)
     return (
         f"postgresql://{quote_plus(user)}:{quote_plus(password)}@{host}:{port}/{quote_plus(dbname)}"
         f"?sslmode={quote_plus(sslmode)}"
@@ -44,18 +48,20 @@ def _get_db_url() -> str:
 # ITEMS_TABLE을 startup보다 먼저 선언 — _startup() 내부에서 참조하므로
 ITEMS_TABLE = os.getenv("POSTGRES_ITEMS_TABLE", "items")
 
-pool: ConnectionPool | None = None
+pool: ConnectionPool | None = None  # 모듈 수준 커넥션 풀 싱글톤
 
 
 @app.on_event("startup")
 def _startup() -> None:
     global pool
     # Prevent accidental SQL injection via env var misconfiguration.
+    # 테이블 이름은 영문+숫자+_ 만 허용 (SQL 인젝션 방지)
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", ITEMS_TABLE):
         raise RuntimeError(
             "Invalid POSTGRES_ITEMS_TABLE. Use only letters/numbers/_ and must not start with a number."
         )
     if pool is None:
+        # min_size=1: 항상 최소 1개 연결 유지 / max_size=10: 최대 10개 동시 연결
         pool = ConnectionPool(_get_db_url(), min_size=1, max_size=10, open=True)
 
 

@@ -1,4 +1,6 @@
 # roadglass_server.py
+# [레거시] 도로면 블러 처리 + 차선 마모도 분석 서버 초기 버전
+# VoiceGuide 프로젝트로 전환 전 실험용 코드 — 현재 사용되지 않음
 import io
 import os
 import math
@@ -14,8 +16,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, FileResponse
 from sqlalchemy import create_engine, MetaData, Table, Column, Integer, String, DateTime, Float, select, desc, text
 from sqlalchemy.dialects.postgresql import JSONB
-from skimage.morphology import skeletonize
-from skimage.measure import label, regionprops
+from skimage.morphology import skeletonize     # 블러 마스크 세선화
+from skimage.measure import label, regionprops  # 연결 요소 레이블링
 from ultralytics import YOLO
 
 # =========================================================

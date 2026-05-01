@@ -1,3 +1,5 @@
+# [레거시] YOLO + 블러 처리 + Supabase DB 통합 서버 초기 버전
+# 현재 src/api/ 구조로 분리되어 이 파일은 사용되지 않음
 import io
 import json
 import math
@@ -18,12 +20,13 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
-from skimage.measure import label, regionprops
-from skimage.morphology import skeletonize
+from skimage.measure import label, regionprops  # 객체 레이블링 (블러 마스크용)
+from skimage.morphology import skeletonize       # 블러 경계 세선화
 from ultralytics import YOLO
 
 app = FastAPI(title="Voice Guard API")
 
+# CORS: 브라우저 대시보드 접근 허용 (개발 단계 — 실서버에서는 특정 origin만 허용 권장)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

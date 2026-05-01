@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 import os
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv()  # .env 파일에서 DATABASE_URL, ELEVENLABS_API_KEY 등 로드
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,15 +16,16 @@ async def lifespan(app: FastAPI):
     db.init_db()
     import numpy as np
     from src.vision.detect import model, CONF_THRESHOLD
+    # 640×640 더미 이미지로 YOLO 첫 추론 실행 — JIT 컴파일 및 GPU 초기화 완료
     model(np.zeros((640, 640, 3), dtype=np.uint8), conf=CONF_THRESHOLD, verbose=False)
     # Depth V2 모델 미리 로드 — 안 하면 첫 /detect 요청에서 10~30초 걸려 Android timeout 발생
     from src.depth.depth import _load_model
     _load_model()
-    # EasyOCR·TTS 워밍업: 느려도 무관하므로 백그라운드 스레드
+    # EasyOCR·TTS 워밍업: 느려도 무관하므로 백그라운드 스레드 (서버 준비 완료를 막지 않음)
     import threading
-    threading.Thread(target=_warmup_ocr, daemon=True).start()
+    threading.Thread(target=_warmup_ocr, daemon=True).start()  # daemon=True: 서버 종료 시 함께 종료
     threading.Thread(target=_warmup_tts, daemon=True).start()
-    yield
+    yield  # 서버 실행 중 (이 이후는 종료 시 실행)
 
 
 def _warmup_ocr():

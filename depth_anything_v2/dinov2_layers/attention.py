@@ -3,6 +3,9 @@
 #
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
+#
+# MemEffAttention: xFormers 라이브러리 기반 메모리 효율적 멀티헤드 셀프 어텐션
+# xFormers 미설치 시 일반 nn.MultiheadAttention으로 자동 폴백됨
 
 # References:
 #   https://github.com/facebookresearch/dino/blob/master/vision_transformer.py

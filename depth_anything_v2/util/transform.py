@@ -1,3 +1,5 @@
+# Depth Anything V2 입력 전처리 변환 — dpt.py의 infer_image()에서 이미지를 모델 입력 포맷으로 변환
+# Resize → NormalizeImage → PrepareForNet 순서로 Compose 파이프라인 구성
 import numpy as np
 import cv2
 
