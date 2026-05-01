@@ -1,4 +1,4 @@
-# VoiceGuide 변경 이력
+﻿# VoiceGuide 변경 이력
 
 ---
 
@@ -46,7 +46,7 @@
 - `BuildConfig` import 제거, confidence % 항상 숨김 (Android Studio 빌드 오류 해결)
 
 ### 가이드라인(06_student_development_guideline.md) 전 Phase 반영
-- Phase 1: `서버_DB/`, `서버_DB_수정/` → `legacy/` 이동
+- Phase 1: `server_db/`, `server_db_modified/` → `legacy/` 이동
 - Phase 3: 권한 분리 (카메라/마이크 즉시, GPS/SMS는 기능 사용 시), STT fallback `unknown`
 - Phase 3.5: `_INFO_ONLY_KO` 추가 (키보드/TV 등 비위험 물체 "위험!" 제거), beep 구간 2.5~7m
 - Phase 4: `benchmark.py` Precision/Recall/F1 측정 함수 추가
@@ -139,7 +139,7 @@
 
 ### GCP 서버 가이드
 - `docs/GCP_SERVER_SETUP.md` 추가: 강사 지정 스펙 (GPU 없음, 30GB 이하, 서울 리전, Ubuntu 22)
-- `docs/MEETING_0429_강사피드백.md` 추가: 미팅 전체 내용 기록
+- `docs/MEETING_0429_INSTRUCTOR_FEEDBACK.md` 추가: 미팅 전체 내용 기록
 
 ---
 

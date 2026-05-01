@@ -1,127 +1,94 @@
-# VoiceGuide 폴더 구조
+﻿# VoiceGuide 폴더 구조
 
-> 기준: 발표/배포/Android 연동에서 실제로 사용하는 구조만 먼저 봅니다.
-> 오래된 실험 서버와 참고 코드는 `legacy/` 아래에 보관되어 있으며, 현재 실행 진입점이 아닙니다.
+> 기준: 발표와 배포에서 실제로 쓰는 구조를 먼저 보여준다. 과거 실험 코드는 `legacy/`로 분리한다.
 
 ## 실행 진입점
 
-| 목적 | 진입점 | 상태 |
+| 목적 | 경로 | 상태 |
 |---|---|---|
-| Android 앱 | `android/` | 현재 앱 프로젝트 |
-| 서버 API | `src.api.main:app` | 현재 GCP/로컬 서버 |
-| 서버 라우트 | `src/api/routes.py` | `/detect`, `/status`, `/dashboard` 등 |
+| Android 앱 | `android/` | 본 앱 |
+| 서버 API | `src.api.main:app` | 본 서버, GCP 배포 기준 |
+| 서버 라우터 | `src/api/routes.py` | `/detect`, `/status`, `/dashboard` |
 | DB/tracker | `src/api/db.py`, `src/api/tracker.py` | SQLite 또는 `DATABASE_URL` |
-| 대시보드 | `templates/dashboard.html` | 서버 `/dashboard`에서 반환 |
+| 대시보드 | `templates/dashboard.html` | `/dashboard`에서 반환 |
 | Gradio 데모 | `app.py` | 보조 데모, Android 본 흐름 아님 |
 
-Android Studio에서 열 폴더:
+## 루트 파일
 
-```text
-C:\VoiceGuide\VoiceGuide\android
-```
-
-서버 로컬 실행:
-
-```bat
-cd /d C:\VoiceGuide\VoiceGuide
-uvicorn src.api.main:app --host 0.0.0.0 --port 8000
-```
-
-GCP 배포:
-
-```bat
-cd /d C:\VoiceGuide\VoiceGuide
-gcloud run deploy voiceguide --source . --region asia-northeast3 --memory 2Gi --cpu 2 --timeout 120 --allow-unauthenticated --port 8080
-```
-
-## 루트 폴더
-
-| 경로 | 용도 | 비고 |
-|---|---|---|
-| `README.md` | 프로젝트 첫 진입 문서 | 과장 없이 현재 검증된 기능 중심 |
-| `SETUP.md` | 로컬 실행 가이드 | CMD 기준은 `docs/00_실행/CMD_RUNBOOK.md` 우선 |
-| `Dockerfile` | Cloud Run 컨테이너 빌드 | `src.api.main:app` 실행 |
-| `requirements-server.txt` | 서버 배포 의존성 | Cloud Run 기준 |
-| `requirements.txt` | 전체/개발 의존성 | 로컬 데모 포함 |
-| `start.bat`, `stop.bat` | 로컬 서버/ngrok 편의 스크립트 | 선택 사용 |
-| `app.py` | Gradio 데모 | 발표 보조용 |
-
-루트에 두지 않는 것:
-
-| 항목 | 정리 기준 |
+| 경로 | 용도 |
 |---|---|
-| 개발 가이드/역할 문서 | `docs/04_팀/` |
-| 실행/배포 절차 | `docs/00_실행/`, `docs/03_서버/` |
-| 회의록 | `docs/02_미팅/` |
-| 모델 가중치 | Git 제외, 필요 시 별도 공유 |
-| DB 파일/캐시/실행 로그 | Git 제외 |
+| `README.md` | 프로젝트 첫 진입 문서 |
+| `Dockerfile` | Cloud Run 컨테이너 빌드 |
+| `requirements-server.txt` | 서버 배포 의존성 |
+| `requirements.txt` | 전체 개발 의존성 |
+| `start.bat`, `stop.bat` | 로컬 보조 스크립트 |
+| `.env.example` | 환경 변수 예시 |
 
 ## 주요 코드 폴더
 
-| 경로 | 역할 |
-|---|---|
-| `android/` | Android Studio 프로젝트 |
-| `src/api/` | FastAPI 서버, DB, tracker |
-| `src/vision/` | YOLO 탐지 |
-| `src/depth/` | Depth Anything V2 및 hazard 보정 |
-| `src/nlg/` | 한국어 안내 문장 생성 |
-| `src/voice/` | STT/TTS |
-| `src/ocr/` | 버스 번호 OCR fallback |
-| `templates/` | HTML 대시보드 |
-| `tools/` | 검증/배포 보조 스크립트 |
-| `tests/` | pytest 테스트 |
-| `train/` | 학습/데이터 준비 스크립트 |
-| `depth_anything_v2/` | Depth 모델 코드 |
+| 경로 | 담당 | 역할 |
+|---|---|---|
+| `android/` | 김재현 | Android 앱, UX, 온디바이스 fallback |
+| `src/api/` | 정환주, 임명광 보조 | FastAPI 서버, DB, tracker |
+| `src/vision/` | 신유득 | YOLO 탐지, 색상/신호등 보조 분석 |
+| `src/depth/` | 신유득 | Depth V2, bbox fallback, 바닥 위험 탐지 |
+| `src/ocr/` | 신유득 | 버스 번호 OCR fallback 실험 |
+| `src/nlg/` | 임명광 | 한국어 안내 문장, alert mode |
+| `src/voice/` | 문수찬 | STT/TTS 서버 보조 모듈 |
+| `tools/` | 각 담당 | 배포, benchmark, 검증 스크립트 |
+| `tests/` | 각 담당 | pytest 테스트 |
+| `train/` | 신유득 | 학습/데이터 준비 스크립트 |
+| `templates/` | 정환주 | 프론트엔드/서버 대시보드 HTML |
+| `legacy/` | 참고 전용 | 과거 서버 실험 코드 |
 
 ## 문서 폴더
 
-| 경로 | 역할 |
+| 경로 | 용도 |
 |---|---|
-| `docs/00_실행/` | CMD 실행 순서 |
-| `docs/01_학습/` | 코드/기술 이해 문서 |
-| `docs/02_미팅/` | 미팅/강사 피드백 |
-| `docs/03_서버/` | GCP, ngrok, 서버 배포 |
-| `docs/04_팀/` | 역할, 팀장/서버 담당 체크리스트 |
-| `docs/05_기획/` | PRD, MVP, 기획 |
-| `docs/06_발표/` | 발표 자료/스크립트 |
-| `docs/07_디버그/` | 성능/장애물/문제 해결 |
+| `docs/00_run/` | CMD 실행 절차 |
+| `docs/01_study/` | 코드와 함수 학습 |
+| `docs/02_meetings/` | 회의록과 피드백 |
+| `docs/03_server/` | GCP 기준 서버 문서 |
+| `docs/04_team/` | 역할, 체크리스트, 팀 운영 |
+| `docs/05_planning/` | PRD, MVP, 리서치 |
+| `docs/06_presentation/` | 발표 자료, Q&A |
+| `docs/07_debug/` | 성능/탐지 디버그 |
 
-핵심 문서:
+## 핵심 문서
 
 | 문서 | 용도 |
 |---|---|
-| `docs/00_실행/CMD_RUNBOOK.md` | CMD 실행/배포/검증 순서 |
-| `docs/04_팀/SERVER_AND_LEAD_ACTIONS.md` | 서버 담당 + 팀장 할 일 |
-| `docs/04_팀/STUDENT_DEVELOPMENT_GUIDELINE.md` | 원본 개발 개선 가이드 |
-| `docs/07_디버그/DETECTION_DEBUG.md` | 장애물 인식 디버그 |
-| `docs/07_디버그/PERF_DEBUG.md` | FPS/추론속도 디버그 |
+| `README.md` | 현재 MVP와 실행 진입점 |
+| `docs/03_server/README.md` | GCP 서버 기준 문서 |
+| `docs/04_team/TEAM.md` | 팀 역할 요약 |
+| `docs/04_team/ROLE_GUIDE.md` | 역할별 코드 작성·조사 지침 |
+| `docs/04_team/ANDROID_PERFORMANCE_GUIDE.md` | Android FPS/오탐 개선 지침 |
+| `docs/01_study/FUNCTION_LOGIC_STUDY.md` | 함수별 전체 로직 학습 |
+| `docs/04_team/STUDENT_DEVELOPMENT_GUIDELINE.md` | 강사 피드백 기반 개선 가이드 |
 
-## Legacy와 실험 코드
+## Legacy
 
-| 경로 | 상태 |
+| 경로 | 현재 상태 |
 |---|---|
-| `legacy/서버_DB/` | Supabase 연결 테스트용 과거 서버 |
-| `legacy/서버_DB_수정/` | 블러/도로 관련 실험 서버 |
+| `legacy/server_db/` | Supabase 연결 학습/실험 서버 |
+| `legacy/server_db_modified/` | blur 서버 등 과거 실험 |
 
-이 폴더들은 참고용입니다. Android 앱과 GCP 배포는 여기의 `main.py`를 실행하지 않습니다.
+이 폴더들은 Android 앱과 GCP 배포의 실행 진입점이 아닙니다.
 
 ## Git에 올리지 않는 것
 
-`.gitignore` 기준:
-
 | 항목 | 이유 |
 |---|---|
-| `.env`, `.env.*` | 키/DB URL 보호 |
+| `.env`, `.env.*` | API Key, DB URL 보호 |
 | `*.pt`, `*.pth`, `*.onnx`, `*.onnx.data`, `*.tflite` | 대용량 모델 |
 | `voiceguide.db` | 로컬 DB |
-| `.gradle-*`, `android/app/build/` | Android 빌드 캐시 |
+| `.gradle-*`, `android/app/build/` | 빌드 캐시 |
 | `.pytest_cache/`, `.ultralytics/`, `__pycache__/` | 실행 캐시 |
-| `runs/`, `datasets/`, `flagged/` | 실행/학습 산출물 |
+| `runs/`, `datasets/`, `flagged/` | 학습/실험 산출물 |
 
 ## 정리 원칙
 
-1. 새 팀원이 `README.md`와 `docs/00_실행/CMD_RUNBOOK.md`만 보고 실행할 수 있어야 합니다.
-2. 서버 진입점은 `src.api.main:app` 하나로 말합니다.
-3. 실험 기능은 문서에서 "동작 확인", "실험 기능", "예정 기능"으로 구분합니다.
-4. 안전 관련 기능은 과장하지 않습니다. 거리 정보는 "대략적 추정"이라고 설명합니다.
-5. 발표 D-2 이후에는 기능 추가보다 실행 재현과 로그 증명을 우선합니다.
+1. 새 팀원은 `README.md`와 `docs/PROJECT_STRUCTURE.md`만 보고 시작할 수 있어야 한다.
+2. 서버 진입점은 `src.api.main:app` 하나로 고정한다.
+3. 문서에는 동작 확인, 실험 기능, 예정 기능을 분리해 적는다.
+4. GCP를 주 배포 경로로 설명하고, 다른 배포 방식은 참고로만 남긴다.
