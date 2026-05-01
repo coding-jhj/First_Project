@@ -378,7 +378,7 @@ def detect_objects(image_bytes: bytes) -> tuple[list[dict], dict]:
     YOLO로 물체를 탐지하고 방향·거리·위험도·색상·신호등 상태를 계산합니다.
 
     처리 순서:
-      1. 이미지 디코딩 + 좌우 flip (mirror 보정)
+      1. 이미지 디코딩
       2. YOLO 추론 → 모든 bbox 추출
       3. 각 bbox마다: 방향 구역, 면적 기반 거리, 위험도 점수, 경고 레벨 계산
       4. 신호등이면 색상 감지, 모든 물체에 색상 감지 실행

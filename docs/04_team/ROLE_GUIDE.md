@@ -21,6 +21,26 @@
 - 서버 대시보드와 README 첫 화면 정리
 - README와 docs의 최종 표현 검수
 
+### student development guide 기준 Phase 오너십
+
+- Phase 1: 서버 진입점 단일화, dead code 처리 결정, 실행 경로 고정
+- Phase 2: README/문서의 "동작 확인" 항목과 실제 동작 일치 검수
+- Phase 5: 서버/DB/보안 기본선(API key, CORS, 비밀값 관리) 최종 책임
+- Phase 6: 기본 실행 재현(`pytest -m "not integration"` 기준) 확인
+
+### 완료 기준 (정환주 역할)
+
+- `README.md`만 보고 서버 실행 진입점이 `src.api.main:app`로 명확하다.
+- `/health`, `/detect`, `/dashboard`가 동일 서버 기준으로 재현된다.
+- 서버 문서의 "완료" 표현이 실제 동작과 다르지 않다.
+- 배포/대시보드 설명에서 개인정보·GPS 노출 관련 주의가 반영되어 있다.
+
+### 정환주 역할 범위 밖
+
+- Android 성능 튜닝, 권한 UX, bbox 색상 정책의 직접 구현
+- YOLO/Depth/OCR 모델 성능 튜닝 및 학습 파이프라인 수정
+- STT/TTS 문장 정책의 상세 구현
+
 ### 읽을 코드
 
 | 파일 | 봐야 할 함수 |
