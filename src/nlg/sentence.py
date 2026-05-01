@@ -177,8 +177,8 @@ def _primary(obj: dict, abs_clock: str) -> str:
     )
 
     if is_critical:
-        # 수정 전: "위험, 바로 앞 자동차. 조심" (거리·action 없어 Kotlin과 불일치)
-        # 수정 후: "위험! 바로 앞 약 3미터 앞에 자동차가 있어요! 멈추세요!"
+        # 수정 전: "위험! 바로 앞 약 3미터 앞에 자동차가 있어요! 멈추세요!"
+        # 수정 후: "위험, 바로 앞 자동차. 조심" (문장 간소화)
         return f"위험! {direction} {name}! 조심"
 
     return f"{direction} {dist_str}에 {name}{ig} 있어요."
