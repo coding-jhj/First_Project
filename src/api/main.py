@@ -14,16 +14,12 @@ from src.api import db
 async def lifespan(app: FastAPI):
     # DB 초기화는 동기적으로 (빠름)
     db.init_db()
-    import numpy as np
-    from src.vision.detect import model, CONF_THRESHOLD
-    # 640×640 더미 이미지로 YOLO 첫 추론 실행 — JIT 컴파일 및 GPU 초기화 완료
-    model(np.zeros((640, 640, 3), dtype=np.uint8), conf=CONF_THRESHOLD, verbose=False)
-    # Depth V2 모델 미리 로드 — 안 하면 첫 /detect 요청에서 10~30초 걸려 Android timeout 발생
-    from src.depth.depth import _load_model
-    _load_model()
-    # EasyOCR·TTS 워밍업: 느려도 무관하므로 백그라운드 스레드 (서버 준비 완료를 막지 않음)
+    # YOLO·Depth·OCR·TTS 워밍업은 모두 백그라운드 — yield 전에 블로킹하지 않아야
+    # Cloud Run이 PORT=8080을 즉시 감지할 수 있음 (동기 로드 시 30초+ 걸려 타임아웃 발생)
     import threading
-    threading.Thread(target=_warmup_ocr, daemon=True).start()  # daemon=True: 서버 종료 시 함께 종료
+    threading.Thread(target=_warmup_yolo, daemon=True).start()
+    threading.Thread(target=_warmup_depth, daemon=True).start()
+    threading.Thread(target=_warmup_ocr, daemon=True).start()
     threading.Thread(target=_warmup_tts, daemon=True).start()
     yield  # 서버 실행 중 (이 이후는 종료 시 실행)
 
