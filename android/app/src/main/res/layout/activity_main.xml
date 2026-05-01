@@ -84,6 +84,7 @@
                 android:text="분석 시작 버튼을 눌러주세요"
                 android:textSize="24sp"
                 android:textColor="@color/vg_text"
+                android:fontFamily="sans-serif-medium"
                 android:textStyle="bold"
                 android:gravity="center"
                 android:lineSpacingMultiplier="1.4"
@@ -101,7 +102,7 @@
 
         </FrameLayout>
 
-        <!-- 모드 / FPS -->
+        <!-- 모드 / FPS — monospace 유지 (FPS 수치 정렬 목적) -->
         <TextView
             android:id="@+id/tvMode"
             android:layout_width="match_parent"
@@ -127,7 +128,7 @@
             android:orientation="horizontal"
             android:gravity="center_vertical">
 
-            <!-- 음성 명령 버튼 — 주 액션: 화면 폭 60% -->
+            <!-- 음성 명령 버튼 — 주 액션: 화면 폭 60%, 롱프레스 시 진동+위치 안내 -->
             <Button
                 android:id="@+id/btnStt"
                 android:layout_width="0dp"
@@ -136,14 +137,15 @@
                 android:layout_marginEnd="12dp"
                 android:text="🎤 음성 명령"
                 android:textSize="18sp"
+                android:fontFamily="sans-serif-medium"
                 android:textStyle="bold"
                 android:textColor="#FFFFFF"
                 android:background="@drawable/bg_btn_mic"
                 android:stateListAnimator="@null"
                 android:elevation="0dp"
-                android:contentDescription="음성 명령 입력 — 길게 누르면 명령어 목록 안내" />
+                android:contentDescription="음성 명령 입력 — 길게 누르면 버튼 위치 진동 안내" />
 
-            <!-- 분석 시작/중지 버튼 — 보조 액션 -->
+            <!-- 분석 시작/중지 버튼 — 보조 액션 (음성 명령보다 작게) -->
             <Button
                 android:id="@+id/btnToggle"
                 android:layout_width="0dp"
@@ -151,6 +153,7 @@
                 android:layout_weight="2"
                 android:text="분석 시작"
                 android:textSize="15sp"
+                android:fontFamily="sans-serif"
                 android:textColor="#FFFFFF"
                 android:background="@drawable/bg_btn_start"
                 android:stateListAnimator="@null"

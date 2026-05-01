@@ -319,6 +319,22 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             if (isAnalyzing.get()) stopAnalysis() else requestPermissions()
         }
         btnStt.setOnClickListener { startListening() }
+
+        // Phase 7 — 롱프레스 진동 피드백: 저시력·시각장애인 사용자가 버튼 위치를 촉각으로 학습
+        btnStt.setOnLongClickListener {
+            val vib = getSystemService(VIBRATOR_SERVICE) as android.os.Vibrator
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                // 두 번 짧게 진동 (50ms on, 50ms off, 50ms on) — "여기 음성 명령 버튼"
+                vib.vibrate(android.os.VibrationEffect.createWaveform(
+                    longArrayOf(0, 50, 50, 50), -1
+                ))
+            } else {
+                @Suppress("DEPRECATION")
+                vib.vibrate(longArrayOf(0, 50, 50, 50), -1)
+            }
+            speak("음성 명령 버튼입니다. 짧게 누르면 음성 인식이 시작됩니다.")
+            true
+        }
     }
 
     private fun getSavedServerUrl(): String =

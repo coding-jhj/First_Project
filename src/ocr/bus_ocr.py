@@ -117,7 +117,7 @@ def recognize_bus_number(image_bytes: bytes, bus_crop: list | None = None) -> st
     # 이미지 디코딩
     nparr  = np.frombuffer(image_bytes, np.uint8)
     img    = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    img    = cv2.flip(img, 1)  # detect.py와 동일하게 좌우 반전 보정
+    img    = cv2.flip(img, 1)  # 버스 번호판 좌우 보정 (전면 카메라 mirror 방지)
 
     # bus_crop 좌표가 있으면 그 영역만 잘라서 OCR (배경 노이즈 제거)
     if bus_crop and len(bus_crop) == 4:
