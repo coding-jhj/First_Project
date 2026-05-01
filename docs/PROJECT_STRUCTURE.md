@@ -63,7 +63,9 @@
 | `docs/04_team/TEAM.md` | 팀 역할 요약 |
 | `docs/04_team/ROLE_GUIDE.md` | 역할별 코드 작성·조사 지침 |
 | `docs/04_team/ANDROID_PERFORMANCE_GUIDE.md` | Android FPS/오탐 개선 지침 |
+| `docs/04_team/TODO_YOODK_VISION_ML.md` | 신유득 Vision/ML TODO |
 | `docs/01_study/FUNCTION_LOGIC_STUDY.md` | 함수별 전체 로직 학습 |
+| `docs/06_presentation/QA_SHEET.md` | 문수찬 Q&A 시트 |
 | `docs/04_team/STUDENT_DEVELOPMENT_GUIDELINE.md` | 강사 피드백 기반 개선 가이드 |
 
 ## Legacy

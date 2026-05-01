@@ -64,9 +64,9 @@ STT/TTS 흐름을 점검하고, Android OS TTS와 서버 TTS fallback 차이를 
 
 `src.api.main:app` 하나입니다. `/detect` 라우터는 `src/api/routes.py`에 있고, `legacy/server_db*`는 본 서버가 아닌 과거 실험 코드입니다.
 
-### Q. GCP 말고 ngrok이나 다른 배포도 쓰나요?
+### Q. GCP 말고 다른 배포도 쓰나요?
 
-현재 발표와 배포 기준은 GCP Cloud Run입니다. ngrok은 로컬 임시 시연 참고용이고, README에서는 GCP를 주 경로로 설명합니다.
+현재 발표와 배포 기준은 GCP Cloud Run입니다. 다른 배포 방식은 과거 참고 기록으로만 남기고, README와 발표에서는 GCP를 주 경로로 설명합니다.
 
 ### Q. 서버가 죽으면 앱도 멈추나요?
 

@@ -1,75 +1,45 @@
-﻿# Supabase 강사님 질문 대비 Q&A
+# Supabase Q&A
 
-> 강사님이 물어볼 수 있는 두 가지 질문과 답변 준비
+현재 서버 기준은 GCP Cloud Run + `src.api.main:app`입니다. Supabase는 선택 DB입니다.
 
----
+## Q1. Supabase를 직접 실행하나요?
 
-## Q1. "Docker 기반이야, CLI 기반이야?"
+아닙니다.
 
-### 한 줄 답변
-**"로컬에 Docker로 띄운 게 아니라, Supabase 클라우드 DB에 연결 주소로 붙는 방식입니다."**
+> Supabase는 로컬 Docker로 띄우는 것이 아니라, 클라우드 PostgreSQL에 `DATABASE_URL`로 접속하는 방식입니다.
 
-### 쉽게 설명하면
+## Q2. 없어도 서버가 도나요?
 
-```
-우리가 쓰는 방식 ✅
-  Supabase 웹사이트에서 계정 만들고
-  DB 프로젝트 생성 → 연결 주소(URL) 받아서
-  코드가 그 주소로 접속
+돕니다.
 
-우리가 쓰지 않는 방식 ❌
-  내 PC에 Docker 설치해서
-  Supabase를 직접 실행 (supabase start 명령어)
-```
+| `DATABASE_URL` | DB 모드 |
+|---|---|
+| 없음 | SQLite |
+| 있음 | PostgreSQL/Supabase |
 
-### 증거로 말할 수 있는 것
-- `server_db/Fastapi_DB_README.md`에 **"이 프로젝트는 DB를 직접 실행하지 않습니다"** 라고 명시
-- 연결 방식: FastAPI + psycopg + `DATABASE_URL` 환경변수
+SQLite 모드는 로컬과 GCP 기본 동작 확인에 충분합니다. Supabase는 외부 DB가 필요할 때만 켭니다.
 
----
+## Q3. 외부 접속은 어떻게 확인하나요?
 
-## Q2. "외부 접근이 되는 상태야?"
+GCP Cloud Run 환경변수에 `DATABASE_URL`을 넣고 `/health`를 확인합니다.
 
-### 한 줄 답변
-**"Supabase는 원래 인터넷으로 접속하는 클라우드 서비스라서, 배포 서버나 LTE에서도 같은 연결 주소로 접속 가능한 구조입니다."**
-
-### 쉽게 설명하면
-
-```
-Supabase DB = 인터넷 어디서든 접속 가능
-  → 집에서도 ✅
-  → 학교에서도 ✅
-  → LTE에서도 ✅
-  → GCP 서버에서도 ✅
-    (같은 DATABASE_URL 하나만 넣으면 됨)
-
-단, 학교/회사 네트워크에서 막히는 경우
-  → Direct 주소(db.xxx.supabase.co) 대신
-  → Pooler 주소(aws-xxx.pooler.supabase.com)로 우회 ← 이미 적용됨
+```json
+{
+  "db_mode": "postgresql"
+}
 ```
 
-### 증거로 말할 수 있는 것
-- `src/api/db.py` 주석: **"DATABASE_URL 있으면 PostgreSQL/Supabase, LTE 접속 가능"**
-- 실제 확인 방법: GCP/Railway에 서버 올리고 `/health` 응답에서 `"db_mode":"postgresql"` 나오면 증명
+`db_mode`가 `sqlite`로 나오면 Supabase가 연결되지 않은 상태지만, 서버 자체가 실패한 것은 아닙니다.
 
----
+## Q4. 발표 때 어떻게 말하나요?
 
-## 강사님께 바로 쓸 수 있는 답변 문장
+> DB는 기본 SQLite로 동작하고, GCP 환경변수에 Supabase 연결 문자열을 넣으면 PostgreSQL로 전환됩니다. 현재 핵심 서버는 `src.api.main:app` 하나이고, legacy의 `server_db`는 학습 기록입니다.
 
-> "Supabase는 로컬 Docker로 띄운 게 아니라 클라우드 프로젝트 Postgres에 붙이고 있고,
-> 연결은 psycopg로 connection string (Pooler 주소, SSL) 씁니다.
-> DB가 원래 외부에서 접속하는 호스티드 서비스라서,
-> 배포 서버에 같은 DATABASE_URL 넣으면 외부 접속 가능한 구조이고,
-> 실제 동작은 배포 후 /health API로 확인할 예정입니다."
-
----
-
-## 핵심 키워드 정리
+## 핵심 키워드
 
 | 용어 | 뜻 |
-|------|-----|
-| **호스티드(Hosted)** | Supabase 회사 서버에서 운영, 우리가 직접 관리 안 함 |
-| **Connection String** | `postgresql://user:pass@host/db` 형태 접속 주소 |
-| **Pooler 주소** | 학교망에서도 막히지 않는 우회 접속 주소 |
-| **Direct connection** | 일부 네트워크에서 막힐 수 있는 직접 접속 |
-| **psycopg** | Python에서 PostgreSQL 접속하는 라이브러리 |
+|---|---|
+| Hosted | Supabase가 운영하는 클라우드 DB |
+| Connection string | `postgresql://...` 형태 접속 주소 |
+| Pooler | 네트워크 제한을 우회하기 쉬운 연결 주소 |
+| SQLite fallback | 외부 DB 없이도 서버가 도는 기본 모드 |

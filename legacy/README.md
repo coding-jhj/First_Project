@@ -27,6 +27,7 @@ gcloud run deploy voiceguide --source . --region asia-northeast3 --memory 2Gi --
 |---|---|
 | `server_db/` | Supabase 연결 테스트용 과거 FastAPI 서버 |
 | `server_db_modified/` | 블러/도로 관련 실험 서버 |
+| `ngrok_reference.md` | GCP 이전 로컬 터널 참고 기록 |
 
 주의:
 

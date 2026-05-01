@@ -65,7 +65,7 @@ python tools\probe_server_link.py --base https://voiceguide-135456731041.asia-no
 | 문서/코드 | 현재 의미 |
 |---|---|
 | `GCP_DEPLOY_NOW.md`, `GCP_GUIDE.md`, `GCP_SERVER_SETUP.md` | 현재 배포 참고 문서 |
-| `NGROK_GUIDE.md` | 로컬 임시 시연용 참고. 주 배포 경로 아님 |
+| `../../legacy/ngrok_reference.md` | 과거 로컬 터널 참고 기록. 현재 서버 기준 아님 |
 | `SUPABASE_QNA.md`, `SERVER_GUIDE.md` | DB 학습/과거 실험 참고 |
 | `SERVER_ARCHITECTURE.md` | 과거 다중 서버 아이디어 참고. 현재 구조 아님 |
 | `legacy/server_db*` | 본 서버가 아닌 legacy 코드 |

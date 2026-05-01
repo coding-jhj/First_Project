@@ -13,16 +13,17 @@
 | [04_team/ROLE_GUIDE.md](04_team/ROLE_GUIDE.md) | 역할별 개발·조사 지침 |
 | [04_team/ANDROID_PERFORMANCE_GUIDE.md](04_team/ANDROID_PERFORMANCE_GUIDE.md) | Android FPS/오탐 개선 지침 |
 | [01_study/FUNCTION_LOGIC_STUDY.md](01_study/FUNCTION_LOGIC_STUDY.md) | 함수별 전체 로직 학습 |
+| [06_presentation/QA_SHEET.md](06_presentation/QA_SHEET.md) | 발표 Q&A 시트 |
 
 ## 역할별 바로가기
 
 | 담당 | 봐야 할 문서 | 코드 |
 |---|---|---|
 | 정환주 - 팀장/서버/프론트엔드 | `04_team/SERVER_AND_LEAD_ACTIONS.md`, `03_server/README.md` | `src/api/`, `templates/`, `README.md` |
-| 신유득 - Vision/ML | `01_study/FUNCTION_LOGIC_STUDY.md`, `07_debug/DETECTION_DEBUG.md` | `src/vision/`, `src/depth/`, `src/ocr/`, `train/` |
+| 신유득 - Vision/ML | `04_team/TODO_YOODK_VISION_ML.md`, `01_study/FUNCTION_LOGIC_STUDY.md`, `07_debug/DETECTION_DEBUG.md` | `src/vision/`, `src/depth/`, `src/ocr/`, `train/` |
 | 김재현 - Android/UX | `04_team/ANDROID_PERFORMANCE_GUIDE.md`, `01_study/FUNCTION_LOGIC_STUDY.md`, `07_debug/PERF_DEBUG.md` | `android/app/` |
 | 임명광 - NLG/서버 도움 | `04_team/ROLE_GUIDE.md`, `01_study/FUNCTION_LOGIC_STUDY.md` | `src/nlg/`, `src/api/routes.py` |
-| 문수찬 - Voice/Q&A | `06_presentation/`, `04_team/TEAM_BRIEFING.md` | `src/voice/`, 발표 Q&A 시트 |
+| 문수찬 - Voice/Q&A | `06_presentation/QA_SHEET.md`, `06_presentation/`, `04_team/TEAM_BRIEFING.md` | `src/voice/`, 발표 Q&A 시트 |
 
 ## 문서 폴더
 

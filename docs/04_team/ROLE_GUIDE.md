@@ -68,6 +68,7 @@
 | `src/depth/hazard.py` | `detect_floor_hazards` |
 | `src/ocr/bus_ocr.py` | `recognize_bus_number`, `_preprocess`, `_extract_bus_number` |
 | `tools/benchmark.py` | 평가 데이터 입력과 결과 출력 |
+| `docs/04_team/TODO_YOODK_VISION_ML.md` | 오탐/threshold/Depth fallback TODO |
 
 ### 코드 작성 기준
 
@@ -176,6 +177,7 @@
 | `src/voice/stt.py` | `_classify`, `extract_label`, `listen_and_classify` |
 | `src/voice/tts.py` | `_generate`, `speak`, `warmup_cache` |
 | `android/app/src/main/java/com/voiceguide/MainActivity.kt` | `initSpeechRecognizer`, `handleSttResult`, `speakBuiltIn`, `speakElevenLabs` |
+| `docs/06_presentation/QA_SHEET.md` | 발표 질문과 답변 |
 | `docs/06_presentation/INSTRUCTOR.md` | 강사님 설명용 요약 |
 | `docs/06_presentation/PRESENTATION_SCRIPT.md` | 발표 흐름 |
 

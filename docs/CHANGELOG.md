@@ -5,7 +5,7 @@
 ## 2026-04-30 (Android 장애물 인식/디버그 모드 긴급 수정)
 
 ### 장애물 인식이 서버 상태에 묶이던 문제 수정
-- **원인**: Android 앱에 서버 URL이 저장되어 있으면 기본 장애물 분석도 서버 경로로만 전송되어, ngrok/GCP/로컬 서버가 느리거나 꺼져 있으면 "장애물 인식이 전혀 안 되는" 것처럼 보였음
+- **원인**: Android 앱에 서버 URL이 저장되어 있으면 기본 장애물 분석도 서버 경로로만 전송되어, GCP/로컬 서버가 느리거나 꺼져 있으면 "장애물 인식이 전혀 안 되는" 것처럼 보였음
 - **수정**: `장애물`/`찾기` 모드는 서버 URL 저장 여부와 관계없이 온디바이스 ONNX를 우선 사용
 - 서버는 질문/색상/신호등/텍스트 등 서버 전용 기능이나 ONNX 실패 시 fallback 경로로 유지
 
@@ -61,9 +61,9 @@
 ## 2026-04-30 (GCP 배포 + EXIF 회전 버그 수정)
 
 ### GCP Cloud Run 배포로 전환
-- Railway → GCP Cloud Run으로 배포 플랫폼 전환
+- 외부 배포 기준을 GCP Cloud Run으로 통일
 - `railway.toml` 삭제
-- README.md에서 Railway 관련 URL·설명 제거, GCP 기준으로 통일
+- README.md에서 과거 외부 배포 URL·설명 제거, GCP 기준으로 통일
 
 ### Android 서버 전송 이미지 EXIF 회전 버그 수정 (치명적 버그)
 - **원인**: `optimizeImageForUpload()`가 `BitmapFactory.decodeFile()`로 이미지를 읽을 때 EXIF 회전 태그를 무시 → Android 카메라가 저장한 세로 사진이 90도 돌아간 가로 이미지로 GCP 서버에 전송됨 → YOLO가 회전된 이미지에서 아무것도 감지하지 못함
@@ -264,7 +264,7 @@
 - `tracker.py`: `update()`에서 `direction` 필드 누락 수정 → `get_current_state()` 방향 정보 포함
 - `routes.py`: `build_question_sentence` import 추가, 질문 모드 분기 추가
 
-### feature/nlg 브랜치 merge
+### NLG 브랜치 merge
 
 - myungkwang PR: 비프음 인식 수정, 바운딩박스 인식 오류 수정
 - `StairsDetector.kt` 추가
