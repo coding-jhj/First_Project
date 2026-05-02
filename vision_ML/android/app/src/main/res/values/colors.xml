@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="vg_bg">#0A0F1E</color>
+    <color name="vg_surface">#111827</color>
+    <color name="vg_panel">#1A2235</color>
+    <color name="vg_primary">#2563EB</color>
+    <color name="vg_primary_dark">#1D4ED8</color>
+    <color name="vg_mic">#059669</color>
+    <color name="vg_mic_active">#DC2626</color>
+    <color name="vg_text">#F1F5F9</color>
+    <color name="vg_text_sub">#94A3B8</color>
+    <color name="vg_text_hint">#475569</color>
+    <color name="vg_divider">#1E293B</color>
+    <color name="vg_overlay">#CC0A0F1E</color>
+</resources>

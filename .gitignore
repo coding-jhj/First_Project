@@ -1,5 +1,8 @@
-# API 키 / 환경 변수
+# API 키 / 환경 변수 — 실제 키가 담길 수 있는 파일은 모두 제외
 .env
+.env.*
+.env.example
+*.env
 
 # AI 모델 가중치 (용량 큼 — 별도 공유)
 *.pth
@@ -13,6 +16,7 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+.ultralytics/
 *.egg-info/
 dist/
 build/
@@ -33,6 +37,7 @@ datasets/
 
 # 학습 실행 결과 (로컬 전용)
 runs/
+flagged/
 
 # TTS 캐시 (자동 재생성)
 __tts_cache__/
@@ -43,4 +48,17 @@ voiceguide.db
 # Android 빌드 산출물
 android/app/build/
 android/.gradle/
+.gradle-*/
 android/local.properties
+서버_DB_수정/__pycache__/
+서버_DB_수정/%s
+서버_DB_수정/ConnectionPool
+서버_DB_수정/dict[str
+서버_DB_수정/RoadGlass
+
+# vision_ML/ (Phase 4 Vision·ML 작업 트리 — 중첩 빌드·로컬 설정)
+vision_ML/android/app/build/
+vision_ML/android/.gradle/
+vision_ML/android/local.properties
+# ** 패턴이 일부 UTF-8 경로에서 먹지 않아 디렉터리 단위로 제외
+vision_ML/data/test_images/
