@@ -87,7 +87,7 @@ docker --version
 ### 3단계: Dockerfile 확인
 
 프로젝트 루트에 `Dockerfile`이 이미 존재합니다 ✅  
-`requirements-server.txt`도 이미 존재합니다 ✅
+`requirements.txt`가 배포용으로 통합되어 있습니다 ✅
 
 > 자세한 배포 방법은 [GCP_DEPLOY_NOW.md](GCP_DEPLOY_NOW.md) 참조
 

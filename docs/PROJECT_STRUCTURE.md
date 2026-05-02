@@ -19,8 +19,7 @@
 |---|---|
 | `README.md` | 프로젝트 첫 진입 문서 |
 | `Dockerfile` | Cloud Run 컨테이너 빌드 |
-| `requirements-server.txt` | 서버 배포 의존성 |
-| `requirements.txt` | 전체 개발 의존성 |
+| `requirements.txt` | 전체 의존성 (개발 + 배포 통합) |
 | `start.bat`, `stop.bat` | 로컬 보조 스크립트 |
 | `.env.example` | 환경 변수 예시 |
 

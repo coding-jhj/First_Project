@@ -28,7 +28,7 @@ Dashboard
 | Platform | GCP Cloud Run |
 | Entry point | `src.api.main:app` |
 | Docker | `Dockerfile` |
-| Requirements | `requirements-server.txt` |
+| Requirements | `requirements.txt` |
 | Dashboard | `templates/dashboard.html` |
 
 ## Legacy

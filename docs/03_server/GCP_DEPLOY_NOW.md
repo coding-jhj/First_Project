@@ -183,7 +183,7 @@ cd VoiceGuide
 # Python 환경 설정
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements-server.txt
+pip install -r requirements.txt
 ```
 
 ### 5단계 — 서버 실행 (백그라운드)
