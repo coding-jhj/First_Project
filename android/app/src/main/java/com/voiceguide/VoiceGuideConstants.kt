@@ -39,7 +39,7 @@ val CLOCK_TO_DIRECTION = mapOf(
     "9시"  to "왼쪽",
     "10시" to "왼쪽 앞",
     "11시" to "왼쪽 앞",
-    "12시" to "바로 앞",    // 정면 — 가장 위험
+    "12시" to "바로",        // 정면 — 가장 위험 (Python templates.py CLOCK_TO_DIRECTION["12시"]와 동일)
     "1시"  to "오른쪽 앞",
     "2시"  to "오른쪽 앞",
     "3시"  to "오른쪽",

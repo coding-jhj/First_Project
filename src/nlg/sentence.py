@@ -138,7 +138,7 @@ def _format_dist(dist_m: float) -> str:
     """
     dist_m = max(0.1, min(dist_m, 15.0))
     if dist_m < 0.5:
-        return "코 앞"
+        return "코앞"
     if dist_m < 3.0:
         r = round(dist_m * 2) / 2          # 0.5m 단위
         r_str = f"{r:.1f}".rstrip("0").rstrip(".")
@@ -177,9 +177,7 @@ def _primary(obj: dict, abs_clock: str) -> str:
     )
 
     if is_critical:
-        # 수정 전: "위험! 바로 앞 약 3미터 앞에 자동차가 있어요! 멈추세요!"
-        # 수정 후: "위험, 바로 앞 자동차. 조심" (문장 간소화)
-        return f"위험! {direction} {name}! 조심"
+        return f"위험! {direction} 앞 {name}! 조심!"
 
     return f"{direction} {dist_str}에 {name}{ig} 있어요."
 
