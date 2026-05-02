@@ -90,8 +90,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private val inFlightCount = AtomicInteger(0)  // 동시 서버 요청 수 (최대 MAX_IN_FLIGHT)
     private var lastSentence = ""
     // TTS 완전 잠금 — compareAndSet으로만 시작 가능, onDone 후 해제
-    private val ttsBusy     = AtomicBoolean(false)
-    private val frameSeq    = AtomicInteger(0)
+    private val ttsBusy        = AtomicBoolean(false)
+    private val frameSeq       = AtomicInteger(0)
+    private val lastAppliedSeq = AtomicInteger(0)  // 마지막으로 UI에 반영한 응답 seq
 
     // ── 온디바이스 투표(Voting) 버퍼 ─────────────────────────────────────
     // 최근 5프레임 탐지 결과를 기록해 3회 이상 등장한 사물만 안내
@@ -293,7 +294,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             "https://voiceguide-1063164560758.asia-northeast3.run.app"
         private const val PREF_LOCATIONS   = "saved_locations"  // 저장 장소 JSON 배열 키
         private const val INTERVAL_MS      = 100L          // 캡처 간격: 0.1초 (10fps 목표)
-        private const val MAX_IN_FLIGHT    = 3             // 동시 서버 요청 최대 수
+        private const val MAX_IN_FLIGHT    = 2             // 동시 서버 요청 최대 수
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
         private const val FAIL_WARN_COUNT  = 3             // 연속 3회 실패 시 경고
         private const val GPS_SEND_INTERVAL_MS = 3000L     // 대시보드 위치 갱신 최소 간격
@@ -1679,6 +1680,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             handleFail()
             return
         }
+        // 이 요청의 seq — 응답이 오래된 것이면 UI 반영 생략
+        val mySeq = requestId.substringAfterLast('-').toIntOrNull() ?: Int.MAX_VALUE
 
         Thread {
             try {
@@ -1774,12 +1777,18 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         ))
                     }
                 }
-                runOnUiThread {
-                    if (serverDetections.isEmpty()) boundingBoxOverlay.clearDetections()
-                    else boundingBoxOverlay.setDetections(serverDetections, uploadImgW, uploadImgH)
+                // 더 최신 응답이 이미 반영됐으면 이 응답은 UI 갱신 생략
+                val isLatest = lastAppliedSeq.accumulateAndGet(mySeq) { cur, new -> if (new > cur) new else cur } == mySeq
+                if (isLatest) {
+                    runOnUiThread {
+                        if (serverDetections.isEmpty()) boundingBoxOverlay.clearDetections()
+                        else boundingBoxOverlay.setDetections(serverDetections, uploadImgW, uploadImgH)
+                    }
+                    handleSuccess(sentence, alertMode)
+                } else {
+                    Log.d("VG_FLOW", "stale response seq=$mySeq < applied=${lastAppliedSeq.get()}, skip UI")
+                    inFlightCount.decrementAndGet()
                 }
-
-                handleSuccess(sentence, alertMode)
             } catch (e: Exception) {
                 Log.e("VG_LINK", "request_id=$requestId server request failed", e)
                 handleFail()
