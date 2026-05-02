@@ -13,7 +13,7 @@ docs/00_실행/CMD_RUNBOOK.md
 ```bat
 cd /d C:\VoiceGuide\VoiceGuide
 gcloud run deploy voiceguide --source . --region asia-northeast3 --memory 2Gi --cpu 2 --timeout 120 --allow-unauthenticated --port 8080
-python tools\probe_server_link.py --base https://voiceguide-135456731041.asia-northeast3.run.app
+python tools\probe_server_link.py --base https://voiceguide-1063164560758.asia-northeast3.run.app
 ```
 
 Android Studio에서 열 폴더:

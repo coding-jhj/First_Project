@@ -43,7 +43,7 @@ gcloud logging read "resource.type=cloud_run_revision AND severity>=ERROR" --lim
 → `gcloud logging read`로 스택트레이스 확인. `/health` 엔드포인트 호출하면 DB 연결 상태와 Depth 모델 로드 여부가 바로 나옵니다. `global_exception_handler`가 있어서 에러가 나도 Android에는 음성 안내 문장이 반환됩니다.
 
 > "배포 후 어떻게 동작 확인해요?"  
-→ `python tools/probe_server_link.py --base https://voiceguide-135456731041.asia-northeast3.run.app` 실행하면 `/health`, `/detect`, `/status`, `/dashboard` 전부 자동 체크합니다.
+→ `python tools/probe_server_link.py --base https://voiceguide-1063164560758.asia-northeast3.run.app` 실행하면 `/health`, `/detect`, `/status`, `/dashboard` 전부 자동 체크합니다.
 
 ---
 

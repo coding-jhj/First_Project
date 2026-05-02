@@ -37,7 +37,7 @@ gcloud run deploy voiceguide --source . --region asia-northeast3 --memory 2Gi --
 배포 확인:
 
 ```bat
-python tools\probe_server_link.py --base https://voiceguide-135456731041.asia-northeast3.run.app
+python tools\probe_server_link.py --base https://voiceguide-1063164560758.asia-northeast3.run.app
 ```
 
 ## 주요 엔드포인트

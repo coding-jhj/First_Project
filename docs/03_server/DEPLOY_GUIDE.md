@@ -47,7 +47,7 @@ gcloud run deploy voiceguide --source . --region asia-northeast3 --memory 2Gi --
 배포 후 확인:
 
 ```bat
-python tools\probe_server_link.py --base https://voiceguide-135456731041.asia-northeast3.run.app
+python tools\probe_server_link.py --base https://voiceguide-1063164560758.asia-northeast3.run.app
 ```
 
 ## Android 연결
@@ -55,7 +55,7 @@ python tools\probe_server_link.py --base https://voiceguide-135456731041.asia-no
 Android 앱 설정의 서버 URL에는 Cloud Run 기본 URL만 입력합니다.
 
 ```text
-https://voiceguide-135456731041.asia-northeast3.run.app
+https://voiceguide-1063164560758.asia-northeast3.run.app
 ```
 
 `/detect`, `/health`, `/dashboard` 같은 경로는 앱이나 브라우저가 붙일 때만 사용합니다.
