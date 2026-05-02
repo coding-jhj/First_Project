@@ -234,9 +234,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     // ── GPS 하차 알림 + 현재 위치 (대시보드 지도용) ──────────────────────
     private var locationManager: android.location.LocationManager? = null
+    private lateinit var fusedLocationClient: com.google.android.gms.location.FusedLocationProviderClient
     private var targetBusStop: android.location.Location? = null
     @Volatile private var currentLat = 0.0  // 현재 GPS 위도 (서버 /detect 전송용)
     @Volatile private var currentLng = 0.0  // 현재 GPS 경도
+    @Volatile private var lastGpsSentTime = 0L
     private val locationListener = android.location.LocationListener { loc ->
         updateCurrentLocation(loc, "listener")
         // 하차 알림 처리
@@ -255,6 +257,19 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             "VG_GPS",
             "source=$source provider=${loc.provider} lat=$currentLat lng=$currentLng accuracy=${loc.accuracy}"
         )
+        sendGpsHeartbeat(source)
+    }
+
+    private fun handleLocationForGps(
+        loc: android.location.Location,
+        source: String,
+        enableArrivalAlert: Boolean = false
+    ) {
+        updateCurrentLocation(loc, source)
+        if (enableArrivalAlert && targetBusStop == null) {
+            targetBusStop = loc
+            speak("현재 위치를 하차 알림 기준 위치로 저장했어요.")
+        }
     }
 
     // ── ONNX 온디바이스 추론 ───────────────────────────────────────────
@@ -271,6 +286,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         private const val INTERVAL_MS      = 800L          // 캡처 간격: 0.8초 (빠른 응답)
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
         private const val FAIL_WARN_COUNT  = 3             // 연속 3회 실패 시 경고
+        private const val GPS_SEND_INTERVAL_MS = 3000L     // 대시보드 위치 갱신 최소 간격
         private const val CSV_LOG_ENABLED  = true          // 성능 CSV 로깅 (항상 활성화)
     }
 
@@ -307,6 +323,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
         sensorManager   = getSystemService(SENSOR_SERVICE) as SensorManager
         locationManager = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
+        fusedLocationClient = com.google.android.gms.location.LocationServices
+            .getFusedLocationProviderClient(this)
         initSpeechRecognizer()
         tryInitYoloDetector()
 
@@ -697,7 +715,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             }
             "하차알림" -> requestLocationPermission {
                 speak("현재 위치를 기준으로 200미터 이내에 도착하면 알려드릴게요.")
-                startGpsTracking()
+                startGpsTracking(enableArrivalAlert = true)
             }
             "unknown" -> speak("다시 말씀해 주세요.")
             else -> {
@@ -947,8 +965,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // ── GPS 하차 알림 ────────────────────────────────────────────────
 
     @Suppress("MissingPermission")
-    private fun startGpsTracking() {
+    private fun startGpsTracking(enableArrivalAlert: Boolean = false) {
         try {
+            Log.d(
+                "VG_GPS",
+                "start enableArrivalAlert=$enableArrivalAlert fine=${hasPerm(Manifest.permission.ACCESS_FINE_LOCATION)} coarse=${hasPerm(Manifest.permission.ACCESS_COARSE_LOCATION)} server=${getSavedServerUrl()}"
+            )
             val providers = listOf(
                 android.location.LocationManager.GPS_PROVIDER,
                 android.location.LocationManager.NETWORK_PROVIDER
@@ -969,22 +991,91 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 .maxByOrNull { it.time }
 
             if (lastLoc != null) {
-                updateCurrentLocation(lastLoc, "lastKnown")
-                targetBusStop = lastLoc
-                speak("현재 위치에서 200미터 이내로 돌아오면 알려드릴게요.")
+                handleLocationForGps(lastLoc, "lastKnown", enableArrivalAlert)
             } else {
                 Log.w("VG_GPS", "location not ready providers=$providers")
-                speak("GPS 신호를 찾는 중이에요. 잠시 후 다시 시도해 주세요.")
+                if (enableArrivalAlert) {
+                    speak("GPS 신호를 찾는 중이에요. 잠시 후 다시 시도해 주세요.")
+                }
             }
+
+            fusedLocationClient.lastLocation
+                .addOnSuccessListener { loc ->
+                    if (loc != null) {
+                        handleLocationForGps(loc, "fusedLast", enableArrivalAlert)
+                    } else {
+                        Log.w("VG_GPS", "fused lastLocation is null")
+                    }
+                }
+                .addOnFailureListener { e ->
+                    Log.e("VG_GPS", "fused lastLocation failed", e)
+                }
+
+            val tokenSource = com.google.android.gms.tasks.CancellationTokenSource()
+            fusedLocationClient.getCurrentLocation(
+                com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY,
+                tokenSource.token
+            )
+                .addOnSuccessListener { loc ->
+                    if (loc != null) {
+                        handleLocationForGps(loc, "fusedCurrent", enableArrivalAlert)
+                    } else {
+                        Log.w("VG_GPS", "fused currentLocation is null")
+                    }
+                }
+                .addOnFailureListener { e ->
+                    Log.e("VG_GPS", "fused currentLocation failed", e)
+                }
         } catch (e: Exception) {
             Log.e("VG_GPS", "GPS start failed", e)
-            speak("GPS를 사용할 수 없어요.")
+            if (enableArrivalAlert) {
+                speak("GPS를 사용할 수 없어요.")
+            }
         }
     }
 
     private fun stopGpsTracking() {
         locationManager?.removeUpdates(locationListener)
         targetBusStop = null
+    }
+
+    private fun sendGpsHeartbeat(source: String) {
+        if (!isAnalyzing.get()) return
+        if (currentLat == 0.0 && currentLng == 0.0) return
+
+        val now = System.currentTimeMillis()
+        if (now - lastGpsSentTime < GPS_SEND_INTERVAL_MS) return
+        lastGpsSentTime = now
+
+        val serverUrl = getSavedServerUrl().trimEnd('/')
+        if (serverUrl.isEmpty()) {
+            Log.d("VG_GPS", "skip heartbeat: server URL empty")
+            return
+        }
+
+        val lat = currentLat
+        val lng = currentLng
+        val requestId = "gps-$now"
+        Thread {
+            try {
+                val body = okhttp3.FormBody.Builder()
+                    .add("wifi_ssid", getWifiSsid())
+                    .add("lat", lat.toString())
+                    .add("lng", lng.toString())
+                    .add("request_id", requestId)
+                    .build()
+                val response = httpClient.newCall(
+                    Request.Builder().url("$serverUrl/gps").post(body).build()
+                ).execute()
+                Log.d(
+                    "VG_GPS",
+                    "heartbeat source=$source request_id=$requestId status=${response.code} lat=$lat lng=$lng"
+                )
+                response.close()
+            } catch (e: Exception) {
+                Log.e("VG_GPS", "heartbeat failed source=$source request_id=$requestId", e)
+            }
+        }.start()
     }
 
     /**
@@ -1031,10 +1122,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     /** GPS 기능(하차알림) 사용 시에만 위치 권한 요청 */
     private fun requestLocationPermission(onGranted: () -> Unit) {
-        if (hasPerm(Manifest.permission.ACCESS_FINE_LOCATION)) { onGranted(); return }
+        if (hasLocationPerm()) { onGranted(); return }
         locationPermissionCallback = onGranted
         ActivityCompat.requestPermissions(this,
-            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), PERM_CODE_LOCATION)
+            arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            ), PERM_CODE_LOCATION)
     }
 
     /** SOS 보호자 문자 설정 시에만 SMS 권한 요청 */
@@ -1047,6 +1141,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     private fun hasPerm(p: String) =
         ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
+
+    private fun hasLocationPerm(): Boolean =
+        hasPerm(Manifest.permission.ACCESS_FINE_LOCATION) ||
+            hasPerm(Manifest.permission.ACCESS_COARSE_LOCATION)
 
     private fun startCamera() {
         val future = ProcessCameraProvider.getInstance(this)
@@ -1074,12 +1172,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         detectionHistory.clear()  // 재시작 시 이전 투표 버퍼 초기화
         lastSentence = ""
         consecutiveFails.set(0)
+        lastGpsSentTime = 0L
         lastSuccessTime = System.currentTimeMillis()
         btnToggle.text = "■ 분석 중지"
         btnToggle.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFDC2626.toInt())
         tvStatus.text  = "분석 중..."
-        // GPS 시작 — 대시보드 지도에 위치 표시 및 /detect 요청에 lat/lng 포함
-        requestLocationPermission { startGpsTracking() }
+        // GPS 시작 — 대시보드 지도에 위치 표시. 하차 알림 문구/target 설정은 하지 않는다.
+        requestLocationPermission { startGpsTracking(enableArrivalAlert = false) }
         captureAndProcess()
         scheduleNext()
         scheduleWatchdog()
@@ -1737,9 +1836,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         when (requestCode) {
             PERM_CODE -> if (grantResults.all { it == PackageManager.PERMISSION_GRANTED }) startCamera()
             PERM_CODE_LOCATION -> {
-                if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+                if (hasLocationPerm()) {
+                    Log.d("VG_GPS", "location permission granted fine=${hasPerm(Manifest.permission.ACCESS_FINE_LOCATION)} coarse=${hasPerm(Manifest.permission.ACCESS_COARSE_LOCATION)}")
                     locationPermissionCallback?.invoke()
                 } else {
+                    Log.w("VG_GPS", "location permission denied")
                     speak("위치 권한이 없어요. 설정에서 허용해 주세요.")
                 }
                 locationPermissionCallback = null

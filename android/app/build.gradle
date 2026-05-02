@@ -65,6 +65,9 @@ dependencies {
     // OkHttp: 서버 /detect API HTTP 요청 (multipart/form-data 이미지 전송)
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 
+    // Google Play Services Location: GPS/Network/Fused 위치 획득
+    implementation 'com.google.android.gms:play-services-location:21.2.0'
+
     // ONNX Runtime — 온디바이스 YOLO 추론 (서버 없이 폰 단독 동작)
     implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.19.0'
 
