@@ -38,11 +38,18 @@ if _USE_YOLO_WORLD:
     _model.set_classes(_WORLD_CLASSES)
     print(f"[YOLO-World] 모델 로드: yolov8x-worldv2.pt ({len(_WORLD_CLASSES)}클래스)")
 else:
-    _src = "yolo11m_indoor.pt" if os.path.exists("yolo11m_indoor.pt") else "yolo11m.pt"
+    _src = os.environ.get("YOLO_MODEL_PATH") or (
+        "yolo11m_indoor.pt" if os.path.exists("yolo11m_indoor.pt") else "yolo11m.pt"
+    )
     _model = YOLO(_src)
     print(f"[YOLO] 모델 로드: {_src}")
 
 model = _model
+
+try:
+    YOLO_IMGSZ = int(os.environ.get("YOLO_IMGSZ", "640"))
+except ValueError:
+    YOLO_IMGSZ = 640
 
 # ── 방향 구역 (9구역, 시계 방향) ─────────────────────────────────────────────
 ZONE_BOUNDARIES = [
@@ -62,7 +69,7 @@ CONF_THRESHOLD = 0.50   # 야외 원거리 탐지 위해 낮게 유지
 
 CLASS_MIN_CONF = {
     # 야외 차량: 멀리서도 일찍 잡아야 (안전 우선)
-    "car": 0.38, "motorcycle": 0.38, "bus": 0.38, "truck": 0.38,
+    "car": 0.38, "motorcycle": 0.38, "truck": 0.38,
     "bicycle": 0.42, "train": 0.35,
     # 사람
     "person": 0.42,
@@ -74,11 +81,6 @@ CLASS_MIN_CONF = {
     # 실내 소형 (오탐 많아서 높게)
     "cell phone": 0.65, "remote": 0.65, "mouse": 0.65,
     "toothbrush": 0.70, "spoon": 0.70, "fork": 0.65,
-    # 계단: 키보드·에스컬레이터 등 계단형 패턴 오탐 방지
-    "stairs": 0.72,
-    # 실내 소형/오탐 잦은 클래스
-    "tie": 0.75, "umbrella": 0.68, "handbag": 0.65,
-    "wine glass": 0.70, "cup": 0.65, "bowl": 0.65,
 }
 
 # ── 방향별 위험도 가중치 ─────────────────────────────────────────────────────
@@ -99,7 +101,7 @@ RISK_DIST = {
 # 이동 차량 = 생명 위협 / 동물 = 돌발 행동 / 날카로운 것 = 부상 위험
 CLASS_RISK_MULTIPLIER = {
     # 이동 차량 (최고 위험)
-    "car": 3.0, "motorcycle": 3.0, "bus": 3.5, "truck": 3.5,
+    "car": 3.0, "motorcycle": 3.0, "truck": 3.5,
     "train": 4.0, "bicycle": 2.0, "airplane": 1.5, "boat": 1.5,
     # 이동 물체
     "skateboard": 2.0, "sports ball": 1.3,
@@ -127,7 +129,7 @@ TARGET_CLASSES = {
     "car":             "자동차",
     "motorcycle":      "오토바이",
     "airplane":        "비행기",
-    "bus":             "버스",
+    "bus":             "자동차",  # 버스 → 자동차로 통합 (버스 OCR 제거)
     "train":           "기차",
     "truck":           "트럭",
     "boat":            "보트",
@@ -359,11 +361,10 @@ def detect_objects(image_bytes: bytes) -> tuple[list[dict], dict]:
     # 이미지 바이트 → numpy 배열 → OpenCV 이미지
     nparr = np.frombuffer(image_bytes, np.uint8)
     img   = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    img   = cv2.flip(img, 1)   # 좌우 반전: 카메라 mirror 현상 보정 (오른쪽↔왼쪽 교정)
     h, w  = img.shape[:2]      # 이미지 높이, 너비
 
     # YOLO 추론: conf=CONF_THRESHOLD 미만 박스는 자동 필터링
-    results    = model(img, conf=CONF_THRESHOLD)[0]
+    results    = model(img, conf=CONF_THRESHOLD, imgsz=YOLO_IMGSZ, verbose=False)[0]
     all_detections = []
 
     for box in results.boxes:
@@ -414,8 +415,6 @@ def detect_objects(image_bytes: bytes) -> tuple[list[dict], dict]:
         is_vehicle = cls_name in {"car","motorcycle","bus","truck","train","bicycle","airplane","boat"}
         is_animal  = cls_name in {"dog","cat","horse","cow","sheep","bird","elephant","bear","zebra","giraffe"}
         is_dangerous = cls_name in {"knife","scissors","wine glass","baseball bat"}
-        is_bus     = cls_name == "bus"
-
         # 위험도 점수 계산:
         # risk = 방향가중치 × 거리가중치 × 바닥가중치 × 클래스배수
         # 예) 12시 방향 + 가까이 + 바닥 + 자동차:
@@ -427,6 +426,17 @@ def detect_objects(image_bytes: bytes) -> tuple[list[dict], dict]:
         )
         risk_score = min(risk_score, 1.0)  # 1.0 초과 방지
 
+        # 경고 레벨: Android에서 음성 vs 비프음 결정에 사용
+        # danger  → 즉시 음성 안내 (차량 접근, 칼 근처)
+        # warning → 음성 안내 (일반 장애물 가까이)
+        # info    → 비프음만 (멀리 있는 물체, 정보성)
+        if (is_vehicle and distance_m < 8.0) or (is_dangerous and distance_m < 3.0):
+            alert_level = "danger"
+        elif risk_score > 0.35 or distance_m < 1.5:
+            alert_level = "warning"
+        else:
+            alert_level = "info"
+
         # 색상 감지
         color = _detect_color(img, x1, y1, x2, y2)
 
@@ -434,9 +444,6 @@ def detect_objects(image_bytes: bytes) -> tuple[list[dict], dict]:
         traffic_light_state = None
         if cls_name == "traffic light":
             traffic_light_state = _detect_traffic_light_color(img, x1, y1, x2, y2)
-
-        # 버스 번호 인식 (bbox 상단 영역 OCR 준비용 crop 좌표 저장)
-        bus_crop = [x1, y1, x2, min(y1 + (y2-y1)//3, y2)] if is_bus else None
 
         all_detections.append({
             "class":                cls_name,
@@ -451,9 +458,9 @@ def detect_objects(image_bytes: bytes) -> tuple[list[dict], dict]:
             "is_vehicle":           is_vehicle,
             "is_animal":            is_animal,
             "is_dangerous":         is_dangerous,
+            "alert_level":          alert_level,
             "color":                color,
             "traffic_light_state":  traffic_light_state,
-            "bus_crop":             bus_crop,
         })
 
     scene = _compute_scene_analysis(all_detections)

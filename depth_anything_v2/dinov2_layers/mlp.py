@@ -3,6 +3,8 @@
 #
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
+#
+# Mlp: ViT 트랜스포머 블록의 피드포워드 네트워크 (Linear → GELU → Dropout → Linear)
 
 # References:
 #   https://github.com/facebookresearch/dino/blob/master/vision_transformer.py

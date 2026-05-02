@@ -1,306 +1,289 @@
-# VoiceGuide 작업 내역 (2026-04-27 최신)
+﻿# VoiceGuide 변경 이력
 
 ---
 
-## 2026-04-27 후반 수정 (조장 정환주)
+## 2026-04-30 (Android 장애물 인식/디버그 모드 긴급 수정)
 
-```bash
-git pull origin main
-pip install -r requirements.txt  # websockets 버전 업데이트 포함
-```
+### 장애물 인식이 서버 상태에 묶이던 문제 수정
+- **원인**: Android 앱에 서버 URL이 저장되어 있으면 기본 장애물 분석도 서버 경로로만 전송되어, GCP/로컬 서버가 느리거나 꺼져 있으면 "장애물 인식이 전혀 안 되는" 것처럼 보였음
+- **수정**: `장애물`/`찾기` 모드는 서버 URL 저장 여부와 관계없이 온디바이스 ONNX를 우선 사용
+- 서버는 질문/색상/신호등/텍스트 등 서버 전용 기능이나 ONNX 실패 시 fallback 경로로 유지
+
+### 온디바이스 탐지 민감도 및 계단 보조 탐지 보강
+- `YoloDetector.kt`: confidence threshold `0.50 → 0.35`로 완화해 어두운 환경/흔들림에서 놓침 감소
+- `YoloDetector.kt`: 최대 반환 박스 `5 → 8`로 확대
+- `MainActivity.kt`: `StairsDetector` 결과를 ONNX 탐지 결과에 합쳐 온디바이스에서도 계단 후보를 볼 수 있게 연결
+
+### 설정/디버그 모드 진입 보강
+- 설정 버튼 클릭 시 AlertDialog 생성 실패를 `VG_SETTINGS` 로그와 Toast로 표시
+- 설정 버튼 길게 누르기로 디버그 오버레이를 즉시 켜고 끌 수 있는 우회 경로 추가
+
+---
+
+## 2026-04-30 (GCP 배포 완료 + 가이드라인 전 Phase 반영 + 다수 버그 수정)
+
+### GCP Cloud Run 서버 배포 완료
+- 서버 URL: `https://voiceguide-1063164560758.asia-northeast3.run.app`
+- `Dockerfile`, `requirements-server.txt`, `.dockerignore` 추가
+- 콜드스타트 방지: `min-instances=1` 설정
+- 빌드 오류 수정: `libgl1-mesa-glx` → `libgl1`, `speech_recognition` 조건부 import
+
+### start.bat 인코딩 오류 수정
+- 한글 echo 문 → 영문으로 교체 (Windows CMD UTF-8 파싱 오류)
+- `conda run -n ai_env` 방식 → `call activate.bat` 방식으로 변경 (안정성 향상)
+
+### Android 서버 fallback 수정 (장애물 인식 안 되는 버그)
+- **원인**: 서버 URL 있으면 무조건 서버만 시도 → GCP 콜드스타트(30~60초) 타임아웃 → 아무것도 인식 못 함
+- **수정**: 서버 실패 시 온디바이스(ONNX) 자동 fallback 추가
+- `currentFile` 변수로 optimized 파일 추적 → 서버 실패 후 파일 유효성 보장
+
+### captureAndProcess() 서버 우선 구조로 변경
+- **기존**: `yoloDetector != null` 이면 무조건 온디바이스 (서버 URL 입력해도 서버 안 씀)
+- **당시 수정**: 서버 URL 있으면 서버 우선, 실패하면 온디바이스 fallback
+- **현재 상태(위 긴급 수정 이후)**: `장애물`/`찾기`는 ONNX 우선, 서버 전용 기능만 서버 사용
+
+### BoundingBoxOverlay BuildConfig 오류 수정
+- `BuildConfig` import 제거, confidence % 항상 숨김 (Android Studio 빌드 오류 해결)
+
+### 가이드라인(06_student_development_guideline.md) 전 Phase 반영
+- Phase 1: `server_db/`, `server_db_modified/` → `legacy/` 이동
+- Phase 3: 권한 분리 (카메라/마이크 즉시, GPS/SMS는 기능 사용 시), STT fallback `unknown`
+- Phase 3.5: `_INFO_ONLY_KO` 추가 (키보드/TV 등 비위험 물체 "위험!" 제거), beep 구간 2.5~7m
+- Phase 4: `benchmark.py` Precision/Recall/F1 측정 함수 추가
+- Phase 5: API Key Bearer 토큰 인증, CORS 미들웨어, snapshots 정리 정책
+- Phase 6: 테스트 integration/demo 마커 분리
+- Phase 7: bbox 위험도 색상(빨강/노랑/초록), 버튼 주/보조 계층, contentDescription
+- `INTERVAL_MS` 50→700ms, `VOTE_MIN_COUNT` 1→2
+- `routes.py` 색상 모드 전용 분기, STT/서버 Log.d 디버그 추가
+
+---
+
+## 2026-04-30 (GCP 배포 + EXIF 회전 버그 수정)
+
+### GCP Cloud Run 배포로 전환
+- 외부 배포 기준을 GCP Cloud Run으로 통일
+- `railway.toml` 삭제
+- README.md에서 과거 외부 배포 URL·설명 제거, GCP 기준으로 통일
+
+### Android 서버 전송 이미지 EXIF 회전 버그 수정 (치명적 버그)
+- **원인**: `optimizeImageForUpload()`가 `BitmapFactory.decodeFile()`로 이미지를 읽을 때 EXIF 회전 태그를 무시 → Android 카메라가 저장한 세로 사진이 90도 돌아간 가로 이미지로 GCP 서버에 전송됨 → YOLO가 회전된 이미지에서 아무것도 감지하지 못함
+- **증상**: GCP 서버 연결은 정상(729ms 응답)이지만 항상 "장애물 없음" 반환
+- **수정**: `BitmapFactory.decodeFile()` → `decodeBitmapUpright()`로 교체 (EXIF 회전 보정 적용)
+- **참고**: 온디바이스 경로는 이미 `decodeBitmapUpright()` 사용 중이었으나 서버 전송 경로만 누락되어 있었음
+
+---
+
+## 2026-04-29 (디버깅 세션 — TTS·바운딩박스·분석중지 전면 수정)
+
+### TTS 무음 버그 3개 수정
+- **Bug 1 — `/tts` 엔드포인트 HTTP 200 에러**: ElevenLabs 키 없을 때 `{"error":...}` JSON을 HTTP 200으로 반환 → Android가 성공으로 착각 → JSON을 MP3로 저장 → MediaPlayer 실패 → 무음. 수정: API 키 체크 제거, gTTS 폴백 사용, 실패 시 400/500 반환
+- **Bug 2 — `speak()` ElevenLabs 라우팅 누락**: 서버 URL 입력 시 `speakElevenLabs()` 분기가 없어서 항상 `speakBuiltIn()` 호출. `isSpeaking()`은 `isElevenLabsSpeaking`을 체크하는데 실제로는 `ttsBusy`가 쌓여 문장이 조용히 버려짐. 수정: `isSpeaking() = ttsBusy || isElevenLabsSpeaking`으로 통합
+- **Bug 3 — Gradio 데모 브라우저 무음**: `speak()`가 서버 머신 스피커로만 재생 → 브라우저 사용자 못 들음. 수정: `gr.Audio(autoplay=True)` 출력 추가, MP3 경로 반환
+
+### 서버 첫 요청 느림 + "분석 실패" 반복 수정
+- **원인**: 서버 시작 시 Depth V2 모델 미로드 → 첫 `/detect` 요청에서 모델 로딩(10~30초) → Android 8초 timeout 초과 → 연속 실패
+- **수정**: `src/api/main.py` lifespan에 `_load_model()` 워밍업 추가 (YOLO 워밍업에 이어 Depth V2도 서버 시작 시 로드)
+- Android `connectTimeout` 5s→10s, `readTimeout` 8s→20s
+
+### 바운딩박스 물체 사라져도 유지되는 버그 수정
+- **원인**: `sendToServer()` 서버 응답의 `objects` 배열을 무시 → 박스 갱신 코드 없음
+- **수정**: 서버 응답 `objects` JSON 파싱 → `Detection`으로 변환 → `boundingBoxOverlay` 즉시 갱신. `objects` 빈 배열이면 `clearDetections()`
+- `isSending` 안전망 추가: `finally`에 `isSending.set(false)` → 예외 발생 시 데드락 방지
+
+### 분석 중지 버튼 미작동 수정
+- **원인**: `handleSuccess()`가 `isAnalyzing` 체크 없이 백그라운드 Thread 완료 후에도 TTS 호출
+- **수정**: `handleSuccess()` 첫 줄에 `if (!isAnalyzing.get()) return` 추가
+
+### 첫 감지 느림 + 새 물체 전환 느림 수정
+- **원인 1**: `startAnalysis()` 재시작 시 `detectionHistory` 미초기화 → 이전 세션 투표 버퍼 잔존
+- **원인 2**: `VOTE_MIN_COUNT = 2` → 물체가 2프레임 연속 감지돼야 안내 (400~800ms 지연)
+- **수정**: `detectionHistory.clear()` 추가, `VOTE_MIN_COUNT` 2→1 (첫 프레임 즉시 통과)
+
+---
+
+## 2026-04-29 (강사 미팅 피드백 즉일 반영)
+
+### FPS 최적화 (10fps 목표)
+- `YoloDetector.kt`: NNAPI 하드웨어 가속 추가 (DSP/NPU) → 추론 속도 향상
+- CPU 스레드 4개 병렬 처리 (`setIntraOpNumThreads(4)`)
+- 캡처 간격: 1000ms → **100ms** (10fps 목표 — 실제 FPS는 추론 속도에 의해 결정)
+- FPS < 10 시 Logcat 경고 자동 출력 (`tag:VG_PERF`)
+
+### FPS 시각화 + 구조화 로그
+- FPS 스파크라인 그래프 추가: `2.1fps ▄▃▅▄▃▅ | 180ms` 형태로 tvMode에 표시
+- 최근 10프레임 FPS 히스토리 관리
+- 구조화 성능 로그 추가 (`tag:VG_PERF`):
+  ```
+  decode|12|infer|180|dedup|3|total|195|objs|2
+  mode|server|server_ms|243|net_ms|89|total|332
+  ```
+
+### STT 딜레이 수정 (3초 → 1초 이내)
+- 침묵 감지 시간: 1200ms → **700ms**
+- 가능한 침묵: 1000ms → **500ms**
+- WEB_SEARCH 모델 사용 (짧은 명령어 최적화)
+- 후보 3개로 키워드 매칭률 향상
+
+### TTS 소리 안나는 버그 수정 (2단계)
+- **1차 원인**: 서버 URL 입력 시 ElevenLabs TTS 자동 호출 → API 키 없으면 무음
+  - 수정: `speak()` 함수가 항상 Android 내장 TTS 사용
+- **2차 원인(진짜 원인)**: 오토리슨(`isListening=true`)이 항상 켜져있어서 `speak()`가 항상 차단됨
+  - 수정: `speak()` 호출 시 STT를 `cancel()`로 즉시 중단 후 TTS 재생 → 소리 후 오토리슨 자동 재시작
+
+### UI 전면 개선
+- 카메라 풀스크린 레이아웃 (기존: 화면 일부)
+- 하단 둥근 패널 오버레이 (bg_bottom_panel)
+- 분석 중지 시 버튼 빨간색, STT 중 마이크 빨간색 (상태 시각화)
+- 앱 아이콘: 마이크 + 음파 디자인으로 변경
+- 바운딩박스: 새 캡처 시작 시 즉시 클리어 (지연 제거)
+
+### GCP 서버 가이드
+- `docs/GCP_SERVER_SETUP.md` 추가: 강사 지정 스펙 (GPU 없음, 30GB 이하, 서울 리전, Ubuntu 22)
+- `docs/MEETING_0429_INSTRUCTOR_FEEDBACK.md` 추가: 미팅 전체 내용 기록
+
+---
+
+## 2026-04-28 (4차 — TTS 완전 잠금 + 거리 기반 음성/비프 + 오인식 추가 수정)
+
+### TTS 완전 겹침 차단
+- `ttsBusy` AtomicBoolean 도입: `compareAndSet(false, true)` 실패 시 신규 TTS 버림
+- `UtteranceProgressListener.onDone` 후 700ms 뒤 잠금 해제
+- 차량만 `immediate=true`로 강제 획득(QUEUE_FLUSH) → 다른 사물은 현재 TTS 끝날 때까지 대기
+- `isSpeaking()`을 `ttsBusy` 기반으로 단순화
+
+### 거리 기반 음성/비프 분리
+- 가까이(bbox 8% 이상) → 음성 안내 (이미 말해줬어도 아직 가까이면 계속 안내)
+- 멀리(bbox 8% 미만) → 비프 (인지용)
+- 차량·칼 등 위험 → 항상 음성
+- 비프: `TONE_PROP_BEEP2`, 볼륨 100%, 400ms
+
+### 여러 사물 전부 안내
+- 문장을 `voiceDetections`만이 아닌 `voted` 전체로 생성 (가까운 순 정렬)
+- 멀리 있는 사물도 문장에 포함됨
+
+### 오인식 추가 수정
+- class 63(노트북) 제거 — 스피커·모니터 오인식 빈번
+- class 72(냉장고) 제거 — 벽 오인식 빈번
+- class 77(인형) 이미 제거됨
+
+### 찾기 모드 수정
+- `voteFilter`에서 찾기 모드는 쿨다운 우회
+- `extractFindTarget`: 공백 정규화 + 키워드 확대 ("어딨어", "어딨나" 등)
+
+### 경고 피로 수정
+- 클래스별 5초 쿨다운: 같은 사물 5초 내 재발화 차단
+- critical 5초 쿨다운: 같은 경고문 5초 내 재발화 차단
+- TTS 종료 후 700ms 침묵 (말 끝나자마자 다음 말 시작 방지)
+
+### 재방문 자동 알림
+- `checkRevisit()`: 30초마다 WiFi SSID 확인 → 저장 장소 일치 시 "○○에 도착했어요." 안내
+- 같은 SSID 중복 알림 방지
+
+---
+
+## 2026-04-28 (3차 — 계단 제거 + Voting 온디바이스 + 오인식 재수정)
+
+### 계단 감지 전면 제거 (강사님 피드백)
+- Android: `VoiceGuideConstants.kt` class 80(계단) 제거, `StairsDetector` 호출 제거
+- Android: `SentenceBuilder.kt` 계단 우선순위 로직 제거
+- Server: `detect.py` stairs 클래스·필터·상수 전체 제거
+- Server: `tracker.py` 계단 즉시통과 로직 제거
+
+### 온디바이스 Voting 버퍼 추가 (경고 피로 방지)
+- `MainActivity.kt`에 deque 기반 `voteFilter()` 추가
+  - 최근 5프레임 기록, 3회 이상 등장한 사물만 TTS 안내
+  - 차량·칼 등 위험 클래스는 즉시 통과
+  - `YoloDetector.kt` `.take(2)` → `.take(5)` (투표 입력 확대)
+  - `SentenceBuilder.kt` 최종 출력 `.take(3)` (상위 3개 안내)
+
+### TTS 겹침 수정
+- `critical` 브랜치: 같은 문장이 이미 재생 중이면 재시작 안 함
+
+### 오인식 재수정 (폰→인형 추가 교정)
+- `prepare_cellphone.py`: `teddy_bear(77)` → `cell_phone(67)` 교정 추가
+- `VoiceGuideConstants.kt`: class 77(인형) 탐지 대상에서 제거
+- 파인튜닝 재실행
+
+---
+
+## 2026-04-28 (2차 — 오인식 수정 + PyTorch GPU 셋업)
 
 ### 버그 수정
 
-| 파일 | 수정 내용 |
-|------|---------|
-| `src/vision/detect.py` | `stairs` 최소 신뢰도 0.50→0.72 (키보드 계단 오탐 방지) |
-| `src/vision/detect.py` | `tie`·`umbrella`·`handbag`·`wine glass`·`cup`·`bowl` 신뢰도 상향 (실내 오탐) |
-| `src/voice/tts.py` | ElevenLabs SDK 완전 제거 → gTTS 기본, Naver Clova 준비 |
-| `src/api/routes.py` | `/tts` 엔드포인트 추가 (Android 앱 TTS용 mp3 반환) |
-| `requirements.txt` | `websockets>=12.0,<13.0` (ElevenLabs SDK websockets 충돌 해결) |
-| `android/.../MainActivity.kt` | `isListening` 플래그 — STT 중 TTS 차단, STT 시작 시 TTS 즉시 중단 |
-| `android/.../MainActivity.kt` | `promptAutoStart` 폴링 방식 — TTS 끝난 후 STT 시작 ("네" 무반응 해결) |
-| `android/.../MainActivity.kt` | `ttsRequestId` — stale 재생 방지 (겹침 완전 해결) |
-| `android/.../MainActivity.kt` | `lastDetectionTime` — 탐지 텍스트 3초 유지 후 "장애물 없음" 전환 |
-| `android/.../MainActivity.kt` | `speakElevenLabs` → `ttsExecutor` 직렬화 + MediaPlayer 단일 인스턴스 |
+- **휴대폰 → 노트북 오인식 수정** (YOLO 파인튜닝)
+  - 원인: YOLO11m이 phone 화면을 laptop(class 63)으로 오분류
+  - 해결: 휴대폰/노트북 이미지 348장 수집 → laptop 탐지 결과를 cell_phone(67)으로 교정 라벨링 → 파인튜닝
+  - 결과: mAP50 0.624 → **0.748** 향상
+  - 기존 계단 모델(`yolo11m_indoor.pt`)에서 이어받아 계단 정확도 보존
 
-### TTS 구조 변경
+- **목소리 겹침 미수정 원인 파악**
+  - `c:/VoiceGuide/android/`(구버전, `suppressPeriodicUntil` 없음) vs `c:/VoiceGuide/VoiceGuide/android/`(신버전) 폴더 혼동
+  - → 신버전 폴더(`VoiceGuide/android/`)로 빌드해야 3초 TTS 억제 적용됨
 
-- **서버**: gTTS(무료) 기본 → `.env`에 `NAVER_CLIENT_ID`/`NAVER_CLIENT_SECRET` 추가 시 Naver Clova 자동 전환
-- **앱**: 서버 URL 있으면 서버 `/tts` mp3 스트리밍, 없으면 Android 내장 TTS
+### 파인튜닝 파이프라인 추가
+
+- `train/prepare_cellphone.py` — DuckDuckGo 이미지 수집 + laptop→cell_phone 라벨 교정
+- `train/finetune_cellphone.py` — `yolo11m_indoor.pt` 기반, lr=5e-5 / 25 에포크
+- `tools/export_onnx.py` — ONNX 변환 후 두 android 폴더(`VoiceGuide/android/`, `../android/`) 동시 갱신
+
+### 환경 설정
+
+- PyTorch CPU→GPU 전환: `torch 2.4.1+cpu` → `torch 2.11.0+cu128` (RTX 5060 Blackwell 지원)
+- ONNX Runtime Android 업그레이드: `1.17.3` → `1.19.0` (PyTorch 2.11 내보낸 opset 18 모델 호환)
 
 ---
 
-> 팀원 공유용 — 오늘 추가/수정된 내용 전체 정리
+## 2026-04-28
 
----
+### 신규 기능
 
-## 2026-04-27 변경 내역
+- **질문 모드** (`"질문"` STT 키워드) — "지금 뭐가 있어?" 즉시 응답
+  - 기존 버그: STT → "장애물" → else 분기 → "장애물 모드."만 말하고 종료
+  - 수정: 즉시 캡처 + tracker 누적 상태 포함 포괄 응답
 
-**git pull 후 아래 명령어 실행해주세요.**
+- **보팅(Voting) 방식 경고 피로 방지**
+  - `VotingBuffer`: 최근 10프레임 중 60%+ 탐지된 물체만 확정
+  - 차량·계단은 안전 우선으로 보팅 없이 즉시 통과
 
-```bash
-git pull origin main
-pip install -r requirements.txt
-```
+- **실시간 대시보드** (`GET /dashboard`)
+  - Leaflet.js + OpenStreetMap 다크 테마 지도
+  - GPS 이동 경로(polyline), 탐지 물체 위험도 카드
+  - 2초 폴링 자동 갱신
 
-### 팀원 브랜치 반영 (조장 정환주)
+- **GPS 위치 연동**
+  - Android `currentLat`/`currentLng` 상시 업데이트
+  - `/detect` 전송 시 lat/lng 포함 → DB 저장 (`gps_history` 테이블)
+  - `/status/{session_id}` 엔드포인트 — 현재 tracker 상태 + GPS 경로 반환
 
-| 브랜치 | 팀원 | 반영 내용 |
-|--------|------|---------|
-| `feature/tts` | 문수찬 | gTTS → **ElevenLabs TTS** 교체 (Anna Kim 보이스, eleven_multilingual_v2 모델, 캐시 유지) |
-| `feature/nlg` | 임명광 | `get_alert_mode()` 경고 피로 방지 / `피해가세요→피하세요` 문구 / 고양이 동물 목록 추가 / `_secondary()` 정보 과다 방지 / `build_find_sentence()` 문장 자연스럽게 / **바운딩박스 오버레이** (`BoundingBoxOverlay.kt`) / 차량 경고 문구 "즉시→잠깐" |
-| `feature/api` | 신유득 | **Supabase/PostgreSQL FastAPI 서버** (`서버_DB/`) — items CRUD + DB 저장 엔드포인트 / `.env.example` DB 변수 추가 / `requirements.txt` psycopg 추가 |
-
-### 보안
-
-- **ElevenLabs API 키** 하드코딩 → `.env` 환경변수로 이동
-- `git filter-repo`로 전체 히스토리에서 키 완전 제거 후 force push
-- `.env.example`에 `ELEVENLABS_API_KEY`, `OPENAI_API_KEY` 항목 추가
+- **서버 테스트 스크립트** (`tests/test_server.py`)
+  - 9개 엔드포인트 자동 테스트 (장애물/질문/찾기/저장/GPS/대시보드 등)
 
 ### 버그 수정
 
-| 파일 | 수정 내용 |
-|------|---------|
-| `src/voice/tts.py` | `client.generate()` → `client.text_to_speech.convert()` (ElevenLabs SDK v2 호환) |
-| `src/api/routes.py` | `alert_level`/`beep` → `alert_mode` 통일 |
-| `android/.../MainActivity.kt` | `beep` 필드 → `alert_mode` 읽도록 수정 (breaking bug 해결) |
-| `requirements.txt` | `elevenlabs`, `easyocr`, `python-dotenv`, `websockets>=10.0,<13.0` 추가 |
-| `src/api/main.py` | 서버 시작 시 `load_dotenv()` 호출 |
+- `MainActivity`: "장애물"/"확인" STT 시 즉시 `captureAndProcess()` 호출 (기존: 다음 주기까지 대기)
+- `tracker.py`: `update()`에서 `direction` 필드 누락 수정 → `get_current_state()` 방향 정보 포함
+- `routes.py`: `build_question_sentence` import 추가, 질문 모드 분기 추가
 
-### 기능 강화
+### NLG 브랜치 merge
 
-| 항목 | 내용 |
-|------|------|
-| **alert_mode 3단계** | `critical` — 말 중이어도 끊고 1.25× 빠르게 즉각 경고 |
-| | `beep` — 비프음만 재생, TTS 없음 (경고 피로 방지) |
-| | `silent` — 무음, UI만 업데이트 |
-| **TTS 캐시 워밍업** | 서버 시작 시 자주 쓰는 문장 10개 미리 생성 (첫 요청 지연 방지) |
+- myungkwang PR: 비프음 인식 수정, 바운딩박스 인식 오류 수정
+- `StairsDetector.kt` 추가
+- `BoundingBoxOverlay.kt`: FILL_CENTER 변환으로 bbox 정확도 개선
+- `YoloDetector.kt`: 레터박스 처리 개선
 
 ---
 
-## 요약 (2026-04-26)
+## 2026-04-27
 
-기존 MVP 위에 AI 성능 강화·Android 기능 완성·안전성 개선·문서 전면 업데이트를 진행했습니다.  
-**git pull 후 아래 설치 명령어 실행해주세요.**
+### 신규 기능
 
-```bash
-git pull origin main
-pip install ddgs pygame onnx onnxscript
-```
+- **경고 계층 분리** — critical/beep/silent 3단계 alert_mode
+- **TTS 목소리 겹침 완전 해결** — `ttsRequestId`로 stale 재생 차단
+- **Naver Clova Voice** — `.env`의 `NAVER_CLIENT_ID`/`SECRET` 설정 시 자동 전환
+- **stairs 오탐 방지** — 최소 신뢰도 0.50 → 0.72
 
-> **`depth_anything_v2_vits.pth`** (94MB) — 각자 받아야 합니다 → `SETUP.md` 3단계 참고
->
-> **`yolo11m_indoor.pt`** (파인튜닝 모델, 39MB) — `.gitignore`로 git 미포함. 아래 둘 중 하나:
-> - 방법 A (권장): 직접 학습 (~9분, GPU 필요)
->   ```bash
->   python train/prepare_dataset.py   # 데이터 다운로드
->   python train/finetune.py          # 학습 → yolo11m_indoor.pt 자동 생성
->   ```
-> - 방법 B: 조장에게 구글드라이브로 파일 받기
+### 강사님 피드백 반영
 
----
-
-## 1. AI 모델
-
-### YOLO11m 파인튜닝 — 계단 클래스 추가
-
-기존 YOLO11m에는 계단 클래스가 없었습니다.  
-DuckDuckGo로 계단 이미지 404장을 수집하고 자동 라벨링 후 직접 학습했습니다.
-
-| 항목 | 내용 |
-|------|------|
-| 학습 데이터 | 계단 이미지 404장 (자동 수집·라벨링) |
-| 학습 시간 | RTX 5060 GPU, 약 9분 |
-| 계단 mAP50 | **0.992** (정밀도 91.7%, 재현율 100%) |
-| 결과 모델 | `yolo11m_indoor.pt` |
-
-- `src/vision/detect.py` — `yolo11m_indoor.pt` 자동 로드, 없으면 `yolo11m.pt` fallback
-- `TARGET_CLASSES`에 `stairs → 계단` 추가
-- 계단은 항상 `is_ground_level=True` 처리 (위험도 상향)
-
----
-
-### Depth Anything V2 — GPU 활성화
-
-기존에 주석으로 비활성화되어 있던 Depth V2를 완전히 켰습니다.
-
-- `depth_anything_v2_vits.pth` 파일 있으면 자동 로드, 없으면 bbox 기반 자동 fallback
-- GPU(CUDA) 자동 감지, CPU도 지원
-- 이미지당 depth map 1회 추론 (bbox별 반복 제거 → 속도 최적화)
-- **안전 우선**: bbox 내 하위 30% 깊이값 사용 → 실제보다 약간 가깝게 추정 → 조기 경고
-
----
-
-### 깊이 맵 기반 계단·낙차·턱 감지 — 신규 (`src/depth/hazard.py`)
-
-YOLO가 잡지 못하는 계단을 Depth V2 출력만으로 감지합니다.
-
-- 이미지 하단 60% 바닥 영역을 12구역으로 분석
-- 깊이 급증(>1.2m) → 낙차/계단 하강 경고
-- 깊이 급감(>1.0m) → 턱/계단 상승 경고
-- 좌우가 중앙보다 가까우면 좁은 통로 경고
-
-```
-"조심! 0.7m 앞에 계단이나 낙차가 있어요. 멈추세요."
-"발 앞에 턱이나 계단이 있어요. 약 0.8m."
-```
-
----
-
-### 객체 추적기 — 신규 (`src/api/tracker.py`)
-
-프레임마다 튀는 거리값을 EMA(지수이동평균)로 안정화합니다.
-
-- 거리 평활화 (α=0.55): 1.2m→1.8m→1.1m 튀는 것을 1.3m→1.4m→1.35m으로 안정화
-- 접근 감지: 0.4m 이상 가까워지면 "사람이 가까워지고 있어요" 자동 생성
-- 소멸 감지: 4초간 미탐지 + 3m 이내였던 물체 → "의자가 사라졌어요" 자동 생성
-
----
-
-## 2. Android 앱
-
-### 캡처 간격 단축
-
-**2초 → 1초** (INTERVAL_MS = 1000L)
-
-### STT 음성 명령 — 신규
-
-| 명령어 | 전환 모드 |
-|--------|---------|
-| "주변 알려줘", "앞에 뭐 있어" | 장애물 모드 |
-| "찾아줘", "어디 있어" | 찾기 모드 |
-| "이거 뭐야", "뭐야" | 확인 모드 |
-
-초록 "음성 명령" 버튼으로 실행합니다.
-
-### 카메라 방향 자동 감지 — 신규
-
-가속도 센서(TYPE_ACCELEROMETER)로 폰 기울기를 실시간 감지합니다.
-
-| 기울기 | 감지 방향 |
-|--------|---------|
-| 세로 정상 | front |
-| 세로 뒤집힘 | back |
-| 가로 왼쪽 | left |
-| 가로 오른쪽 | right |
-
-기존 하드코딩 `"front"` 제거 — 이제 서버에 실제 방향 자동 전송합니다.
-
-### ONNX 온디바이스 추론 — 신규
-
-`android/app/src/main/assets/yolo11m.onnx` 파일이 있으면 서버 없이 폰 단독으로 탐지합니다.
-
-- 서버 있을 때: 서버 추론 (Depth V2 포함, 더 정확)
-- 서버 없을 때: 온디바이스 ONNX 추론 자동 전환
-- 계단 탐지 시 "조심! 앞에 계단이 있어요." 최우선 출력
-
-ONNX 파일 생성 방법:
-```bash
-python export_tflite.py
-```
-
-### Failsafe 안전 경고 — 신규
-
-| 상황 | 동작 |
-|------|------|
-| 서버 3회 연속 실패 | "서버 연결이 끊겼어요. 주의해서 이동하세요." 음성 |
-| 6초간 결과 없음 | "분석이 중단됐어요. 주의해서 이동하세요." 음성 |
-| 카메라 오류 | "카메라를 사용할 수 없어요. 주의하세요." 음성 |
-
-네트워크 타임아웃도 단축했습니다 (15초→5초, 30초→8초).
-
-### UI 추가
-
-- 초록 "음성 명령" 버튼
-- 모드/방향 상태 표시 텍스트 (`모드: 장애물 | 방향: 정면`)
-
----
-
-## 3. 서버
-
-### NLG 문장 품질 개선 (`src/nlg/sentence.py`)
-
-거리 기반 긴박도 4단계 — 기존의 텍스트 라벨(가까이/보통) 대신 실제 미터값으로 판단합니다.
-
-| 거리 | 출력 예시 |
-|------|---------|
-| 0.5m 미만 | `"위험! 바로 앞 의자!"` |
-| 0.5~1.0m | `"멈추세요! 바로 앞에 의자가 있어요. 약 70cm."` |
-| 1.0~2.5m | `"바로 앞에 의자가 있어요. 약 1.2m. 멈추세요."` |
-| 2.5m 이상 | `"바로 앞에 의자가 있어요. 약 3.0m."` |
-
-바닥 장애물 전용 문장도 추가했습니다.
-```
-"조심! 발 아래 배낭. 오른쪽으로 피해가세요."
-```
-
-### 서버 안전성
-
-- **전역 예외 핸들러** — 서버 오류 시에도 Android에 `"분석 중 오류가 발생했어요. 주의해서 이동하세요."` 반환
-- **FastAPI lifespan** — 기존 deprecated `on_event` 방식 교체
-
-### TTS 캐시 (`src/voice/tts.py`)
-
-같은 문장은 `__tts_cache__/` 폴더에 MP3로 저장해 다음부터 네트워크 없이 즉시 재생합니다.
-
-### Gradio 데모 개선 (`app.py`)
-
-- 장애물/찾기/확인 모드 라디오 버튼 추가
-- 탐지 결과 이미지에 바운딩 박스 시각화
-- 추론 시간(ms), Depth V2 사용 여부 표시
-- 계단/낙차 감지 시 화면 하단 빨간 배너 표시
-
----
-
-## 4. 버그 수정
-
-| 버그 | 수정 내용 |
-|------|---------|
-| Android 앱 크래시 | `yolo11n.onnx` → `yolo11m.onnx` 파일명 불일치 수정 |
-| 거리 긴급도 오판 | area_ratio 라벨 대신 distance_m 직접 사용 |
-| 거리 99.9m 표시 | area_ratio=0일 때 10.0m로 cap |
-| Gradio 방향 오표시 | `"far_left"` 등 잘못된 키 → `CLOCK_TO_DIRECTION` 직접 사용 |
-| 테스트 3개 실패 | fixture 누락(`conftest.py` 추가), direction 값 오류 수정 |
-| "가방" 중복 | handbag→핸드백, backpack→배낭으로 구분 |
-| FastAPI 경고 | deprecated `on_event` → `lifespan` 방식 교체 |
-
----
-
-## 5. 테스트
-
-**12/12 전부 통과** (`pytest tests/`)
-
-새로 추가된 테스트:
-- `stairs` 클래스 포함 확인
-- `hazards` 응답 필드 확인
-- `/stt` 엔드포인트 확인
-- direction 값 `8시~4시` 기준으로 수정
-
----
-
-## 6. 문서
-
-| 파일 | 수정 내용 |
-|------|---------|
-| `docs/INSTRUCTOR.md` | 강사님 설명 스크립트 현재 구현 기준 전면 재작성 |
-| `docs/PRESENTATION.md` | **신규** — 발표 스크립트, 경쟁사 비교, Q&A |
-| `docs/CODE_FLOW.md` | **신규** — 코드 흐름 이해 가이드 |
-| `docs/CALIBRATION_TEST.md` | **신규** — 거리 실측 보정 방법 |
-| `docs/mvp_checklist.md` | 미완성 → 전부 완료, 파인튜닝·계단·Failsafe 추가 |
-| `docs/PROJECT_GUIDE.md` | 미완성 섹션 제거, 현재 기능 목록으로 교체 |
-| `docs/TECH.md` | 파이프라인 YOLO11n→11m, left/center/right→8시~4시 교체 |
-| `docs/troubleshooting.md` | CONF 0.45→0.60, 계단 오류 항목 추가 |
-| `SETUP.md` | 캡처 2초→1초, 모델 다운로드, APK 무선 설치 추가 |
-| `README.md` | YOLO11n→11m, 파이프라인 최신화 |
-
----
-
-## 7. 변경되지 않은 것
-
-- 기존 Android 앱 핵심 구조 (CameraX, OkHttp, TTS)
-- FastAPI 엔드포인트 `/detect`, `/spaces/snapshot` 인터페이스
-- SQLite DB 스키마
-- 한국어 조사 처리 로직 (이/가, 을/를)
-- 기존 커밋 히스토리
-- `RESEARCH.md`, `TEAM.md`, `PRD.md` (초기 기획 문서 — 역사 보존)
+- 거리 수치("약 1.2m") → 상대 표현("가까이/바로 코앞") 전환
+- 타겟 유저: 전맹(완전 시각 장애) 명확화
+- 방향 좌우 반전 버그 수정 (`cv2.flip`)

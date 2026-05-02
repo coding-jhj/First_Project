@@ -17,46 +17,84 @@ object SentenceBuilder {
     // object = 싱글톤 (인스턴스 생성 없이 SentenceBuilder.build() 로 바로 호출)
 
     // 차량: 이동 중이라 같은 거리라도 의자보다 훨씬 위험 → 별도 처리
-    private val VEHICLE_CLASSES = setOf("자동차", "오토바이", "버스", "트럭", "기차", "자전거")
-    private val ANIMAL_CLASSES  = setOf("개", "말")
+    private val VEHICLE_CLASSES = setOf("자동차", "오토바이", "트럭", "기차", "자전거")
+    // 고양이 추가: Python _ANIMAL_KO = {"개", "말", "고양이"} 와 동기화
+    private val ANIMAL_CLASSES  = setOf("개", "말", "고양이")
+
+    // 생활 물체: bbox가 화면을 꽉 채워도 "위험!" 금지
+    // 이유: "위험! 바로 앞에 키보드가 있어요!"는 자동차·계단 경고와 혼동돼 신뢰도를 낮춤
+    // Python sentence.py의 _EVERYDAY_KO와 동일 목록 — 양쪽 파일을 항상 함께 수정할 것
+    private val EVERYDAY_CLASSES = setOf(
+        "의자", "소파", "침대", "테이블", "벤치", "화분",
+        "키보드", "마우스", "노트북", "TV", "리모컨",
+        "책", "시계", "꽃병", "인형", "우산", "넥타이",
+        "숟가락", "포크", "그릇", "컵", "병", "유리잔",
+        "바나나", "사과", "샌드위치", "오렌지", "핫도그", "피자", "도넛", "케이크",
+        "전자레인지", "오븐", "토스터기", "세면대", "냉장고", "칫솔", "드라이기"
+    )
+
+    // ── 방향 안정화 (hysteresis) ───────────────────────────────────────────
+    // 문제: cx 값이 프레임마다 조금씩 달라져 "오른쪽" ↔ "오른쪽 앞" 등이 반복 전환되면
+    //       sentence != lastSentence 조건으로 TTS가 매 프레임 발화됨.
+    // 해결: 클래스별 마지막 안정 방향을 캐싱하고, 새 방향이 2칸 이상 벗어날 때만 갱신.
+    private val stableClock = mutableMapOf<String, String>()
+
+    // ZONE_BOUNDARIES 순서와 동일하게 유지해야 clockDistance()가 정확함
+    private val CLOCK_ORDER = listOf("8시", "9시", "10시", "11시", "12시", "1시", "2시", "3시", "4시")
+
+    /** 방향 캐시 거리 계산 (두 클락 간 존 개수 차이) */
+    private fun clockDistance(a: String, b: String): Int {
+        val ai = CLOCK_ORDER.indexOf(a)
+        val bi = CLOCK_ORDER.indexOf(b)
+        return if (ai < 0 || bi < 0) 0 else kotlin.math.abs(ai - bi)
+    }
+
+    /**
+     * 흔들림 방지 방향 조회.
+     * 이전 방향에서 2존(약 22% 화면 폭) 이상 벗어나야 방향 갱신.
+     * 경계 근처에서 cx 값이 조금씩 달라져도 방향이 고정됨.
+     */
+    private fun getStableClock(classKo: String, cx: Float): String {
+        val newClock = getClock(cx)
+        val prev = stableClock[classKo]
+        if (prev == null || clockDistance(prev, newClock) >= 2) {
+            stableClock[classKo] = newClock
+        }
+        return stableClock[classKo]!!
+    }
+
+    /** 모드 전환·분석 재시작 시 방향 캐시 초기화 */
+    fun clearStableClocks() { stableClock.clear() }
 
     // ── 장애물 안내 문장 (기본 장애물 모드) ───────────────────────────────────
 
     /**
      * 탐지된 물체 목록에서 안내 문장을 생성.
-     * 우선순위: 가까운 차량 > 계단 > 일반 장애물
+     * 우선순위: 가까운 차량 > 일반 장애물 (최대 3개)
      *
-     * @param detections YoloDetector.detect()의 반환값
+     * @param detections 투표 필터를 통과한 Detection 목록
      * @return TTS로 읽을 한국어 문장
      */
     fun build(detections: List<Detection>): String {
         if (detections.isEmpty()) return "주변에 장애물이 없어요."
 
         // 1순위: bbox 면적 4% 이상인 가까운 차량 (야외 최고 위험)
-        // 면적 4% = 이미지의 1/25 크기 이상 → 꽤 가까이 있는 차량
         val nearVehicle = detections.firstOrNull {
             it.classKo in VEHICLE_CLASSES && it.w * it.h > 0.04f
         }
         if (nearVehicle != null) {
-            val clock   = getClock(nearVehicle.cx)
+            val clock   = getStableClock(nearVehicle.classKo, nearVehicle.cx)
             val dir     = CLOCK_TO_DIRECTION[clock] ?: clock
             val action  = DIRECTION_ACTION[clock] ?: "즉시 멈추세요"
             val distStr = formatDist(nearVehicle.w, nearVehicle.h)
             val ig      = josaIGa(nearVehicle.classKo)
-            return "위험! ${dir}에 ${nearVehicle.classKo}${ig} 있어요! $distStr. 즉시 $action!"
+            return "위험! ${distStr} ${nearVehicle.classKo}! 조심!"
         }
 
-        // 2순위: 계단 (파인튜닝으로 추가된 클래스)
-        val stairs = detections.firstOrNull { it.classKo == "계단" }
-        if (stairs != null) {
-            val clock  = getClock(stairs.cx)
-            val action = DIRECTION_ACTION[clock] ?: "조심하세요"
-            return "조심! 앞에 계단이 있어요. $action."
-        }
-
-        // 3순위: 일반 장애물 — 상위 2개까지 문장 생성
+        // 2순위: 일반 장애물 — 최대 2개까지 문장 생성
+        // 수정 전: take(3) — Python objects[:2]와 불일치, 3문장은 TTS가 길어 중간 정보를 놓침
         val parts = detections.take(2).mapIndexed { idx, det ->
-            val clock     = getClock(det.cx)
+            val clock     = getStableClock(det.classKo, det.cx)
             val dir       = CLOCK_TO_DIRECTION[clock] ?: clock
             val distStr   = formatDist(det.w, det.h)
             val ig        = josaIGa(det.classKo)
@@ -67,19 +105,24 @@ object SentenceBuilder {
             val base = when {
                 // 차량: 멀어도 "접근 중" 경고
                 det.classKo in VEHICLE_CLASSES ->
-                    "조심! ${dir}에 ${det.classKo}${ig} 접근 중이에요. $distStr. $action."
+                    "조심! ${dir} ${distStr}에 ${det.classKo}${ig} 접근 중이에요. $action."
                 // 동물: "천천히" 어조
                 isAnimal ->
-                    "조심! ${dir}에 ${det.classKo}${ig} 있어요. $distStr. 천천히 $action."
-                // 면적 25% 이상 = 바로 코앞 → "위험!" 긴박
+                    "조심! ${dir} ${distStr}에 ${det.classKo}${ig} 있어요. 천천히 $action."
+                // 면적 25% 이상 + 생활 물체 아님 → "위험!" 긴박
+                // 수정 전: 생활 물체(키보드·TV 등)도 "위험!" 붙는 버그
+                // 수정 후: EVERYDAY_CLASSES는 아무리 커도 일반 안내로 처리
+                areaRatio > 0.25f && det.classKo !in EVERYDAY_CLASSES ->
+                    "위험! ${dir} ${distStr}에 ${det.classKo}${ig} 있어요. $action."
+                // 면적 25% 이상이지만 생활 물체 — 긴급 표현 없이 안내
                 areaRatio > 0.25f ->
-                    "위험! ${dir}에 ${det.classKo}${ig} 있어요. $distStr. $action."
+                    "${dir} ${distStr}에 ${det.classKo}${ig} 있어요. $action."
                 // 면적 12% 이상 = 가까이 → 방향 + 거리 + 행동
                 areaRatio > 0.12f ->
-                    "${dir}에 ${det.classKo}${ig} 있어요. $distStr. $action."
+                    "${dir} ${distStr}에 ${det.classKo}${ig} 있어요. $action."
                 // 그 외 = 멀리 → 방향 + 거리만
                 else ->
-                    "${dir}에 ${det.classKo}${ig} 있어요. $distStr."
+                    "${dir} ${distStr}에 ${det.classKo}${ig} 있어요."
             }
 
             // 두 번째 물체는 "~도 있어요" 형태 (첫 번째와 구분)
@@ -104,20 +147,42 @@ object SentenceBuilder {
         // target 이름을 포함하는 물체 검색 (부분 일치: "의자" ⊂ "휠체어" 도 매칭)
         val found = detections.firstOrNull { it.classKo.contains(target) }
         if (found != null) {
-            val clock   = getClock(found.cx)
+            val clock   = getStableClock(found.classKo, found.cx)
             val dir     = CLOCK_TO_DIRECTION[clock] ?: clock
             val distStr = formatDist(found.w, found.h)
             val un      = josaUnNeun(target)
-            return "${target}${un} ${dir}에 있어요. $distStr."
+            // 수정 전: "${target}${un} ${dir}에 있어요. $distStr."
+            //           → "소파는 왼쪽 앞에 있어요. 약 2미터 앞." (거리 분리로 TTS 억양 부자연스러움)
+            // 수정 후: Python build_find_sentence() 포맷과 동일
+            //           → "소파는 왼쪽 앞 약 2미터 앞에 있어요."
+            val base    = "${target}${un} ${dir} ${distStr}에 있어요."
+
+            // target을 찾았어도 더 가까운 위험 물체가 있으면 경고 추가.
+            // 조건: target이 아닌 물체이면서, target보다 면적(=거리) 50% 이상 크고, 12% 이상인 것
+            val targetArea   = found.w * found.h
+            val closerHazard = detections.firstOrNull { d ->
+                !d.classKo.contains(target) &&
+                d.w * d.h > targetArea * 1.5f &&
+                d.w * d.h > 0.12f
+            }
+            return if (closerHazard != null) {
+                val hClock   = getStableClock(closerHazard.classKo, closerHazard.cx)
+                val hDir     = CLOCK_TO_DIRECTION[hClock] ?: hClock
+                val hDistStr = formatDist(closerHazard.w, closerHazard.h)
+                val hIg      = josaIGa(closerHazard.classKo)
+                "$base 단, ${hDir} ${hDistStr}에 ${closerHazard.classKo}${hIg} 있으니 주의하세요."
+            } else {
+                base
+            }
         }
 
         // 못 찾음 → 없다고 하고 주변 상황 안내
-        val un = josaUnNeun(target)
+        val ig = josaIGa(target)
         return if (detections.isNotEmpty()) {
             val scene = build(detections.take(1))
-            "${target}${un} 보이지 않아요. 카메라를 천천히 돌려보세요. $scene"
+            "${target}${ig} 없어요. 다른 곳을 보여주세요. $scene"
         } else {
-            "${target}${un} 보이지 않아요. 카메라를 천천히 돌려보세요."
+            "${target}${ig} 없어요. 다른 곳을 보여주세요."
         }
     }
 
@@ -162,20 +227,20 @@ object SentenceBuilder {
     }
 
     /**
-     * 거리를 상대 표현으로 변환.
-     * 서버(sentence.py)의 _format_dist와 동일한 표현 사용.
-     * 카메라 단안으로 정확한 미터 측정 불가 → 상대 표현이 더 정직함.
+     * 거리를 "약 Xm 앞" 형식으로 변환 — 서버 sentence.py의 _format_dist와 동일.
+     * 3m 미만: 0.5m 단위 / 3m 이상: 1m 단위 반올림
      */
     fun formatDist(w: Float, h: Float): String {
-        // bbox 면적 기반 거리 근사 (calib=0.12 가정 — 보통 물체 기준)
-        val area  = w * h
-        val distM = if (area > 0) sqrt(0.12f / area) else 99f
-        return when {
-            distM < 0.5f -> "바로 코앞"
-            distM < 1.0f -> "매우 가까이"
-            distM < 2.5f -> "가까이"
-            distM < 5.0f -> "조금 멀리"
-            else         -> "멀리"
+        val area   = w * h
+        val rawM   = if (area > 0) sqrt(0.12f / area) else 99f
+        val distM  = rawM.coerceIn(0.1f, 15.0f)
+        if (distM < 0.5f) return "바로 코앞"
+        return if (distM < 3.0f) {
+            val r = kotlin.math.round(distM * 2) / 2.0f
+            val str = if (r % 1.0f == 0.0f) r.toInt().toString() else "%.1f".format(r)
+            "약 ${str}미터 앞"
+        } else {
+            "약 ${kotlin.math.round(distM)}미터 앞"
         }
     }
 
@@ -221,14 +286,17 @@ object SentenceBuilder {
         return label.trim()
     }
 
-    /** "의자 찾아줘" → "의자" 추출 */
+    /** "의자 찾아줘" / "의자 찾아 줘" → "의자" 추출 */
     fun extractFindTarget(text: String): String {
         val remove = listOf(
-            "찾아줘", "찾아", "어디있어", "어디 있어", "어디야",
-            "어딘지", "어디에 있어", "어디에 있나", "있는지 알려줘"
+            "찾아줘", "찾아 줘", "찾아", "어디있어", "어디 있어", "어디야",
+            "어딘지", "어디에 있어", "어디에 있나", "있는지 알려줘",
+            "어디 있나", "어딨어", "어딨나", "위치", "알려줘"
         )
-        var target = text
-        remove.forEach { target = target.replace(it, "") }
+        // 공백 정규화 후 키워드 제거
+        var target = text.replace("\\s+".toRegex(), " ").trim()
+        remove.sortedByDescending { it.length }  // 긴 키워드부터 제거 (부분 겹침 방지)
+              .forEach { target = target.replace(it, "") }
         return target.trim()
     }
 }

@@ -17,20 +17,88 @@ Android 앱과 Gradio 데모가 호출하는 API 엔드포인트를 정의합니
   - 이미지가 필요 없는 모드(저장/위치목록)는 빠르게 처리하고 반환
 """
 
+import asyncio
+import os
 from datetime import datetime
 
-from fastapi import APIRouter, UploadFile, Form
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, UploadFile, Form, Header, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
+
+# ── API Key 인증 ────────────────────────────────────────────────────────────
+# .env에 API_KEY=비밀값 설정 시 민감 API 요청에 Authorization: Bearer <키> 또는 X-API-Key 필요
+# API_KEY 미설정 시 인증 없음 (로컬 개발 모드)
+_API_KEY = os.getenv("API_KEY", "")
+
+def _verify_api_key(
+    authorization: str = Header(default=""),
+    x_api_key: str = Header(default=""),
+) -> None:
+    if not _API_KEY:
+        return  # 키 미설정 = 개발 모드, 인증 건너뜀
+    if authorization == f"Bearer {_API_KEY}" or x_api_key == _API_KEY:
+        return
+    raise HTTPException(status_code=401, detail="Invalid or missing API key")
 from src.depth.depth import detect_and_depth
 from src.nlg.sentence import (
     build_sentence, build_hazard_sentence, build_find_sentence,
-    build_navigation_sentence, get_alert_mode, _i_ga, _un_neun,
+    build_navigation_sentence, build_question_sentence, get_alert_mode, _i_ga, _un_neun,
 )
 from src.api import db
 from src.api.tracker import get_tracker
 from src.voice.stt import extract_label
 
 router = APIRouter()
+
+# ── 세션별 마지막 문장 캐시 (TTS 중복 방지) ────────────────────────────────────
+# 같은 세션에서 동일 문장이 5초 이내에 반복되면 alert_mode를 "silent"로 내려보냄
+# → Android에서 TTS를 새로 재생하지 않음 (UI 업데이트만)
+# "critical" 수준 (차량·계단)은 항상 통과
+import time as _time
+_last_sentence: dict[str, tuple[str, float]] = {}  # session_id → (sentence, timestamp)
+_DEDUP_SECS = 5.0   # 같은 문장 억제 시간
+
+
+def _with_perf(
+    payload: dict,
+    t0: float,
+    request_id: str,
+    detect_ms: int = 0,
+    tracker_ms: int = 0,
+) -> dict:
+    """Android/더미 클라이언트가 서버 연동을 검증할 수 있게 공통 성능 필드 추가."""
+    process_ms = int((_time.monotonic() - t0) * 1000)
+    nlg_ms = max(0, process_ms - detect_ms - tracker_ms)
+    payload.update({
+        "request_id": request_id,
+        "process_ms": process_ms,
+        "perf": {
+            "detect_ms": detect_ms,
+            "tracker_ms": tracker_ms,
+            "nlg_ms": nlg_ms,
+            "total_ms": process_ms,
+        },
+    })
+    print(
+        f"[LINK] request_id={request_id} mode={payload.get('mode', '')} "
+        f"sentence={payload.get('sentence', '')[:40]!r}"
+    )
+    print(
+        f"[PERF] request_id={request_id} detect={detect_ms}ms | "
+        f"tracker={tracker_ms}ms | nlg+rest={nlg_ms}ms | "
+        f"TOTAL={process_ms}ms | objs={len(payload.get('objects', []))}"
+    )
+    return payload
+
+def _should_suppress(session_id: str, sentence: str, alert_mode: str) -> bool:
+    """같은 문장이 최근 N초 내에 이미 전달됐으면 억제 여부 반환."""
+    if alert_mode == "critical":  # 위험 경고는 항상 발화
+        _last_sentence[session_id] = (sentence, _time.monotonic())
+        return False
+    prev_sentence, prev_ts = _last_sentence.get(session_id, ("", 0.0))
+    if sentence == prev_sentence and (_time.monotonic() - prev_ts) < _DEDUP_SECS:
+        return True  # 억제
+    _last_sentence[session_id] = (sentence, _time.monotonic())
+    return False
 
 
 def _space_changes(current: list[dict], previous: list[dict]) -> list[str]:
@@ -54,13 +122,16 @@ def _space_changes(current: list[dict], previous: list[dict]) -> list[str]:
     return changes
 
 
-@router.post("/detect")
+@router.post("/detect", dependencies=[Depends(_verify_api_key)])
 async def detect(
     image:              UploadFile,
-    wifi_ssid:          str = Form(""),        # 공간 기억 + 장소 저장에 사용
-    camera_orientation: str = Form("front"),   # 방향 보정: front/back/left/right
-    mode:               str = Form("장애물"),  # STT가 결정한 모드
-    query_text:         str = Form(""),        # STT 원문 (찾기/저장 모드에서 추출에 사용)
+    wifi_ssid:          str   = Form(""),        # 공간 기억 + 장소 저장에 사용
+    camera_orientation: str   = Form("front"),   # 방향 보정: front/back/left/right
+    mode:               str   = Form("장애물"),  # STT가 결정한 모드
+    query_text:         str   = Form(""),        # STT 원문 (찾기/저장 모드에서 추출에 사용)
+    lat:                float = Form(0.0),       # GPS 위도 (대시보드 지도용)
+    lng:                float = Form(0.0),       # GPS 경도 (대시보드 지도용)
+    request_id:         str   = Form(""),        # 클라이언트-서버 로그 상관관계 확인용
 ):
     """
     VoiceGuide 메인 분석 API.
@@ -71,42 +142,36 @@ async def detect(
       나머지     → 이미지 분석 (YOLO + Depth V2 + 문장 생성)
     """
 
-    # ── 저장 모드: 이미지 없이 즉시 처리 ────────────────────────────────────
-    # "여기 저장해줘 편의점" → query_text에서 "편의점" 추출 → DB 저장
-    if mode == "저장":
-        label = extract_label(query_text) or f"위치_{datetime.now().strftime('%H%M')}"
-        if not wifi_ssid:
-            # WiFi 없으면 공간 ID를 알 수 없어 저장 불가
-            return {
-                "sentence":     "WiFi에 연결되어 있지 않아 저장할 수 없어요.",
-                "objects": [], "hazards": [], "changes": [], "depth_source": "none",
-            }
-        db.save_location(label, wifi_ssid)
-        return {
-            "sentence":     build_navigation_sentence(label, "save"),
-            "objects": [], "hazards": [], "changes": [], "depth_source": "none",
-        }
+    _t0 = _time.monotonic()
+    request_id = request_id or f"srv-{int(_t0 * 1000)}"
+    session_id = wifi_ssid or "__default__"
+    print(
+        f"[LINK] request_id={request_id} START mode={mode} "
+        f"session={session_id} lat={lat} lng={lng}"
+    )
 
-    # ── 위치목록 모드: DB 조회 후 즉시 반환 ──────────────────────────────────
-    if mode == "위치목록":
-        locations = db.get_locations(wifi_ssid)  # wifi_ssid 있으면 해당 위치 장소만
-        return {
-            "sentence":    build_navigation_sentence("", "list", locations=locations),
-            "locations":   locations,
-            "objects": [], "hazards": [], "changes": [], "depth_source": "none",
-        }
+    # 저장/위치목록 모드는 실험 기능으로 제거됨 (개인 네비게이팅 기능 비활성화)
 
-    # ── 이미지 분석 공통 흐름 (장애물/찾기/확인 모드) ────────────────────────
+    # ── 이미지 분석 공통 흐름 (장애물/찾기/확인/질문 모드) ───────────────────
     image_bytes = await image.read()  # multipart form에서 이미지 바이트 추출
 
+    # GPS 위치 기록 (대시보드 지도 표시용) — 좌표가 있을 때만 저장
+    if lat != 0.0 or lng != 0.0:
+        db.save_gps(session_id, lat, lng)
+
     # YOLO 탐지 + Depth V2 거리 추정 + 바닥 위험 감지
-    # 내부적으로 이미지당 깊이 맵 1회만 추론해서 효율적으로 처리
-    objects, hazards, scene = detect_and_depth(image_bytes)
+    # run_in_executor: CPU-bound 작업을 별도 스레드에서 실행 → FastAPI 이벤트 루프 차단 방지
+    # 동시 요청이 들어와도 다른 요청을 처리할 수 있음 (Phase 8 - STUDENT_DEVELOPMENT_GUIDELINE)
+    _t_detect = _time.monotonic()
+    loop = asyncio.get_event_loop()
+    objects, hazards, scene = await loop.run_in_executor(None, detect_and_depth, image_bytes)
+    _detect_ms = int((_time.monotonic() - _t_detect) * 1000)
 
     # EMA 추적기: 프레임 간 거리 흔들림 제거 + 접근 감지
-    # wifi_ssid가 없으면 "__default__" 세션으로 처리
-    tracker = get_tracker(wifi_ssid or "__default__")
+    _t_tracker = _time.monotonic()
+    tracker = get_tracker(session_id)
     objects, motion_changes = tracker.update(objects)
+    _tracker_ms = int((_time.monotonic() - _t_tracker) * 1000)
 
     # 공간 기억: 이전 방문과 비교해서 달라진 것 감지
     previous = db.get_snapshot(wifi_ssid)
@@ -115,30 +180,72 @@ async def detect(
 
     all_changes = motion_changes + space_changes
 
+    # ── 질문 모드: 사용자가 직접 "지금 뭐가 있어?" 물었을 때 즉시 응답 ──────
+    # 핵심 버그 수정: 기존엔 질문해도 periodic capture를 기다렸음.
+    # 이제 tracker에 누적된 최근 상태 + 현재 프레임을 합쳐 즉시 응답.
+    if mode == "질문":
+        tracked = tracker.get_current_state(max_age_s=3.0)
+        sentence = build_question_sentence(objects, hazards, scene, tracked, camera_orientation)
+        alert_mode = get_alert_mode(objects[0], is_hazard=bool(hazards)) if objects else (
+            "critical" if hazards else "silent"
+        )
+        return _with_perf({
+            "mode": mode,
+            "sentence":    sentence,
+            "alert_mode":  alert_mode,
+            "objects":     objects,
+            "hazards":     hazards,
+            "changes":     motion_changes,
+            "scene":       scene,
+            "tracked":     tracked,
+            "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
+        }, _t0, request_id, _detect_ms, _tracker_ms)
+
     # ── 식사 도우미 모드: 식기·음식 위치 집중 안내 ──────────────────────────
     if mode == "식사":
         sentence = _build_meal_sentence(objects)
-        return {
+        return _with_perf({
+            "mode": mode,
             "sentence":    sentence,
             "objects":     objects,
             "hazards":     [],
             "changes":     [],
             "alert_mode":  "silent",
             "depth_source": objects[0].get("depth_source","bbox") if objects else "bbox",
-        }
+        }, _t0, request_id, _detect_ms, _tracker_ms)
+
+    # ── 색상 모드: 가장 큰 물체의 색상 안내 ─────────────────────────────────
+    if mode == "색상":
+        if objects:
+            top = objects[0]  # 위험도 기준 1위 (가장 크거나 가까운 물체)
+            color = top.get("color", "")
+            name  = top.get("class_ko", "물체")
+            sentence = f"{name}는 {color} 계열이에요." if color else f"{name}의 색상을 인식하지 못했어요."
+        else:
+            sentence = "색상을 확인할 물체가 보이지 않아요. 카메라를 물체에 가까이 대주세요."
+        return _with_perf({
+            "mode": mode,
+            "sentence":    sentence,
+            "alert_mode":  "silent",
+            "objects":     objects,
+            "hazards":     hazards,
+            "changes":     [],
+            "depth_source": objects[0].get("depth_source","bbox") if objects else "bbox",
+        }, _t0, request_id, _detect_ms, _tracker_ms)
 
     # ── 찾기 모드: 특정 물체를 타깃으로 탐색 ────────────────────────────────
     if mode == "찾기":
         target = _extract_find_target(query_text)  # "의자 찾아줘" → "의자"
         sentence = build_find_sentence(target, objects, camera_orientation)
-        return {
+        return _with_perf({
+            "mode": mode,
             "sentence":    sentence,
             "alert_mode":  "critical",  # 사용자가 명시적으로 요청한 것 → 항상 즉각 안내
             "objects":     objects,
             "hazards":     hazards,
             "changes":     all_changes,
             "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
-        }
+        }, _t0, request_id, _detect_ms, _tracker_ms)
 
     # ── 장애물/확인 모드: 위험도 기반 문장 생성 ──────────────────────────────
     if hazards:
@@ -156,6 +263,7 @@ async def detect(
     # 메인 문장 뒤에 붙임 (있을 때만)
     extras = [v for v in [
         scene.get("danger_warning"),        # 칼·가위 3m 이내 즉시 경고
+        scene.get("slippery_warning"),      # 바닥 음식류 미끄럼 위험
         scene.get("tactile_block_warning"), # 점자 블록 위 장애물
         scene.get("crowd_warning"),         # 군중 밀집 경고
         scene.get("safe_direction"),        # 안전 경로 제안
@@ -164,15 +272,20 @@ async def detect(
     if extras:
         sentence = sentence + " " + " ".join(extras)
 
-    return {
+    # 같은 문장이 5초 이내에 이미 전달됐으면 alert_mode를 "silent"로 낮춤 (TTS 겹침 방지)
+    if _should_suppress(session_id, sentence, alert_mode):
+        alert_mode = "silent"
+
+    return _with_perf({
+        "mode": mode,
         "sentence":      sentence,
-        "alert_mode":    alert_mode,  # "critical" | "beep" | "silent" — 프론트엔드 TTS/비프 분기용
+        "alert_mode":    alert_mode,
         "objects":       objects,
         "hazards":       hazards,
         "changes":       all_changes,
         "scene":         scene,
         "depth_source":  objects[0].get("depth_source", "bbox") if objects else "bbox",
-    }
+    }, _t0, request_id, _detect_ms, _tracker_ms)
 
 
 _MEAL_CLASSES = {
@@ -231,23 +344,21 @@ def _extract_find_target(text: str) -> str:
 # ── 장소 저장/조회 전용 엔드포인트 ───────────────────────────────────────────
 # Android MainActivity에서 직접 호출 가능 (detect API 거치지 않고 빠르게 처리)
 
-@router.post("/tts")
+@router.post("/tts", dependencies=[Depends(_verify_api_key)])
 async def tts_endpoint(text: str = Form("")):
-    """Azure TTS — 텍스트를 음성 파일로 변환해 Android 앱에 반환."""
-    from src.voice.tts import _cache_path, _generate, _api_key
+    """Azure TTS — 텍스트를 WAV로 변환해 Android 앱에 반환."""
+    from src.voice.tts import _cache_path, _generate
     import os
     if not text:
-        return {"error": "text is empty"}
-    if not _api_key:
-        return {"error": "ELEVENLABS_API_KEY not set"}
+        return JSONResponse({"error": "text is empty"}, status_code=400)
     path = _cache_path(text)
     if not os.path.exists(path):
         if not _generate(text, path):
-            return {"error": "TTS generation failed"}
+            return JSONResponse({"error": "TTS generation failed"}, status_code=500)
     return FileResponse(path, media_type="audio/wav")
 
 
-@router.post("/vision/clothing")
+@router.post("/vision/clothing", dependencies=[Depends(_verify_api_key)])
 async def vision_clothing(
     image: UploadFile,
     type:  str = Form("matching"),   # "matching" or "pattern"
@@ -261,96 +372,49 @@ async def vision_clothing(
     return {"sentence": sentence}
 
 
-@router.post("/ocr/bus")
-async def ocr_bus(
-    image:     UploadFile,
-    bus_crop:  str = Form(""),   # JSON 배열 문자열 "[x1,y1,x2,y2]" 또는 빈 문자열
-):
+# /ocr/bus 엔드포인트 제거 — 버스 번호 OCR 실험 기능 비활성화
+
+
+# 개인 네비게이팅 엔드포인트 (/locations/*) 제거 — 실험 기능 비활성화
+
+
+@router.get("/status/{session_id}", dependencies=[Depends(_verify_api_key)])
+async def get_session_status(session_id: str):
     """
-    버스 번호 OCR — ML Kit(Android)이 실패했을 때 서버 EasyOCR로 재시도.
-
-    Android에서 호출 순서:
-      1. ML Kit OCR 시도 → 숫자 없으면
-      2. 이 엔드포인트 호출 (이미지 + bus_crop 좌표 전송)
-      3. EasyOCR + 이미지 전처리로 재시도
-      4. 결과 TTS로 읽어줌
+    세션(WiFi SSID)의 현재 추적 상태 반환 — 대시보드 폴링용.
+    최근 3초 이내에 탐지된 물체 목록과 마지막 GPS 좌표를 반환.
     """
-    import json
-    from src.ocr.bus_ocr import recognize_bus_number
-
-    image_bytes = await image.read()
-
-    # bus_crop: Android에서 JSON 문자열로 전달 "[x1,y1,x2,y2]"
-    crop = None
-    if bus_crop:
-        try:
-            crop = json.loads(bus_crop)
-        except Exception:
-            crop = None
-
-    bus_number = recognize_bus_number(image_bytes, crop)
-
-    if bus_number:
-        return {"success": True,  "bus_number": bus_number,
-                "sentence": f"{bus_number}번 버스예요."}
-    return {"success": False, "bus_number": None,
-            "sentence": "버스 번호를 읽지 못했어요. 번호판에 더 가까이 대보세요."}
-
-
-@router.post("/locations/save")
-async def save_location_endpoint(
-    wifi_ssid: str = Form(""),
-    label:     str = Form(""),
-):
-    """장소 저장. Android에서 이미지 없이 직접 호출."""
-    if not label:
-        return {"success": False, "sentence": "장소 이름을 말씀해 주세요."}
-    if not wifi_ssid:
-        return {"success": False, "sentence": "WiFi에 연결되어 있지 않아 저장할 수 없어요."}
-    db.save_location(label, wifi_ssid)
-    return {"success": True, "sentence": build_navigation_sentence(label, "save")}
-
-
-@router.get("/locations")
-async def list_locations(wifi_ssid: str = ""):
-    """저장 장소 목록 반환. wifi_ssid 지정 시 해당 WiFi 위치 장소만."""
-    locations = db.get_locations(wifi_ssid)
+    tracker = get_tracker(session_id)
+    current = tracker.get_current_state(max_age_s=3.0)
+    gps     = db.get_last_gps(session_id)
+    track   = db.get_gps_track(session_id, limit=100)
     return {
-        "locations": locations,
-        "sentence":  build_navigation_sentence("", "list", locations=locations),
+        "session_id": session_id,
+        "objects":    current,
+        "gps":        gps,
+        "track":      track,
     }
 
 
-@router.get("/locations/find/{label}")
-async def find_location_endpoint(label: str, wifi_ssid: str = ""):
-    """
-    라벨로 장소 검색. 현재 WiFi와 일치 여부도 확인.
-    nearby=True이면 "도착했어요!", False이면 "다른 WiFi에 있어요."
-    """
-    loc = db.find_location(label)
-    if not loc:
-        return {"found": False, "sentence": build_navigation_sentence(label, "not_found")}
-    nearby = (wifi_ssid == loc["wifi_ssid"]) if wifi_ssid else False
-    return {
-        "found":    True,
-        "nearby":   nearby,
-        "location": loc,
-        "sentence": build_navigation_sentence(loc["label"], "found_here") if nearby
-                    else f"{loc['label']}{_un_neun(loc['label'])} 다른 WiFi 위치에 저장되어 있어요.",
-    }
+@router.get("/sessions", dependencies=[Depends(_verify_api_key)])
+async def list_sessions():
+    """GPS 데이터가 있는 최근 세션 ID 목록 반환 — 대시보드 세션 선택용."""
+    return {"sessions": db.get_recent_sessions()}
 
 
-@router.delete("/locations/{label}")
-async def delete_location_endpoint(label: str):
-    """저장 장소 삭제."""
-    loc = db.find_location(label)
-    if not loc:
-        return {"success": False, "sentence": f"{label}은 저장되어 있지 않아요."}
-    db.delete_location(loc["label"])
-    return {"success": True, "sentence": build_navigation_sentence(loc["label"], "deleted")}
+@router.get("/dashboard", dependencies=[Depends(_verify_api_key)])
+async def dashboard():
+    """대시보드 HTML 페이지 반환."""
+    from fastapi.responses import HTMLResponse
+    import os
+    tpl_path = os.path.join(os.path.dirname(__file__), "../../templates/dashboard.html")
+    if os.path.exists(tpl_path):
+        with open(tpl_path, encoding="utf-8") as f:
+            return HTMLResponse(f.read())
+    return HTMLResponse("<h1>dashboard.html not found</h1>", status_code=404)
 
 
-@router.post("/spaces/snapshot")
+@router.post("/spaces/snapshot", dependencies=[Depends(_verify_api_key)])
 async def save_space_snapshot(body: dict):
     """공간 스냅샷 수동 저장 (테스트·디버깅용)."""
     space_id = body.get("space_id", "")

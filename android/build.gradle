@@ -1,4 +1,6 @@
+// 루트 프로젝트 빌드 파일 — 서브모듈에 공통 플러그인 버전을 선언
+// apply false: 루트에서는 적용하지 않고 :app 모듈에서만 사용
 plugins {
-    id 'com.android.application' version '8.2.2' apply false
-    id 'org.jetbrains.kotlin.android' version '1.9.22' apply false
+    id 'com.android.application' version '8.13.2' apply false   // AGP (Android Gradle Plugin)
+    id 'org.jetbrains.kotlin.android' version '1.9.22' apply false  // Kotlin Android 지원
 }

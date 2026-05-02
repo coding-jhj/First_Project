@@ -11,19 +11,20 @@ import json, os, time, urllib.request
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"  # Windows OpenMP 충돌 방지
 
+# 데이터셋 디렉터리 구조 (YOLO 학습 포맷)
 DATASET_DIR = Path("datasets/indoor_nav")
-IMG_TRAIN   = DATASET_DIR / "images/train"
-IMG_VAL     = DATASET_DIR / "images/val"
-LBL_TRAIN   = DATASET_DIR / "labels/train"
-LBL_VAL     = DATASET_DIR / "labels/val"
+IMG_TRAIN   = DATASET_DIR / "images/train"   # 학습 이미지
+IMG_VAL     = DATASET_DIR / "images/val"     # 검증 이미지
+LBL_TRAIN   = DATASET_DIR / "labels/train"  # 학습 레이블 (YOLO txt 포맷)
+LBL_VAL     = DATASET_DIR / "labels/val"    # 검증 레이블
 
-VAL_RATIO    = 0.15
+VAL_RATIO    = 0.15   # 전체 데이터의 15%를 검증 세트로 사용
 CONF_THRESH  = 0.35   # pseudo-label 신뢰도 (낮게 설정해 더 많이 잡음)
-STAIRS_CLS   = 80
+STAIRS_CLS   = 80     # COCO80 다음 인덱스 — 계단 신규 클래스
 
-# 검색어 목록: 다양한 환경의 계단 이미지
+# (검색어, 클래스ID, 목표 이미지 수) — 다양한 환경의 계단 이미지 수집
 SEARCH_QUERIES = [
     ("indoor staircase",          STAIRS_CLS, 80),
     ("staircase indoors",         STAIRS_CLS, 60),
@@ -35,7 +36,7 @@ SEARCH_QUERIES = [
     ("school building staircase", STAIRS_CLS, 50),
 ]
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}  # 봇 차단 우회
 
 
 def collect_urls() -> list[tuple[str, int]]:
@@ -49,18 +50,19 @@ def collect_urls() -> list[tuple[str, int]]:
             try:
                 for img in ddgs.images(query, max_results=count):
                     url = img.get("image", "")
-                    if url and url.startswith("http"):
+                    if url and url.startswith("http"):  # 유효한 HTTP URL만 추가
                         results.append((url, cls_id))
-                time.sleep(1.5)   # rate limit 방지
+                time.sleep(1.5)   # rate limit 방지 — 너무 빠르면 차단됨
             except Exception as e:
                 print(f"    경고: {e}")
-                time.sleep(3)
+                time.sleep(3)     # 오류 시 잠시 대기 후 다음 검색어로 계속
 
     print(f"  총 {len(results)}개 URL 수집")
     return results
 
 
 def download_one(url: str, dest: Path) -> bool:
+    # 이미 5KB 이상 파일 존재 시 재다운로드 건너뜀 (중단 후 재실행 시 속도 향상)
     if dest.exists() and dest.stat().st_size > 5000:
         return True
     try:
@@ -72,7 +74,7 @@ def download_one(url: str, dest: Path) -> bool:
         dest.write_bytes(data)
         return True
     except Exception:
-        return False
+        return False  # 개별 실패는 무시하고 전체 수집 계속
 
 
 def download_all(url_cls: list[tuple[str, int]],
@@ -80,15 +82,16 @@ def download_all(url_cls: list[tuple[str, int]],
     """병렬 다운로드. (이미지 경로, cls_id) 반환."""
     ok = []
     futs = {}
-    with ThreadPoolExecutor(max_workers=16) as ex:
+    with ThreadPoolExecutor(max_workers=16) as ex:  # 16개 병렬 다운로드
         for i, (url, cls_id) in enumerate(url_cls):
+            # URL 확장자 추출 — 없거나 알 수 없으면 jpg 기본값
             ext = url.split("?")[0].split(".")[-1].lower()
             if ext not in ("jpg","jpeg","png","webp"):
                 ext = "jpg"
             dest = img_dir / f"img_{i:04d}.{ext}"
             futs[ex.submit(download_one, url, dest)] = (dest, cls_id)
 
-        for fut in as_completed(futs):
+        for fut in as_completed(futs):  # 완료된 순서대로 처리
             dest, cls_id = futs[fut]
             if fut.result():
                 ok.append((dest, cls_id))

@@ -33,7 +33,8 @@ data class Detection(
     val cx: Float,           // 바운딩 박스 중심 X (이미지 너비 기준 0.0~1.0)
     val cy: Float,           // 바운딩 박스 중심 Y (이미지 높이 기준 0.0~1.0)
     val w: Float,            // 바운딩 박스 너비 (0.0~1.0)
-    val h: Float             // 바운딩 박스 높이 (0.0~1.0)
+    val h: Float,            // 바운딩 박스 높이 (0.0~1.0)
+    val isFound: Boolean = false  // 찾기 모드에서 발견된 대상이면 true (흰색 박스)
 )
 
 class YoloDetector(context: Context) {
@@ -41,38 +42,60 @@ class YoloDetector(context: Context) {
     private val env = OrtEnvironment.getEnvironment()  // ONNX 실행 환경 (앱당 1개)
     private val session: OrtSession                    // 모델 세션 (추론 단위)
     private val inputSize   = 640       // YOLO 입력 해상도 (640×640)
-    private val confThreshold = 0.50f   // 서버(detect.py)의 CONF_THRESHOLD와 동일하게 맞춤
+    private val confThreshold = 0.35f   // 모바일 카메라 흔들림/어두운 환경에서 놓침을 줄이기 위해 완화
     private val iouThreshold  = 0.45f   // NMS IoU 임계값: 겹치는 박스 제거 기준
 
     init {
         // assets 폴더에서 ONNX 모델 로드
-        // yolo11m.onnx 우선, 없으면 yolo11n.onnx (더 작은 모델) fallback
+        // 실제 배포 모델: yolo11n.onnx (10.7MB, 경량)
+        // 고정밀 모델:    yolo11m.onnx (없으면 n으로 fallback)
+        // 발표 시: "앱 내장 모델은 YOLO11n ONNX, 서버는 YOLO11m PyTorch"
         val modelName = try {
             context.assets.open("yolo11m.onnx").close()
-            "yolo11m.onnx"  // m 모델: 더 정확 (38MB)
+            "yolo11m.onnx"  // 고정밀 모델 (있을 때만)
         } catch (_: Exception) {
-            "yolo11n.onnx"  // n 모델: 더 빠름 (5.4MB), 오탐 많음
+            "yolo11n.onnx"  // 기본 경량 모델 (현재 배포 기준)
         }
         val bytes = context.assets.open(modelName).readBytes()
-        // SessionOptions: 쓰레드 수, 가속기(GPU/NNAPI) 설정 가능
-        session = env.createSession(bytes, OrtSession.SessionOptions())
+        val opts = OrtSession.SessionOptions().apply {
+            setIntraOpNumThreads(4)
+            setInterOpNumThreads(2)
+            // NNAPI는 FP16 연산으로 클래스 신뢰도가 0에 수렴 → 탐지 0개 오류 발생
+            // → CPU 추론 유지 (정확도 우선)
+            android.util.Log.d("VG_PERF", "CPU 4스레드 추론 — $modelName")
+        }
+        session = env.createSession(bytes, opts)
     }
 
     fun detect(bitmap: Bitmap): List<Detection> {
-        // 1. 이미지를 640×640으로 리사이즈 (YOLO 고정 입력 해상도)
-        val resized = Bitmap.createScaledBitmap(bitmap, inputSize, inputSize, true)
-        // 2. Android Bitmap → ONNX Float 텐서 포맷으로 변환
-        val inputBuffer = bitmapToNCHW(resized)
-        resized.recycle()  // 메모리 해제 (Android에서 Bitmap 메모리 누수 방지)
+        val origW = bitmap.width
+        val origH = bitmap.height
 
-        // 3. ONNX 세션에 입력 이름 확인 (YOLO11은 보통 "images")
+        // 비율을 유지하며 640x640에 맞추고 나머지는 검정 패딩 (letterboxing)
+        val scale  = minOf(inputSize.toFloat() / origW, inputSize.toFloat() / origH)
+        val scaledW = (origW * scale + 0.5f).toInt()
+        val scaledH = (origH * scale + 0.5f).toInt()
+        val padX   = (inputSize - scaledW) / 2
+        val padY   = (inputSize - scaledH) / 2
+
+        val letterboxed = Bitmap.createBitmap(inputSize, inputSize, Bitmap.Config.ARGB_8888)
+        val lbCanvas = android.graphics.Canvas(letterboxed)
+        lbCanvas.drawARGB(255, 0, 0, 0)
+        val scaled = Bitmap.createScaledBitmap(bitmap, scaledW, scaledH, true)
+        lbCanvas.drawBitmap(scaled, padX.toFloat(), padY.toFloat(), null)
+        scaled.recycle()
+
+        val inputBuffer = bitmapToNCHW(letterboxed)
+        letterboxed.recycle()
+
+        // ONNX 세션에 입력 이름 확인 (YOLO11은 보통 "images")
         val inputName = session.inputNames.iterator().next()
         // 텐서 shape: [1, 3, 640, 640] = [batch, RGB채널, H, W]
         val tensor = OnnxTensor.createTensor(
             env, inputBuffer, longArrayOf(1, 3, inputSize.toLong(), inputSize.toLong())
         )
 
-        // 4. 추론 실행
+        // 추론 실행
         val output = session.run(mapOf(inputName to tensor))
         val outputTensor = output[0] as ai.onnxruntime.OnnxTensor
 
@@ -87,7 +110,7 @@ class YoloDetector(context: Context) {
         tensor.close()
         output.close()
 
-        return postProcess(flatBuf, numFeatures, numDet)
+        return postProcess(flatBuf, numFeatures, numDet, padX, padY, scaledW, scaledH)
     }
 
     /**
@@ -96,16 +119,12 @@ class YoloDetector(context: Context) {
      * NCHW = [N배치, C채널, H높이, W너비]
      * YOLO는 픽셀값을 0~255가 아닌 0.0~1.0으로 정규화해서 받음
      * 채널 순서: RGB (Android Bitmap은 ARGB이므로 A 제거 필요)
-     *
-     * 메모리 배치: R채널 전체 → G채널 전체 → B채널 전체
-     * (인터리브 방식 RGBRGBㆍㆍㆍ이 아님)
      */
     private fun bitmapToNCHW(bitmap: Bitmap): FloatBuffer {
         val pixels = IntArray(inputSize * inputSize)
         // getPixels: 픽셀을 ARGB Int 배열로 읽음
         bitmap.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
 
-        // 채널별 FloatArray 준비
         val buf = FloatBuffer.allocate(3 * inputSize * inputSize)
         val r = FloatArray(inputSize * inputSize)
         val g = FloatArray(inputSize * inputSize)
@@ -120,54 +139,59 @@ class YoloDetector(context: Context) {
 
         // NCHW 순서로 버퍼에 쓰기: R 전체 → G 전체 → B 전체
         buf.put(r); buf.put(g); buf.put(b)
-        buf.rewind()  // position을 0으로 리셋 (읽기 시작점으로)
+        buf.rewind()
         return buf
     }
 
     /**
      * YOLO 출력 후처리: 박스 필터링 + NMS
      *
-     * YOLO 출력 레이아웃 (NCHW가 아닌 특수 포맷):
+     * YOLO 출력 레이아웃:
      *   buf[feature_idx * numDet + det_idx]
-     *
-     *   feature 0~3: bbox (cx, cy, w, h) — 640px 단위
+     *   feature 0~3: bbox (cx, cy, w, h) — letterbox 640px 단위
      *   feature 4~(4+numClasses-1): 각 클래스의 confidence score
-     *
-     * 각 박스 처리:
-     *   1. 가장 높은 클래스 score 찾기
-     *   2. confThreshold 미만이면 버림 (낮은 확신도 제거)
-     *   3. COCO_KO 맵에서 한국어 이름 찾기
-     *   4. NMS로 겹치는 박스 제거
      */
-    private fun postProcess(buf: java.nio.FloatBuffer, numFeatures: Int, numDet: Int): List<Detection> {
-        val numClasses = numFeatures - 4  // bbox 4개를 제외한 나머지 = 클래스 수
+    private fun postProcess(
+        buf: java.nio.FloatBuffer,
+        numFeatures: Int, numDet: Int,
+        padX: Int, padY: Int, scaledW: Int, scaledH: Int
+    ): List<Detection> {
+        val numClasses = numFeatures - 4
         val candidates = mutableListOf<Detection>()
 
         for (i in 0 until numDet) {
-            var maxScore = confThreshold  // 이 값 미만은 바로 버림
+            var maxScore = confThreshold
             var maxClass = -1
-
             for (c in 0 until numClasses) {
-                val s = buf.get((4 + c) * numDet + i)  // 클래스 c의 score
+                val s = buf.get((4 + c) * numDet + i)
                 if (s > maxScore) { maxScore = s; maxClass = c }
             }
-            if (maxClass < 0) continue  // confThreshold 넘은 클래스 없음 → 버림
+            if (maxClass < 0) continue
+            val name = COCO_KO[maxClass] ?: continue
 
-            val name = COCO_KO[maxClass] ?: continue  // 한국어 이름 없으면 버림
+            // YOLO 출력 좌표는 letterbox된 640x640 공간의 픽셀값
+            // → 패딩 제거 후 원본 이미지 [0,1] 비율로 변환
+            val cxPx = buf.get(0 * numDet + i)
+            val cyPx = buf.get(1 * numDet + i)
+            val wPx  = buf.get(2 * numDet + i)
+            val hPx  = buf.get(3 * numDet + i)
+
+            val cx = (cxPx - padX) / scaledW
+            val cy = (cyPx - padY) / scaledH
+            val w  = wPx / scaledW
+            val h  = hPx / scaledH
+
+            // 패딩 영역(검정 바깥)에 중심이 있으면 무시
+            if (cx < 0f || cx > 1f || cy < 0f || cy > 1f) continue
 
             candidates.add(Detection(
                 classKo    = name,
                 confidence = maxScore,
-                // YOLO 출력은 640px 단위 → 0~1 정규화
-                cx = buf.get(0 * numDet + i) / inputSize,
-                cy = buf.get(1 * numDet + i) / inputSize,
-                w  = buf.get(2 * numDet + i) / inputSize,
-                h  = buf.get(3 * numDet + i) / inputSize
+                cx = cx, cy = cy, w = w, h = h
             ))
         }
 
-        // confidence 높은 순 정렬 후 NMS 적용, 최대 2개 반환
-        return nms(candidates.sortedByDescending { it.confidence }).take(2)
+        return nms(candidates.sortedByDescending { it.confidence }).take(8)
     }
 
     /**
