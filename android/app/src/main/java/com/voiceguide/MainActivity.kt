@@ -283,6 +283,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         private const val PREFS_NAME       = "voiceguide"  // SharedPreferences 이름
         private const val PREF_URL         = "server_url"  // 저장된 서버 URL 키
         private const val PREF_DEVICE_ID   = "device_id"   // 앱 설치별 대시보드 세션 ID
+        private const val DEFAULT_SERVER_URL =
+            "https://voiceguide-1063164560758.asia-northeast3.run.app"
         private const val PREF_LOCATIONS   = "saved_locations"  // 저장 장소 JSON 배열 키
         private const val INTERVAL_MS      = 800L          // 캡처 간격: 0.8초 (빠른 응답)
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
@@ -361,8 +363,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }
     }
 
-    private fun getSavedServerUrl(): String =
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_URL, "") ?: ""
+    private fun getSavedServerUrl(): String {
+        val saved = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_URL, "") ?: ""
+        return saved.ifBlank { DEFAULT_SERVER_URL }
+    }
 
     private fun getDeviceSessionId(): String {
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
@@ -1277,6 +1281,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     private fun shouldUseOnDeviceDetector(): Boolean {
         if (yoloDetector == null) return false
+        if (getSavedServerUrl().isNotBlank()) return false
         return currentMode == "장애물" || currentMode == "찾기"
     }
 
