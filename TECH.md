@@ -45,37 +45,48 @@
 - 서버 JSON 응답 수신
 - Android TTS로 음성 재생
 
-#### 구현 사양
+#### 구현 사양 (2026-05-02 기준)
 
 ```
-입력: 카메라 이미지 (JPEG, 최대 1MB)
-출력: HTTP POST → FastAPI 서버
+캡처 간격: INTERVAL_MS = 100ms (10fps 목표)
+동시 요청: MAX_IN_FLIGHT = 2 (서버 왕복 200ms 기준 10fps 달성)
+최신 응답만 UI 반영: lastAppliedSeq로 구응답 폐기
 
 요청 형식:
-  POST http://{서버주소}/detect
+  POST {서버주소}/detect
   Content-Type: multipart/form-data
   Body:
-    - image: (JPEG 파일)
-    - wifi_ssid: (문자열, WifiManager로 읽기)
+    - image: JPEG (최적화 압축)
+    - wifi_ssid, device_id: 세션 식별
+    - lat, lng: GPS 좌표 (대시보드 연동)
+    - mode, request_id, camera_orientation
 
 응답 형식:
   {
-    "sentence": "왼쪽 바로 앞에 의자가 있어요.",
+    "sentence": "위험! 바로 앞 자동차! 조심!",
+    "alert_mode": "critical | beep | silent",
     "objects": [...],
-    "changes": [...]
+    "perf": { "detect_ms": ..., "total_ms": ... }
   }
+```
+
+#### 카메라 파이프라인
+```
+CameraX ImageAnalysis (STRATEGY_KEEP_ONLY_LATEST)
+  → analyzeStreamFrame() — 100ms 게이트
+  → inFlightCount < 2이면 sendToServer()
+  → 응답 도착 시 lastAppliedSeq 체크 → 최신이면 UI/TTS 반영
 ```
 
 #### 사용 라이브러리
 
 ```
-OkHttp 또는 Retrofit   // HTTP 통신
-WifiManager            // WiFi SSID 읽기
-Android TextToSpeech   // TTS 재생 (gTTS 대신 온디바이스)
+CameraX ImageAnalysis  // 실시간 스트림 캡처
+OkHttp                 // HTTP 통신 (동시 요청 지원)
+Android TextToSpeech   // TTS 재생
+FusedLocationProvider  // GPS (대시보드 위치 연동)
+ONNX Runtime           // 온디바이스 yolo11n 추론 (fallback)
 ```
-
-#### MVP 비상 플랜
-Android 연동이 막히면 → Gradio 데모로 대체, Android는 UI 와이어프레임 + 설계도 제출
 
 ---
 
