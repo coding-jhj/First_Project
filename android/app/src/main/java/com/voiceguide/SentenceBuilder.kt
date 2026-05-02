@@ -88,7 +88,7 @@ object SentenceBuilder {
             val action  = DIRECTION_ACTION[clock] ?: "즉시 멈추세요"
             val distStr = formatDist(nearVehicle.w, nearVehicle.h)
             val ig      = josaIGa(nearVehicle.classKo)
-            return "위험! ${distStr} ${nearVehicle.classKo}! 조심!"
+            return "위험! ${dir} ${distStr}에 ${nearVehicle.classKo}${ig} 있어요! ${action}!"
         }
 
         // 2순위: 일반 장애물 — 최대 2개까지 문장 생성
@@ -234,7 +234,7 @@ object SentenceBuilder {
         val area   = w * h
         val rawM   = if (area > 0) sqrt(0.12f / area) else 99f
         val distM  = rawM.coerceIn(0.1f, 15.0f)
-        if (distM < 0.5f) return "바로 코앞"
+        if (distM < 0.5f) return "코앞"
         return if (distM < 3.0f) {
             val r = kotlin.math.round(distM * 2) / 2.0f
             val str = if (r % 1.0f == 0.0f) r.toInt().toString() else "%.1f".format(r)
