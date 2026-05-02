@@ -387,6 +387,23 @@ async def vision_clothing(
 # 개인 네비게이팅 엔드포인트 (/locations/*) 제거 — 실험 기능 비활성화
 
 
+@router.post("/gps", dependencies=[Depends(_verify_api_key)])
+async def save_gps_ping(
+    wifi_ssid:  str   = Form(""),
+    lat:        float = Form(0.0),
+    lng:        float = Form(0.0),
+    request_id: str   = Form(""),
+):
+    """Android 온디바이스 모드에서도 대시보드가 위치를 받을 수 있게 GPS만 저장."""
+    session_id = _normalize_session_id(wifi_ssid)
+    if lat == 0.0 and lng == 0.0:
+        print(f"[GPS] ignored empty location request_id={request_id} session={session_id}")
+        return {"saved": False, "session_id": session_id, "reason": "empty_location"}
+    db.save_gps(session_id, lat, lng)
+    print(f"[GPS] saved request_id={request_id} session={session_id} lat={lat} lng={lng}")
+    return {"saved": True, "session_id": session_id, "lat": lat, "lng": lng}
+
+
 @router.get("/status/{session_id}", dependencies=[Depends(_verify_api_key)])
 async def get_session_status(session_id: str):
     """
