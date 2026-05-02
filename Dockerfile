@@ -36,6 +36,7 @@ RUN python -c "from ultralytics import YOLO; YOLO('yolo11n.pt')" 2>/dev/null || 
 # 로그가 버퍼 없이 즉시 Cloud Logging에 출력됨
 ENV PORT=8080
 ENV PYTHONUNBUFFERED=1
+ENV DEPTH_ENABLED=0
 
 # 단일 워커: Cloud Run은 인스턴스 수평 확장으로 동시성 처리
 CMD uvicorn src.api.main:app --host 0.0.0.0 --port ${PORT}

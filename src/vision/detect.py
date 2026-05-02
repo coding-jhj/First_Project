@@ -423,7 +423,7 @@ def detect_objects(image_bytes: bytes) -> tuple[list[dict], dict]:
         return x1, y1, x2, y2
 
     # YOLO 추론: conf=CONF_THRESHOLD 미만 박스는 자동 필터링
-    results    = model(img, conf=CONF_THRESHOLD, imgsz=416)[0]
+    results    = model(img, conf=CONF_THRESHOLD, imgsz=416, max_det=8)[0]
     all_detections = []
 
     for box in results.boxes:
