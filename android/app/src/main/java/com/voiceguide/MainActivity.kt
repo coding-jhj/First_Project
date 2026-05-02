@@ -86,12 +86,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // Handler: 메인 스레드에서 지연 작업 예약 (1초 간격 루프, Watchdog)
     private val handler = Handler(Looper.getMainLooper())
     // AtomicBoolean: 여러 스레드가 동시에 접근해도 안전한 boolean
-    private val isAnalyzing = AtomicBoolean(false)
-    private val isSending   = AtomicBoolean(false)
+    private val isAnalyzing  = AtomicBoolean(false)
+    private val inFlightCount = AtomicInteger(0)  // 동시 서버 요청 수 (최대 MAX_IN_FLIGHT)
     private var lastSentence = ""
     // TTS 완전 잠금 — compareAndSet으로만 시작 가능, onDone 후 해제
-    private val ttsBusy     = AtomicBoolean(false)
-    private val frameSeq    = AtomicInteger(0)
+    private val ttsBusy        = AtomicBoolean(false)
+    private val frameSeq       = AtomicInteger(0)
+    private val lastAppliedSeq = AtomicInteger(0)  // 마지막으로 UI에 반영한 응답 seq
 
     // ── 온디바이스 투표(Voting) 버퍼 ─────────────────────────────────────
     // 최근 5프레임 탐지 결과를 기록해 3회 이상 등장한 사물만 안내
@@ -292,7 +293,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         private const val DEFAULT_SERVER_URL =
             "https://voiceguide-1063164560758.asia-northeast3.run.app"
         private const val PREF_LOCATIONS   = "saved_locations"  // 저장 장소 JSON 배열 키
-        private const val INTERVAL_MS      = 800L          // 캡처 간격: 0.8초 (빠른 응답)
+        private const val INTERVAL_MS      = 100L          // 캡처 간격: 0.1초 (10fps 목표)
+        private const val MAX_IN_FLIGHT    = 2             // 동시 서버 요청 최대 수
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
         private const val FAIL_WARN_COUNT  = 3             // 연속 3회 실패 시 경고
         private const val GPS_SEND_INTERVAL_MS = 3000L     // 대시보드 위치 갱신 최소 간격
@@ -1001,7 +1003,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             providers.forEach { provider ->
                 locationManager?.requestLocationUpdates(
                     provider,
-                    3000L, 10f, locationListener
+                    3000L, 0f, locationListener  // 0f: 이동 거리 무관하게 3초마다 갱신
                 )
                 Log.d("VG_GPS", "requestLocationUpdates provider=$provider")
             }
@@ -1275,10 +1277,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
             val now = System.currentTimeMillis()
             if (now - lastStreamFrameTime < INTERVAL_MS) return
-            if (!isSending.compareAndSet(false, true)) {
+            if (inFlightCount.getAndIncrement() >= MAX_IN_FLIGHT) {
+                inFlightCount.decrementAndGet()
                 if (now - lastStreamSkipLogTime > 1000L) {
                     lastStreamSkipLogTime = now
-                    Log.d("VG_FLOW", "stream frame skipped: previous frame still processing")
+                    Log.d("VG_FLOW", "stream frame skipped: inFlight=${inFlightCount.get()}/$MAX_IN_FLIGHT")
                 }
                 return
             }
@@ -1291,7 +1294,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             if (route == "on_device") processOnDevice(file, requestId)
             else sendToServer(file, requestId)
         } catch (e: Exception) {
-            if (isSending.get()) isSending.set(false)
+            if (inFlightCount.get() > 0) inFlightCount.decrementAndGet()
             Log.e("VG_FLOW", "stream analysis failed", e)
             handleFail()
         } finally {
@@ -1372,9 +1375,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     }
 
     private fun captureAndProcess() {
-        // isSending 체크: 이전 요청이 아직 진행 중이면 새 캡처 스킵 (중복 방지)
-        if (isSending.get()) {
-            Log.d("VG_FLOW", "capture skipped: previous frame still processing")
+        // 일회성 STT 캡처: stream 요청이 진행 중이면 스킵 (중복 방지)
+        if (inFlightCount.get() > 0) {
+            Log.d("VG_FLOW", "capture skipped: inFlight=${inFlightCount.get()}")
             return
         }
         val file = File.createTempFile("vg_", ".jpg", cacheDir)
@@ -1383,7 +1386,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             cameraExecutor,
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    isSending.set(true)
+                    inFlightCount.incrementAndGet()
                     val requestId = nextRequestId()
                     val route = if (shouldUseOnDeviceDetector()) "on_device" else "server"
                     Log.d("VG_FLOW", "request_id=$requestId route=$route mode=$currentMode file=${file.length()}B")
@@ -1391,7 +1394,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     else sendToServer(file, requestId)
                 }
                 override fun onError(e: ImageCaptureException) {
-                    isSending.set(false)
+                    inFlightCount.decrementAndGet()
                     Log.e("VG_FLOW", "capture failed", e)
                     handleFail()
                 }
@@ -1677,6 +1680,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             handleFail()
             return
         }
+        // 이 요청의 seq — 응답이 오래된 것이면 UI 반영 생략
+        val mySeq = requestId.substringAfterLast('-').toIntOrNull() ?: Int.MAX_VALUE
 
         Thread {
             try {
@@ -1711,6 +1716,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
                 // 전체 왕복 시간 = 네트워크 + 서버 처리
                 val roundTripMs = System.currentTimeMillis() - reqStart
+                // GPS fix가 완료된 이후 /detect 응답에 맞춰 GPS도 추가 전송
+                // (GPS fix 전에 /detect가 먼저 나가는 타이밍 문제 보완)
+                sendGpsHeartbeat("detect")
                 val json        = JSONObject(response.body?.string() ?: "{}")
                 val sentence    = json.optString("sentence", "주변에 장애물이 없어요.")
                 val alertMode   = json.optString("alert_mode", "critical")
@@ -1769,12 +1777,18 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         ))
                     }
                 }
-                runOnUiThread {
-                    if (serverDetections.isEmpty()) boundingBoxOverlay.clearDetections()
-                    else boundingBoxOverlay.setDetections(serverDetections, uploadImgW, uploadImgH)
+                // 더 최신 응답이 이미 반영됐으면 이 응답은 UI 갱신 생략
+                val isLatest = lastAppliedSeq.accumulateAndGet(mySeq) { cur, new -> if (new > cur) new else cur } == mySeq
+                if (isLatest) {
+                    runOnUiThread {
+                        if (serverDetections.isEmpty()) boundingBoxOverlay.clearDetections()
+                        else boundingBoxOverlay.setDetections(serverDetections, uploadImgW, uploadImgH)
+                    }
+                    handleSuccess(sentence, alertMode)
+                } else {
+                    Log.d("VG_FLOW", "stale response seq=$mySeq < applied=${lastAppliedSeq.get()}, skip UI")
+                    inFlightCount.decrementAndGet()
                 }
-
-                handleSuccess(sentence, alertMode)
             } catch (e: Exception) {
                 Log.e("VG_LINK", "request_id=$requestId server request failed", e)
                 handleFail()
@@ -1789,7 +1803,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private fun handleSuccess(sentence: String, alertMode: String = "critical") {
         consecutiveFails.set(0)
         lastSuccessTime = System.currentTimeMillis()
-        isSending.set(false)
+        inFlightCount.decrementAndGet()
         if (!isAnalyzing.get()) return  // 분석 중지 후 in-flight 요청 결과 무시
 
         // 질문 응답 직후 periodic TTS 억제 — critical은 항상 통과
@@ -1817,7 +1831,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         lastSentence     = sentence
                         lastCriticalTime = now
                         tvStatus.text    = sentence
-                        tts.setSpeechRate(1.25f)
+                        tts.setSpeechRate(1.0f)
                         if (isVehicleDanger) {
                             speakBuiltIn(sentence, immediate = true)
                         } else {
@@ -1849,7 +1863,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     }
 
     private fun handleFail() {
-        isSending.set(false)
+        inFlightCount.decrementAndGet()
         val fails = consecutiveFails.incrementAndGet()
         if (fails == FAIL_WARN_COUNT) {
             runOnUiThread {
@@ -1953,15 +1967,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     /** 직전 프레임과의 시간 간격으로 FPS 계산 + 스파크라인 업데이트 */
     private fun calcFps(): String {
         val now = System.currentTimeMillis()
-        val fps = if (lastFrameDoneTime > 0L && now > lastFrameDoneTime) {
+        val instant = if (lastFrameDoneTime > 0L && now > lastFrameDoneTime) {
             1000.0f / (now - lastFrameDoneTime)
         } else 0.0f
         lastFrameDoneTime = now
-        currentFps = fps
+        currentFps = instant
 
-        // 최근 10프레임 FPS 기록
+        // 최근 10프레임 이동평균 — 동시 요청으로 인한 순간 spike 완화
         if (fpsHistory.size >= 10) fpsHistory.removeFirst()
-        fpsHistory.addLast(fps)
+        fpsHistory.addLast(instant)
+        val fps = fpsHistory.average().toFloat()
 
         val fpsStr = if (fps >= 10f) "%.0f".format(fps) else "%.1f".format(fps)
         return fpsStr

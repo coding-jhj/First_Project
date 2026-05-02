@@ -129,9 +129,11 @@ TTS/UI consumer
 
 ## 완료 기준
 
-- [ ] 앱 화면 또는 Logcat에서 실제 FPS를 확인했다.
-- [ ] 1분 실행 평균 FPS가 5 이상이다.
-- [ ] `VG_PERF`로 병목 단계가 설명된다.
-- [ ] TTS가 겹치지 않는다.
-- [ ] 오탐 사례 5개와 조치 결과가 남아 있다.
-- [ ] 김재현이 `captureAndProcess()`부터 `handleSuccess()`까지 직접 설명할 수 있다.
+- [x] `INTERVAL_MS` 100ms로 설정 완료 (2026-05-02)
+- [x] `isSending` → `inFlightCount(MAX_IN_FLIGHT=2)` 동시 요청 파이프라인 구현 (2026-05-02)
+- [x] `lastAppliedSeq`로 최신 응답만 UI/TTS 반영 (2026-05-02)
+- [x] `setSpeechRate` 1.0f로 정상화 (2026-05-02)
+- [x] 서버 `_MAX_AGE_S` 8.0초로 조정 (2026-05-02)
+- [ ] VG_PERF 로그로 실제 FPS 10+ 확인
+- [ ] TTS 겹침 없는지 1분 실행 검증
+- [ ] 오탐 사례 5개와 조치 결과 기록
