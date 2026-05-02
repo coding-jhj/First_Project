@@ -186,6 +186,7 @@ async def detect(
     previous = db.get_snapshot(wifi_ssid)
     space_changes = _space_changes(objects, previous) if previous else []
     db.save_snapshot(wifi_ssid, objects)  # 현재 상태를 다음 방문을 위해 저장
+    db.save_snapshot(session_id, objects)  # 대시보드 폴백용 세션별 최신 탐지 결과
 
     all_changes = motion_changes + space_changes
 
@@ -419,7 +420,10 @@ async def get_session_status(session_id: str):
     gps = db.get_last_gps(resolved_session_id)
 
     tracker = get_tracker(resolved_session_id)
-    current = tracker.get_current_state(max_age_s=3.0)
+    current = tracker.get_current_state(max_age_s=5.0)
+    # in-memory tracker 비어 있으면 DB 스냅샷 폴백 (Cloud Run 다중 인스턴스 / 서버 재시작 대비)
+    if not current:
+        current = db.get_snapshot(resolved_session_id, max_age_s=8.0) or []
     track   = db.get_gps_track(resolved_session_id, limit=100)
     return {
         "session_id": resolved_session_id,
