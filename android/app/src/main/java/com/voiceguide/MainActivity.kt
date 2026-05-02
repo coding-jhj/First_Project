@@ -700,7 +700,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             }
             "하차알림" -> requestLocationPermission {
                 speak("현재 위치를 기준으로 200미터 이내에 도착하면 알려드릴게요.")
-                startGpsTracking()
+                startGpsTracking(enableArrivalAlert = true)
             }
             "unknown" -> speak("다시 말씀해 주세요.")
             else -> {
@@ -950,7 +950,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // ── GPS 하차 알림 ────────────────────────────────────────────────
 
     @Suppress("MissingPermission")
-    private fun startGpsTracking() {
+    private fun startGpsTracking(enableArrivalAlert: Boolean = false) {
         try {
             val providers = listOf(
                 android.location.LocationManager.GPS_PROVIDER,
@@ -973,15 +973,21 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
             if (lastLoc != null) {
                 updateCurrentLocation(lastLoc, "lastKnown")
-                targetBusStop = lastLoc
-                speak("현재 위치에서 200미터 이내로 돌아오면 알려드릴게요.")
+                if (enableArrivalAlert) {
+                    targetBusStop = lastLoc
+                    speak("현재 위치를 하차 알림 기준 위치로 저장했어요.")
+                }
             } else {
                 Log.w("VG_GPS", "location not ready providers=$providers")
-                speak("GPS 신호를 찾는 중이에요. 잠시 후 다시 시도해 주세요.")
+                if (enableArrivalAlert) {
+                    speak("GPS 신호를 찾는 중이에요. 잠시 후 다시 시도해 주세요.")
+                }
             }
         } catch (e: Exception) {
             Log.e("VG_GPS", "GPS start failed", e)
-            speak("GPS를 사용할 수 없어요.")
+            if (enableArrivalAlert) {
+                speak("GPS를 사용할 수 없어요.")
+            }
         }
     }
 
@@ -1121,8 +1127,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         btnToggle.text = "■ 분석 중지"
         btnToggle.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFDC2626.toInt())
         tvStatus.text  = "분석 중..."
-        // GPS 시작 — 대시보드 지도에 위치 표시 및 /detect 요청에 lat/lng 포함
-        requestLocationPermission { startGpsTracking() }
+        // GPS 시작 — 대시보드 지도에 위치 표시. 하차 알림 문구/target 설정은 하지 않는다.
+        requestLocationPermission { startGpsTracking(enableArrivalAlert = false) }
         captureAndProcess()
         scheduleNext()
         scheduleWatchdog()
