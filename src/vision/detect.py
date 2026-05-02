@@ -74,7 +74,8 @@ CLASS_MIN_CONF = {
     # 날카로운 위험 물체 → 낮게 (부상 위험)
     "knife": 0.42, "scissors": 0.45,
     # 실내 소형 (오탐 많아서 높게)
-    "cell phone": 0.65, "remote": 0.65, "mouse": 0.65,
+    "cell phone": 0.45, "remote": 0.65, "mouse": 0.65,
+    "keyboard": 0.35, "stairs": 0.35,
     "toothbrush": 0.70, "spoon": 0.70, "fork": 0.65,
     # 실내 소형/오탐 잦은 클래스
     "tie": 0.75, "umbrella": 0.68, "handbag": 0.65,
@@ -96,6 +97,7 @@ _ALWAYS_WARN = {
     "knife", "scissors",
     "bear", "elephant", "horse", "dog",  # 위험 동물
     "fire hydrant",  # 도로에 돌출, 충돌 위험
+    "stairs",        # 실내 커스텀 모델 클래스: 계단/단차
 }
 
 # ── 가까울 때만 경고할 클래스 (2m 이상이면 무음) ─────────────────────────────
@@ -142,6 +144,7 @@ CLASS_RISK_MULTIPLIER = {
     "train": 4.0, "bicycle": 2.0, "airplane": 1.5, "boat": 1.5,
     # 이동 물체
     "skateboard": 2.0, "sports ball": 1.3,
+    "stairs": 2.0,
     # 위험 동물
     "elephant": 4.0, "bear": 4.0, "horse": 2.5, "zebra": 2.0,
     "giraffe": 2.0, "cow": 2.0, "sheep": 1.5,
@@ -244,6 +247,7 @@ TARGET_CLASSES = {
     "remote":          "리모컨",
     "keyboard":        "키보드",
     "cell phone":      "휴대폰",
+    "stairs":          "계단",
 
     # 가전
     "microwave":       "전자레인지",
@@ -279,13 +283,14 @@ CLASS_CALIB_RATIO = {
     "sports ball": 0.02, "baseball bat": 0.02,
     "knife": 0.005, "scissors": 0.005, "wine glass": 0.005,
     "bottle": 0.005, "vase": 0.008,
+    "cell phone": 0.012, "keyboard": 0.05, "stairs": 0.08,
 }
 _DEFAULT_CALIB = 0.06
 
 
 # ── 바닥 장애물 판별 ─────────────────────────────────────────────────────────
 _GROUND_CLASSES = {
-    "fire hydrant", "parking meter",
+    "fire hydrant", "parking meter", "stairs",
     "dog", "cat", "bird", "backpack", "suitcase", "handbag",
     "frisbee", "sports ball", "skateboard",
     "knife", "scissors", "bottle", "wine glass",

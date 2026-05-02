@@ -1466,7 +1466,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     "server=${processMs}ms perf=${perf?.toString() ?: "{}"}")
                 // 질문 응답 후 3초간 periodic capture의 TTS 억제
                 suppressPeriodicUntil = System.currentTimeMillis() + 3000L
-                runOnUiThread { tvStatus.text = sentence; speak(sentence) }
+                val alertMode = json.optString("alert_mode", "normal")
+                handleSuccess(sentence, alertMode)  // dedup 로직 통합 (직접 speak() 우회 방지)
             } catch (e: Exception) {
                 Log.e("VG_LINK", "request_id=$requestId mode=$mode server request failed", e)
                 runOnUiThread { speak("서버 연결에 실패했어요.") }
@@ -1684,6 +1685,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
                 val optimized = optimizeImageForUpload(imageFile)
                 val uploadBytes = optimized.length()
+                // 업로드 이미지 크기 — 서버 bbox 좌표 스케일링에 사용
+                val dimOpts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeFile(optimized.absolutePath, dimOpts)
+                val uploadImgW = if (dimOpts.outWidth > 0) dimOpts.outWidth else 640
+                val uploadImgH = if (dimOpts.outHeight > 0) dimOpts.outHeight else 480
                 Log.d("VG_GPS", "send detect lat=$currentLat lng=$currentLng")
 
                 val body = MultipartBody.Builder().setType(MultipartBody.FORM)
@@ -1737,6 +1743,35 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                                   "왕복   : ${roundTripMs}ms\n" +
                                   "업로드 : ${uploadBytes / 1024}KB"
                     }
+                }
+
+                // 서버 응답 bbox로 바운딩 박스 오버레이 업데이트
+                val serverDetections = mutableListOf<Detection>()
+                val objArray = json.optJSONArray("objects")
+                if (objArray != null) {
+                    for (i in 0 until objArray.length()) {
+                        val obj = objArray.optJSONObject(i) ?: continue
+                        val normXywh = obj.optJSONArray("bbox_norm_xywh") ?: continue
+                        if (normXywh.length() < 4) continue
+                        val x1n = normXywh.optDouble(0).toFloat()
+                        val y1n = normXywh.optDouble(1).toFloat()
+                        val wn  = normXywh.optDouble(2).toFloat()
+                        val hn  = normXywh.optDouble(3).toFloat()
+                        val classKo = obj.optString("class_ko", "")
+                        if (classKo.isEmpty() || wn <= 0f || hn <= 0f) continue
+                        serverDetections.add(Detection(
+                            classKo    = classKo,
+                            confidence = obj.optDouble("confidence", 0.9).toFloat(),
+                            cx         = x1n + wn / 2f,
+                            cy         = y1n + hn / 2f,
+                            w          = wn,
+                            h          = hn
+                        ))
+                    }
+                }
+                runOnUiThread {
+                    if (serverDetections.isEmpty()) boundingBoxOverlay.clearDetections()
+                    else boundingBoxOverlay.setDetections(serverDetections, uploadImgW, uploadImgH)
                 }
 
                 handleSuccess(sentence, alertMode)

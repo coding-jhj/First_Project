@@ -186,6 +186,8 @@ async def detect(
     previous = db.get_snapshot(wifi_ssid)
     space_changes = _space_changes(objects, previous) if previous else []
     db.save_snapshot(wifi_ssid, objects)  # 현재 상태를 다음 방문을 위해 저장
+    if objects:  # 빈 결과로 유효 스냅샷 덮어쓰지 않도록
+        db.save_snapshot(session_id, objects)
 
     all_changes = motion_changes + space_changes
 
@@ -419,7 +421,10 @@ async def get_session_status(session_id: str):
     gps = db.get_last_gps(resolved_session_id)
 
     tracker = get_tracker(resolved_session_id)
-    current = tracker.get_current_state(max_age_s=3.0)
+    current = tracker.get_current_state(max_age_s=5.0)
+    # in-memory tracker 비어 있으면 DB 스냅샷 폴백 (Cloud Run 다중 인스턴스 / 서버 재시작 대비)
+    if not current:
+        current = db.get_snapshot(resolved_session_id, max_age_s=8.0) or []
     track   = db.get_gps_track(resolved_session_id, limit=100)
     return {
         "session_id": resolved_session_id,
@@ -434,6 +439,20 @@ async def get_session_status(session_id: str):
 async def list_sessions():
     """GPS 데이터가 있는 최근 세션 ID 목록 반환 — 대시보드 세션 선택용."""
     return {"sessions": db.get_recent_sessions()}
+
+
+@router.get("/team-locations", dependencies=[Depends(_verify_api_key)])
+async def get_team_locations():
+    """최근 30분 내 활성 세션의 마지막 GPS 반환 — 대시보드 팀원 위치 표시용."""
+    from datetime import datetime, timedelta
+    cutoff = (datetime.now() - timedelta(minutes=30)).isoformat()
+    sessions = db.get_recent_sessions(limit=20)
+    locations = []
+    for s in sessions:
+        gps = db.get_last_gps(s)
+        if gps and gps.get("timestamp", "") >= cutoff:
+            locations.append({"session_id": s, "lat": gps["lat"], "lng": gps["lng"]})
+    return {"locations": locations}
 
 
 @router.get("/dashboard", dependencies=[Depends(_verify_api_key)])
