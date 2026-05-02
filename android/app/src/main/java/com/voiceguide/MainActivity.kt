@@ -86,8 +86,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // Handler: 메인 스레드에서 지연 작업 예약 (1초 간격 루프, Watchdog)
     private val handler = Handler(Looper.getMainLooper())
     // AtomicBoolean: 여러 스레드가 동시에 접근해도 안전한 boolean
-    private val isAnalyzing = AtomicBoolean(false)
-    private val isSending   = AtomicBoolean(false)
+    private val isAnalyzing  = AtomicBoolean(false)
+    private val inFlightCount = AtomicInteger(0)  // 동시 서버 요청 수 (최대 MAX_IN_FLIGHT)
     private var lastSentence = ""
     // TTS 완전 잠금 — compareAndSet으로만 시작 가능, onDone 후 해제
     private val ttsBusy     = AtomicBoolean(false)
@@ -293,6 +293,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             "https://voiceguide-1063164560758.asia-northeast3.run.app"
         private const val PREF_LOCATIONS   = "saved_locations"  // 저장 장소 JSON 배열 키
         private const val INTERVAL_MS      = 100L          // 캡처 간격: 0.1초 (10fps 목표)
+        private const val MAX_IN_FLIGHT    = 3             // 동시 서버 요청 최대 수
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
         private const val FAIL_WARN_COUNT  = 3             // 연속 3회 실패 시 경고
         private const val GPS_SEND_INTERVAL_MS = 3000L     // 대시보드 위치 갱신 최소 간격
@@ -1275,10 +1276,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
             val now = System.currentTimeMillis()
             if (now - lastStreamFrameTime < INTERVAL_MS) return
-            if (!isSending.compareAndSet(false, true)) {
+            if (inFlightCount.getAndIncrement() >= MAX_IN_FLIGHT) {
+                inFlightCount.decrementAndGet()
                 if (now - lastStreamSkipLogTime > 1000L) {
                     lastStreamSkipLogTime = now
-                    Log.d("VG_FLOW", "stream frame skipped: previous frame still processing")
+                    Log.d("VG_FLOW", "stream frame skipped: inFlight=${inFlightCount.get()}/$MAX_IN_FLIGHT")
                 }
                 return
             }
@@ -1291,7 +1293,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             if (route == "on_device") processOnDevice(file, requestId)
             else sendToServer(file, requestId)
         } catch (e: Exception) {
-            if (isSending.get()) isSending.set(false)
+            if (inFlightCount.get() > 0) inFlightCount.decrementAndGet()
             Log.e("VG_FLOW", "stream analysis failed", e)
             handleFail()
         } finally {
@@ -1372,9 +1374,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     }
 
     private fun captureAndProcess() {
-        // isSending 체크: 이전 요청이 아직 진행 중이면 새 캡처 스킵 (중복 방지)
-        if (isSending.get()) {
-            Log.d("VG_FLOW", "capture skipped: previous frame still processing")
+        // 일회성 STT 캡처: stream 요청이 진행 중이면 스킵 (중복 방지)
+        if (inFlightCount.get() > 0) {
+            Log.d("VG_FLOW", "capture skipped: inFlight=${inFlightCount.get()}")
             return
         }
         val file = File.createTempFile("vg_", ".jpg", cacheDir)
@@ -1383,7 +1385,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             cameraExecutor,
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    isSending.set(true)
+                    inFlightCount.incrementAndGet()
                     val requestId = nextRequestId()
                     val route = if (shouldUseOnDeviceDetector()) "on_device" else "server"
                     Log.d("VG_FLOW", "request_id=$requestId route=$route mode=$currentMode file=${file.length()}B")
@@ -1391,7 +1393,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     else sendToServer(file, requestId)
                 }
                 override fun onError(e: ImageCaptureException) {
-                    isSending.set(false)
+                    inFlightCount.decrementAndGet()
                     Log.e("VG_FLOW", "capture failed", e)
                     handleFail()
                 }
@@ -1792,7 +1794,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private fun handleSuccess(sentence: String, alertMode: String = "critical") {
         consecutiveFails.set(0)
         lastSuccessTime = System.currentTimeMillis()
-        isSending.set(false)
+        inFlightCount.decrementAndGet()
         if (!isAnalyzing.get()) return  // 분석 중지 후 in-flight 요청 결과 무시
 
         // 질문 응답 직후 periodic TTS 억제 — critical은 항상 통과
@@ -1852,7 +1854,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     }
 
     private fun handleFail() {
-        isSending.set(false)
+        inFlightCount.decrementAndGet()
         val fails = consecutiveFails.incrementAndGet()
         if (fails == FAIL_WARN_COUNT) {
             runOnUiThread {
