@@ -1967,15 +1967,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     /** 직전 프레임과의 시간 간격으로 FPS 계산 + 스파크라인 업데이트 */
     private fun calcFps(): String {
         val now = System.currentTimeMillis()
-        val fps = if (lastFrameDoneTime > 0L && now > lastFrameDoneTime) {
+        val instant = if (lastFrameDoneTime > 0L && now > lastFrameDoneTime) {
             1000.0f / (now - lastFrameDoneTime)
         } else 0.0f
         lastFrameDoneTime = now
-        currentFps = fps
+        currentFps = instant
 
-        // 최근 10프레임 FPS 기록
+        // 최근 10프레임 이동평균 — 동시 요청으로 인한 순간 spike 완화
         if (fpsHistory.size >= 10) fpsHistory.removeFirst()
-        fpsHistory.addLast(fps)
+        fpsHistory.addLast(instant)
+        val fps = fpsHistory.average().toFloat()
 
         val fpsStr = if (fps >= 10f) "%.0f".format(fps) else "%.1f".format(fps)
         return fpsStr

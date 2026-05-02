@@ -239,7 +239,7 @@ TARGET_CLASSES = {
     "bed":             "침대",
     "dining table":    "테이블",
     "toilet":          "변기",
-    "tv":              "TV",
+    "tv":              "티비",
 
     # 전자기기
     "laptop":          "노트북",
