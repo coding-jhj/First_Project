@@ -366,7 +366,15 @@
     <div class="session-input">
       <label>세션 ID (WiFi SSID)</label>
       <input id="sessionId" type="text" placeholder="__default__" value="__default__">
+      <button onclick="loadSessions()" style="
+        background:var(--accent);border:none;border-radius:6px;
+        color:#fff;font-size:11px;font-weight:600;padding:3px 8px;cursor:pointer;">
+        탐색
+      </button>
     </div>
+    <div id="sessionList" style="display:none;position:absolute;top:52px;right:24px;
+      background:var(--surface2);border:1px solid var(--border);border-radius:8px;
+      z-index:999;min-width:200px;overflow:hidden;"></div>
     <div style="display:flex;align-items:center;gap:6px;">
       <div class="pulse-dot" id="statusDot"></div>
       <span class="status-text" id="statusText">연결 중...</span>
@@ -528,7 +536,7 @@ function riskLabel(r) {
 
 function distLabel(d) {
   if (d == null) return '—';
-  if (d < 0.5)  return '바로 코앞';
+  if (d < 0.5)  return '코 앞';
   if (d < 1.0)  return '매우 가까이';
   if (d < 2.5)  return '가까이';
   if (d < 5.0)  return '조금 멀리';
@@ -680,6 +688,46 @@ function showToast(msg) {
   t.textContent = msg;
   t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 2800);
+}
+
+// ── 세션 탐색 ─────────────────────────────────────────
+async function loadSessions() {
+  const box = document.getElementById('sessionList');
+  box.style.display = 'block';
+  box.innerHTML = '<div style="padding:10px 14px;font-size:12px;color:var(--muted)">불러오는 중...</div>';
+  try {
+    const res  = await fetch(`${SERVER_BASE}/sessions`);
+    const data = await res.json();
+    const sessions = data.sessions ?? [];
+    if (sessions.length === 0) {
+      box.innerHTML = '<div style="padding:10px 14px;font-size:12px;color:var(--muted)">GPS 데이터 없음<br>앱에서 분석을 시작하세요</div>';
+    } else {
+      box.innerHTML = sessions.map(s => `
+        <div onclick="selectSession('${s}')" style="
+          padding:9px 14px;font-size:13px;cursor:pointer;
+          border-bottom:1px solid var(--border);
+          transition:background 0.15s;"
+          onmouseover="this.style.background='var(--surface)'"
+          onmouseout="this.style.background=''">
+          📡 ${s}
+        </div>`).join('');
+    }
+  } catch(e) {
+    box.innerHTML = '<div style="padding:10px 14px;font-size:12px;color:var(--danger)">서버 연결 실패</div>';
+  }
+  // 외부 클릭 시 닫기
+  setTimeout(() => document.addEventListener('click', function h(e){
+    if (!box.contains(e.target)) { box.style.display='none'; document.removeEventListener('click',h); }
+  }), 100);
+}
+
+function selectSession(s) {
+  document.getElementById('sessionId').value = s;
+  document.getElementById('sessionList').style.display = 'none';
+  prevObjectCount = 0; mapCentered = false;
+  if (marker)    { map.removeLayer(marker);    marker    = null; }
+  if (trackLine) { map.removeLayer(trackLine); trackLine = null; }
+  poll();
 }
 
 // ── 세션 ID 변경 시 리셋 ─────────────────────────────

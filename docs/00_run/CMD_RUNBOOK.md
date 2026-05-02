@@ -37,7 +37,7 @@ https://voiceguide-1063164560758.asia-northeast3.run.app
 한 줄로 실행하고 싶으면:
 
 ```bash
-gcloud run deploy voiceguide --source . --region asia-northeast3 --memory 2Gi --cpu 2 --timeout 120 --allow-unauthenticated --port 8080
+gcloud run deploy voiceguide --source . --region asia-northeast3 --memory 2Gi --cpu 2 --timeout 120 --allow-unauthenticated --port 8080 --max-instances 1
 ```
 
 ## 2. 앱 없이 서버-대시보드 연동 확인

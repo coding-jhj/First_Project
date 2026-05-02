@@ -116,7 +116,7 @@ Android 앱 우상단 설정(⚙) → 서버 URL에 해당 URL 붙여넣기.
 
 ```bat
 cd C:\VoiceGuide\VoiceGuide
-gcloud run deploy voiceguide --source . --region asia-northeast3
+gcloud run deploy voiceguide --source . --region asia-northeast3 --memory 2Gi --cpu 2 --timeout 120 --allow-unauthenticated --port 8080 --max-instances 1
 ```
 
 ---

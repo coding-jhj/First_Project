@@ -287,6 +287,23 @@ def get_last_gps(session_id: str) -> dict | None:
                     "timestamp": row[2]} if row else None
 
 
+def get_recent_sessions(limit: int = 10) -> list[str]:
+    """GPS 데이터가 있는 최근 세션 ID 목록 반환 (대시보드 세션 선택용)."""
+    with _conn() as conn:
+        if _IS_POSTGRES:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT DISTINCT session_id FROM gps_history "
+                    "ORDER BY id DESC LIMIT %s", (limit,))
+                rows = cur.fetchall()
+            return [r["session_id"] for r in rows]
+        else:
+            rows = conn.execute(
+                "SELECT DISTINCT session_id FROM gps_history "
+                "ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+            return [r[0] for r in rows]
+
+
 def get_gps_track(session_id: str, limit: int = 100) -> list[dict]:
     """대시보드 지도에 표시할 이동 경로 포인트 목록 반환."""
     with _conn() as conn:

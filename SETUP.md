@@ -12,7 +12,7 @@ docs/00_실행/CMD_RUNBOOK.md
 
 ```bat
 cd /c/VoiceGuide/VoiceGuide
-gcloud run deploy voiceguide --source . --region asia-northeast3 --memory 2Gi --cpu 2 --timeout 120 --allow-unauthenticated --port 8080
+gcloud run deploy voiceguide --source . --region asia-northeast3 --memory 2Gi --cpu 2 --timeout 120 --allow-unauthenticated --port 8080 --max-instances 1
 python tools\probe_server_link.py --base https://voiceguide-1063164560758.asia-northeast3.run.app
 ```
 

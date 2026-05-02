@@ -431,6 +431,12 @@ async def get_session_status(session_id: str):
     }
 
 
+@router.get("/sessions", dependencies=[Depends(_verify_api_key)])
+async def list_sessions():
+    """GPS 데이터가 있는 최근 세션 ID 목록 반환 — 대시보드 세션 선택용."""
+    return {"sessions": db.get_recent_sessions()}
+
+
 @router.get("/dashboard", dependencies=[Depends(_verify_api_key)])
 async def dashboard():
     """대시보드 HTML 페이지 반환."""
