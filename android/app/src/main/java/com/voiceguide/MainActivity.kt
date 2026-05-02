@@ -1001,7 +1001,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             providers.forEach { provider ->
                 locationManager?.requestLocationUpdates(
                     provider,
-                    3000L, 10f, locationListener
+                    3000L, 0f, locationListener  // 0f: 이동 거리 무관하게 3초마다 갱신
                 )
                 Log.d("VG_GPS", "requestLocationUpdates provider=$provider")
             }
@@ -1711,6 +1711,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
                 // 전체 왕복 시간 = 네트워크 + 서버 처리
                 val roundTripMs = System.currentTimeMillis() - reqStart
+                // GPS fix가 완료된 이후 /detect 응답에 맞춰 GPS도 추가 전송
+                // (GPS fix 전에 /detect가 먼저 나가는 타이밍 문제 보완)
+                sendGpsHeartbeat("detect")
                 val json        = JSONObject(response.body?.string() ?: "{}")
                 val sentence    = json.optString("sentence", "주변에 장애물이 없어요.")
                 val alertMode   = json.optString("alert_mode", "critical")
