@@ -37,15 +37,18 @@ src/api/
 ### 서버가 켜질 때 (딱 한 번 실행)
 
 ```python
-db.init_db()          # DB 테이블 준비
-model(더미 이미지)     # YOLO 미리 로드
-warmup_ocr()          # EasyOCR 미리 로드  (백그라운드)
-warmup_tts()          # TTS 캐시 미리 준비 (백그라운드)
+db.init_db()           # DB 테이블 준비 (동기, 빠름)
+# 나머지 워밍업은 전부 백그라운드 스레드 — yield 전에 블로킹하지 않음
+# Cloud Run이 PORT=8080을 즉시 감지해야 타임아웃이 안 남
+threading.Thread(target=_warmup_yolo,  daemon=True).start()
+threading.Thread(target=_warmup_depth, daemon=True).start()
+threading.Thread(target=_warmup_ocr,   daemon=True).start()
+threading.Thread(target=_warmup_tts,   daemon=True).start()
 ```
 
-**왜 워밍업이 필요하냐면:**
-YOLO 같은 AI 모델은 처음 실행할 때 느림 (5~10초).
-서버 켤 때 미리 한 번 돌려놓으면 실제 첫 요청이 빠르게 처리됨.
+**왜 전부 백그라운드로 바꿨냐면:**
+YOLO·Depth를 동기 로드하면 서버 시작에 30초+ 걸려 Cloud Run이 타임아웃으로 죽음.
+백그라운드로 분리하면 서버가 즉시 ready 상태가 되고, 워밍업은 뒤에서 조용히 완료됨.
 
 ### /health — 서버 상태 확인
 

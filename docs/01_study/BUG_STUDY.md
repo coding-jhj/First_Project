@@ -393,19 +393,20 @@ h  = (y2 - y1) / imgHeight        박스 높이 ÷ 이미지 높이
 
 ### 왜 생겼나
 
-**`src/api/main.py` lifespan:**
+**`src/api/main.py` lifespan (현재):**
 ```python
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    db.init_db()
-    # YOLO 워밍업
-    from src.vision.detect import model, CONF_THRESHOLD
-    model(np.zeros((640, 640, 3)), conf=CONF_THRESHOLD, verbose=False)
-    # ← Depth V2 워밍업 없었음!
+    db.init_db()  # 동기
+    # YOLO·Depth·OCR·TTS 모두 백그라운드 스레드로 워밍업
+    threading.Thread(target=_warmup_yolo,  daemon=True).start()
+    threading.Thread(target=_warmup_depth, daemon=True).start()
+    threading.Thread(target=_warmup_ocr,   daemon=True).start()
+    threading.Thread(target=_warmup_tts,   daemon=True).start()
     yield
 ```
 
-서버 시작 시 YOLO는 워밍업하지만 Depth V2는 첫 요청이 올 때 비로소 로드.
+수정 후: YOLO·Depth 모두 백그라운드에서 워밍업됨. Cloud Run 타임아웃 버그 해결.
 
 **`src/depth/depth.py`의 싱글톤 패턴:**
 ```python

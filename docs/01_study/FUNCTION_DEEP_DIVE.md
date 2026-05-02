@@ -138,7 +138,9 @@ handleSttResult("이거 뭐야")
 
 | 함수 | 입력 | 출력/부작용 | 공부 포인트 |
 |---|---|---|---|
-| `lifespan(app)` | FastAPI app | DB init, 모델 warmup | 서버 시작 때 죽으면 안 되는 작업 |
+| `lifespan(app)` | FastAPI app | DB init + 4개 워밍업 스레드 시작 | 전부 백그라운드 — Cloud Run 타임아웃 방지 |
+| `_warmup_yolo()` | 없음 | YOLO 더미 추론으로 JIT 완료 | 실패해도 서버 유지, 백그라운드 스레드 |
+| `_warmup_depth()` | 없음 | Depth V2 모델 로드 | 실패해도 서버 유지, 백그라운드 스레드 |
 | `_warmup_ocr()` | 없음 | OCR reader 미리 로드 | 실험 기능, 실패해도 서버 유지 |
 | `_warmup_tts()` | 없음 | TTS cache warmup | 서버 TTS 보조 |
 | `health()` | HTTP GET | 상태 JSON | GCP 정상 확인 1순위 |
