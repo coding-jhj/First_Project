@@ -238,9 +238,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     @Volatile private var currentLat = 0.0  // 현재 GPS 위도 (서버 /detect 전송용)
     @Volatile private var currentLng = 0.0  // 현재 GPS 경도
     private val locationListener = android.location.LocationListener { loc ->
-        // 현재 위치 항상 업데이트 (대시보드 지도 표시용)
-        currentLat = loc.latitude
-        currentLng = loc.longitude
+        updateCurrentLocation(loc, "listener")
         // 하차 알림 처리
         targetBusStop?.let { target ->
             if (loc.distanceTo(target) < 200f) {
@@ -248,6 +246,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 stopGpsTracking()
             }
         }
+    }
+
+    private fun updateCurrentLocation(loc: android.location.Location, source: String) {
+        currentLat = loc.latitude
+        currentLng = loc.longitude
+        Log.d(
+            "VG_GPS",
+            "source=$source provider=${loc.provider} lat=$currentLat lng=$currentLng accuracy=${loc.accuracy}"
+        )
     }
 
     // ── ONNX 온디바이스 추론 ───────────────────────────────────────────
@@ -942,19 +949,35 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     @Suppress("MissingPermission")
     private fun startGpsTracking() {
         try {
-            locationManager?.requestLocationUpdates(
+            val providers = listOf(
                 android.location.LocationManager.GPS_PROVIDER,
-                5000L, 50f, locationListener
-            )
-            val lastLoc = locationManager?.getLastKnownLocation(
-                android.location.LocationManager.GPS_PROVIDER)
+                android.location.LocationManager.NETWORK_PROVIDER
+            ).filter { provider ->
+                locationManager?.isProviderEnabled(provider) == true
+            }
+
+            providers.forEach { provider ->
+                locationManager?.requestLocationUpdates(
+                    provider,
+                    3000L, 10f, locationListener
+                )
+                Log.d("VG_GPS", "requestLocationUpdates provider=$provider")
+            }
+
+            val lastLoc = providers
+                .mapNotNull { provider -> locationManager?.getLastKnownLocation(provider) }
+                .maxByOrNull { it.time }
+
             if (lastLoc != null) {
+                updateCurrentLocation(lastLoc, "lastKnown")
                 targetBusStop = lastLoc
                 speak("현재 위치에서 200미터 이내로 돌아오면 알려드릴게요.")
             } else {
+                Log.w("VG_GPS", "location not ready providers=$providers")
                 speak("GPS 신호를 찾는 중이에요. 잠시 후 다시 시도해 주세요.")
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.e("VG_GPS", "GPS start failed", e)
             speak("GPS를 사용할 수 없어요.")
         }
     }
@@ -1179,6 +1202,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         Thread {
             try {
                 val reqStart = System.currentTimeMillis()
+                Log.d("VG_GPS", "send question lat=$currentLat lng=$currentLng")
                 val body = MultipartBody.Builder().setType(MultipartBody.FORM)
                     .addFormDataPart("image", "frame.jpg",
                         imageFile.asRequestBody("image/jpeg".toMediaType()))
@@ -1414,6 +1438,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
                 val optimized = optimizeImageForUpload(imageFile)
                 val uploadBytes = optimized.length()
+                Log.d("VG_GPS", "send detect lat=$currentLat lng=$currentLng")
 
                 val body = MultipartBody.Builder().setType(MultipartBody.FORM)
                     .addFormDataPart("image", "frame.jpg",

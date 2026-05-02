@@ -293,15 +293,23 @@ def get_recent_sessions(limit: int = 10) -> list[str]:
         if _IS_POSTGRES:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT DISTINCT session_id FROM gps_history "
-                    "ORDER BY id DESC LIMIT %s", (limit,))
+                    "SELECT session_id FROM gps_history "
+                    "GROUP BY session_id "
+                    "ORDER BY MAX(id) DESC LIMIT %s", (limit,))
                 rows = cur.fetchall()
             return [r["session_id"] for r in rows]
         else:
             rows = conn.execute(
-                "SELECT DISTINCT session_id FROM gps_history "
-                "ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+                "SELECT session_id FROM gps_history "
+                "GROUP BY session_id "
+                "ORDER BY MAX(id) DESC LIMIT ?", (limit,)).fetchall()
             return [r[0] for r in rows]
+
+
+def get_latest_session() -> str | None:
+    """가장 최근 GPS를 보낸 세션 ID 반환."""
+    sessions = get_recent_sessions(limit=1)
+    return sessions[0] if sessions else None
 
 
 def get_gps_track(session_id: str, limit: int = 100) -> list[dict]:
