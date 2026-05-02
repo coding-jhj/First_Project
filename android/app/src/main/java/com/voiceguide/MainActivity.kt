@@ -23,8 +23,10 @@ import android.widget.EditText
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -37,6 +39,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -75,6 +78,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     // ── 카메라 & 분석 루프 ─────────────────────────────────────────────
     private var imageCapture: ImageCapture? = null
+    private var imageAnalysis: ImageAnalysis? = null
+    private var lastStreamFrameTime = 0L
+    private var lastStreamSkipLogTime = 0L
     // newSingleThreadExecutor: 카메라 캡처를 UI 스레드와 분리 (UI 멈춤 방지)
     private val cameraExecutor = Executors.newSingleThreadExecutor()
     // Handler: 메인 스레드에서 지연 작업 예약 (1초 간격 루프, Watchdog)
@@ -1170,9 +1176,24 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 .also { it.setSurfaceProvider(previewView.surfaceProvider) }
             imageCapture = ImageCapture.Builder()
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build()
+            imageAnalysis = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setTargetResolution(android.util.Size(640, 480))
+                .build()
+                .also { analysis ->
+                    analysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                        analyzeStreamFrame(imageProxy)
+                    }
+                }
             try {
                 provider.unbindAll()
-                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageCapture)
+                provider.bindToLifecycle(
+                    this,
+                    CameraSelector.DEFAULT_BACK_CAMERA,
+                    preview,
+                    imageCapture,
+                    imageAnalysis
+                )
                 startAnalysis()
             } catch (e: Exception) {
                 tvStatus.text = "카메라 오류: ${e.message}"
@@ -1195,8 +1216,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         tvStatus.text  = "분석 중..."
         // GPS 시작 — 대시보드 지도에 위치 표시. 하차 알림 문구/target 설정은 하지 않는다.
         requestLocationPermission { startGpsTracking(enableArrivalAlert = false) }
-        captureAndProcess()
-        scheduleNext()
         scheduleWatchdog()
         scheduleAutoListen()
     }
@@ -1247,6 +1266,109 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             }
             scheduleWatchdog()
         }, SILENCE_WARN_MS)
+    }
+
+    private fun analyzeStreamFrame(imageProxy: ImageProxy) {
+        try {
+            if (!isAnalyzing.get()) return
+            checkRevisit()
+
+            val now = System.currentTimeMillis()
+            if (now - lastStreamFrameTime < INTERVAL_MS) return
+            if (!isSending.compareAndSet(false, true)) {
+                if (now - lastStreamSkipLogTime > 1000L) {
+                    lastStreamSkipLogTime = now
+                    Log.d("VG_FLOW", "stream frame skipped: previous frame still processing")
+                }
+                return
+            }
+            lastStreamFrameTime = now
+
+            val requestId = nextRequestId()
+            val route = if (shouldUseOnDeviceDetector()) "on_device" else "server"
+            val file = imageProxyToJpegFile(imageProxy)
+            Log.d("VG_FLOW", "request_id=$requestId route=$route mode=$currentMode stream_file=${file.length()}B")
+            if (route == "on_device") processOnDevice(file, requestId)
+            else sendToServer(file, requestId)
+        } catch (e: Exception) {
+            if (isSending.get()) isSending.set(false)
+            Log.e("VG_FLOW", "stream analysis failed", e)
+            handleFail()
+        } finally {
+            imageProxy.close()
+        }
+    }
+
+    private fun imageProxyToJpegFile(imageProxy: ImageProxy): File {
+        val nv21 = yuv420ToNv21(imageProxy)
+        val yuvImage = android.graphics.YuvImage(
+            nv21,
+            android.graphics.ImageFormat.NV21,
+            imageProxy.width,
+            imageProxy.height,
+            null
+        )
+        val jpegBytes = ByteArrayOutputStream().use { out ->
+            yuvImage.compressToJpeg(
+                android.graphics.Rect(0, 0, imageProxy.width, imageProxy.height),
+                75,
+                out
+            )
+            out.toByteArray()
+        }
+
+        val rotation = imageProxy.imageInfo.rotationDegrees
+        val outFile = File.createTempFile("vg_stream_", ".jpg", cacheDir)
+        if (rotation == 0) {
+            outFile.writeBytes(jpegBytes)
+            return outFile
+        }
+
+        val raw = android.graphics.BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
+        val matrix = android.graphics.Matrix().apply { postRotate(rotation.toFloat()) }
+        val rotated = android.graphics.Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, matrix, true)
+        outFile.outputStream().use { stream ->
+            rotated.compress(android.graphics.Bitmap.CompressFormat.JPEG, 75, stream)
+        }
+        raw.recycle()
+        rotated.recycle()
+        return outFile
+    }
+
+    private fun yuv420ToNv21(imageProxy: ImageProxy): ByteArray {
+        val image = imageProxy.image ?: throw IllegalStateException("ImageProxy has no image")
+        val width = image.width
+        val height = image.height
+        val ySize = width * height
+        val uvSize = width * height / 2
+        val nv21 = ByteArray(ySize + uvSize)
+
+        val yPlane = image.planes[0]
+        val uPlane = image.planes[1]
+        val vPlane = image.planes[2]
+
+        var out = 0
+        val yBuffer = yPlane.buffer
+        for (row in 0 until height) {
+            val rowStart = row * yPlane.rowStride
+            yBuffer.position(rowStart)
+            yBuffer.get(nv21, out, width)
+            out += width
+        }
+
+        val uBuffer = uPlane.buffer
+        val vBuffer = vPlane.buffer
+        val chromaHeight = height / 2
+        val chromaWidth = width / 2
+        for (row in 0 until chromaHeight) {
+            for (col in 0 until chromaWidth) {
+                val vIndex = row * vPlane.rowStride + col * vPlane.pixelStride
+                val uIndex = row * uPlane.rowStride + col * uPlane.pixelStride
+                nv21[out++] = vBuffer.get(vIndex)
+                nv21[out++] = uBuffer.get(uIndex)
+            }
+        }
+        return nv21
     }
 
     private fun captureAndProcess() {
