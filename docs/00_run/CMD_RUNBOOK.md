@@ -1,11 +1,12 @@
 ﻿# VoiceGuide CMD 실행 순서
 
-> Windows CMD 기준입니다. PowerShell이 아니라 `cmd.exe`에서 그대로 복붙하면 됩니다.
+> **Git Bash** 기준입니다. Windows 검색창에 `Git Bash` 검색해서 실행하세요.
+> `conda activate ai_env`가 안 되면 Git Bash에서 `conda init bash` 한 번 실행 후 재시작.
 
 ## 0. 현재 코드 받기
 
-```bat
-cd /d C:\VoiceGuide\VoiceGuide
+```bash
+cd /c/VoiceGuide/VoiceGuide
 git pull origin main
 ```
 
@@ -14,16 +15,16 @@ git pull origin main
 코드를 수정한 뒤에는 GitHub에 push만 해서는 GCP 서버가 자동으로 바뀌지 않습니다.
 Cloud Run에 다시 배포해야 서버 로그의 `[LINK]`, `[PERF]`, `request_id`가 보입니다.
 
-```bat
-cd /d C:\VoiceGuide\VoiceGuide
+```bash
+cd /c/VoiceGuide/VoiceGuide
 
-gcloud run deploy voiceguide ^
-  --source . ^
-  --region asia-northeast3 ^
-  --memory 2Gi ^
-  --cpu 2 ^
-  --timeout 120 ^
-  --allow-unauthenticated ^
+gcloud run deploy voiceguide \
+  --source . \
+  --region asia-northeast3 \
+  --memory 2Gi \
+  --cpu 2 \
+  --timeout 120 \
+  --allow-unauthenticated \
   --port 8080
 ```
 
@@ -35,7 +36,7 @@ https://voiceguide-1063164560758.asia-northeast3.run.app
 
 한 줄로 실행하고 싶으면:
 
-```bat
+```bash
 gcloud run deploy voiceguide --source . --region asia-northeast3 --memory 2Gi --cpu 2 --timeout 120 --allow-unauthenticated --port 8080
 ```
 
@@ -43,8 +44,8 @@ gcloud run deploy voiceguide --source . --region asia-northeast3 --memory 2Gi --
 
 Android를 실행하기 전에 더미 클라이언트로 `/detect`, `/status`, `/dashboard`가 이어지는지 먼저 확인합니다.
 
-```bat
-cd /d C:\VoiceGuide\VoiceGuide
+```bash
+cd /c/VoiceGuide/VoiceGuide
 python tools\probe_server_link.py --base https://voiceguide-1063164560758.asia-northeast3.run.app
 ```
 
@@ -63,7 +64,7 @@ python tools\probe_server_link.py --base https://voiceguide-1063164560758.asia-n
 
 Android 앱에서 요청을 보낼 때 같은 `request_id`가 서버 로그에 찍히는지 확인합니다.
 
-```bat
+```bash
 gcloud run services logs tail voiceguide --region asia-northeast3
 ```
 
@@ -78,15 +79,15 @@ gcloud run services logs tail voiceguide --region asia-northeast3
 
 Cloud Run에 `API_KEY`를 설정하면 `/detect`, `/status`, `/dashboard` 같은 민감 엔드포인트가 보호됩니다.
 
-```bat
-gcloud run services update voiceguide ^
-  --region asia-northeast3 ^
+```bash
+gcloud run services update voiceguide \
+  --region asia-northeast3 \
   --set-env-vars API_KEY=원하는_긴_비밀값
 ```
 
 API Key를 켠 뒤 probe:
 
-```bat
+```bash
 python tools\probe_server_link.py --base https://voiceguide-1063164560758.asia-northeast3.run.app --api-key 원하는_긴_비밀값
 ```
 

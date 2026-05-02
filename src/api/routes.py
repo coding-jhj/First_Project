@@ -150,33 +150,7 @@ async def detect(
         f"session={session_id} lat={lat} lng={lng}"
     )
 
-    # ── 저장 모드: 이미지 없이 즉시 처리 ────────────────────────────────────
-    # "여기 저장해줘 편의점" → query_text에서 "편의점" 추출 → DB 저장
-    if mode == "저장":
-        label = extract_label(query_text) or f"위치_{datetime.now().strftime('%H%M')}"
-        if not wifi_ssid:
-            # WiFi 없으면 공간 ID를 알 수 없어 저장 불가
-            return _with_perf({
-                "mode": mode,
-                "sentence":     "WiFi에 연결되어 있지 않아 저장할 수 없어요.",
-                "objects": [], "hazards": [], "changes": [], "depth_source": "none",
-            }, _t0, request_id)
-        db.save_location(label, wifi_ssid)
-        return _with_perf({
-            "mode": mode,
-            "sentence":     build_navigation_sentence(label, "save"),
-            "objects": [], "hazards": [], "changes": [], "depth_source": "none",
-        }, _t0, request_id)
-
-    # ── 위치목록 모드: DB 조회 후 즉시 반환 ──────────────────────────────────
-    if mode == "위치목록":
-        locations = db.get_locations(wifi_ssid)  # wifi_ssid 있으면 해당 위치 장소만
-        return _with_perf({
-            "mode": mode,
-            "sentence":    build_navigation_sentence("", "list", locations=locations),
-            "locations":   locations,
-            "objects": [], "hazards": [], "changes": [], "depth_source": "none",
-        }, _t0, request_id)
+    # 저장/위치목록 모드는 실험 기능으로 제거됨 (개인 네비게이팅 기능 비활성화)
 
     # ── 이미지 분석 공통 흐름 (장애물/찾기/확인/질문 모드) ───────────────────
     image_bytes = await image.read()  # multipart form에서 이미지 바이트 추출
@@ -436,57 +410,7 @@ async def ocr_bus(
             "sentence": "버스 번호를 읽지 못했어요. 번호판에 더 가까이 대보세요."}
 
 
-@router.post("/locations/save", dependencies=[Depends(_verify_api_key)])
-async def save_location_endpoint(
-    wifi_ssid: str = Form(""),
-    label:     str = Form(""),
-):
-    """장소 저장. Android에서 이미지 없이 직접 호출."""
-    if not label:
-        return {"success": False, "sentence": "장소 이름을 말씀해 주세요."}
-    if not wifi_ssid:
-        return {"success": False, "sentence": "WiFi에 연결되어 있지 않아 저장할 수 없어요."}
-    db.save_location(label, wifi_ssid)
-    return {"success": True, "sentence": build_navigation_sentence(label, "save")}
-
-
-@router.get("/locations", dependencies=[Depends(_verify_api_key)])
-async def list_locations(wifi_ssid: str = ""):
-    """저장 장소 목록 반환. wifi_ssid 지정 시 해당 WiFi 위치 장소만."""
-    locations = db.get_locations(wifi_ssid)
-    return {
-        "locations": locations,
-        "sentence":  build_navigation_sentence("", "list", locations=locations),
-    }
-
-
-@router.get("/locations/find/{label}", dependencies=[Depends(_verify_api_key)])
-async def find_location_endpoint(label: str, wifi_ssid: str = ""):
-    """
-    라벨로 장소 검색. 현재 WiFi와 일치 여부도 확인.
-    nearby=True이면 "도착했어요!", False이면 "다른 WiFi에 있어요."
-    """
-    loc = db.find_location(label)
-    if not loc:
-        return {"found": False, "sentence": build_navigation_sentence(label, "not_found")}
-    nearby = (wifi_ssid == loc["wifi_ssid"]) if wifi_ssid else False
-    return {
-        "found":    True,
-        "nearby":   nearby,
-        "location": loc,
-        "sentence": build_navigation_sentence(loc["label"], "found_here") if nearby
-                    else f"{loc['label']}{_un_neun(loc['label'])} 다른 WiFi 위치에 저장되어 있어요.",
-    }
-
-
-@router.delete("/locations/{label}", dependencies=[Depends(_verify_api_key)])
-async def delete_location_endpoint(label: str):
-    """저장 장소 삭제."""
-    loc = db.find_location(label)
-    if not loc:
-        return {"success": False, "sentence": f"{label}은 저장되어 있지 않아요."}
-    db.delete_location(loc["label"])
-    return {"success": True, "sentence": build_navigation_sentence(loc["label"], "deleted")}
+# 개인 네비게이팅 엔드포인트 (/locations/*) 제거 — 실험 기능 비활성화
 
 
 @router.get("/status/{session_id}", dependencies=[Depends(_verify_api_key)])

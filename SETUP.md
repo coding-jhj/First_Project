@@ -11,7 +11,7 @@ docs/00_실행/CMD_RUNBOOK.md
 가장 중요한 순서:
 
 ```bat
-cd /d C:\VoiceGuide\VoiceGuide
+cd /c/VoiceGuide/VoiceGuide
 gcloud run deploy voiceguide --source . --region asia-northeast3 --memory 2Gi --cpu 2 --timeout 120 --allow-unauthenticated --port 8080
 python tools\probe_server_link.py --base https://voiceguide-1063164560758.asia-northeast3.run.app
 ```
