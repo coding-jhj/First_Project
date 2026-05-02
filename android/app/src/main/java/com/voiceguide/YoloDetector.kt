@@ -9,7 +9,9 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
 import android.os.SystemClock
+import android.util.Log
 import java.nio.FloatBuffer
+import java.util.ArrayDeque
 
 /**
  * YOLO 온디바이스 추론기
@@ -59,6 +61,7 @@ data class YoloRawOutput(
     val values: FloatArray,
     val numFeatures: Int,
     val numDet: Int,
+    val valueCount: Int,
     val preprocessMs: Long,
     val yoloMs: Long,
     val totalStartNs: Long
@@ -73,13 +76,17 @@ class YoloDetector(context: Context) {
 
     private val env = OrtEnvironment.getEnvironment()  // ONNX 실행 환경 (앱당 1개)
     private val session: OrtSession                    // 모델 세션 (추론 단위)
-    private val inputSize   = 640       // YOLO 입력 해상도 (640×640)
+    val providerName: String
+    private val inputSize   = 320       // YOLO 입력 해상도 (320×320, FPS 우선)
     private val confThreshold = 0.50f   // 서버(detect.py)의 CONF_THRESHOLD와 동일하게 맞춤
     private val iouThreshold  = 0.45f   // NMS IoU 임계값: 겹치는 박스 제거 기준
     private val inputArea = inputSize * inputSize
     private val inputPixels = IntArray(inputArea)
-    private val inputData = FloatArray(3 * inputArea)
-    private val inputBuffer = FloatBuffer.wrap(inputData)
+    private val inputTensorSize = 3 * inputArea
+    private val inputPoolLock = Any()
+    private val inputPool = ArrayDeque<FloatBuffer>()
+    private val outputPoolLock = Any()
+    private val outputPool = ArrayDeque<FloatArray>()
     private val resizedBitmap = Bitmap.createBitmap(inputSize, inputSize, Bitmap.Config.ARGB_8888)
     private val resizeCanvas = Canvas(resizedBitmap)
     private val resizePaint = Paint().apply { isFilterBitmap = false }
@@ -97,26 +104,40 @@ class YoloDetector(context: Context) {
             "yolo11n.onnx"  // n 모델: 더 빠름 (5.4MB), 오탐 많음
         }
         val bytes = context.assets.open(modelName).readBytes()
-        // SessionOptions: 쓰레드 수, 가속기(GPU/NNAPI) 설정 가능
+        val cpuThreads = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
+        var activeProvider = "CPU"
+        // SessionOptions: 현재 YOLO ONNX 모델은 XNNPACK 일부 fallback에서 느려질 수 있어 CPU 멀티스레드 우선
         val options = OrtSession.SessionOptions().apply {
             setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
             setInterOpNumThreads(1)
-            setIntraOpNumThreads(4)
+            setIntraOpNumThreads(cpuThreads)
+            if (USE_XNNPACK) {
+                try {
+                    setIntraOpNumThreads(1)
+                    addXnnpack(mapOf("intra_op_num_threads" to cpuThreads.toString()))
+                    activeProvider = "XNNPACK"
+                } catch (e: Exception) {
+                    setIntraOpNumThreads(cpuThreads)
+                    Log.w(TAG, "XNNPACK 사용 실패, CPU 실행으로 fallback: ${e.message}")
+                }
+            }
         }
+        providerName = activeProvider
         session = env.createSession(bytes, options)
+        Log.i(TAG, "YOLO ONNX provider=$providerName, threads=$cpuThreads, model=$modelName")
     }
 
     fun preprocess(bitmap: Bitmap): YoloInput {
         val totalStart = SystemClock.elapsedRealtimeNanos()
         val preprocessStart = SystemClock.elapsedRealtimeNanos()
-        // 1. 이미지를 640×640으로 리사이즈 (YOLO 고정 입력 해상도)
+        // 1. 이미지를 모델 입력 크기로 리사이즈 (YOLO 고정 입력 해상도)
         val resizeSrc = Rect(0, 0, bitmap.width, bitmap.height)
         resizeCanvas.drawBitmap(bitmap, resizeSrc, resizeDst, resizePaint)
         // 2. Android Bitmap → ONNX Float 텐서 포맷으로 변환
-        val prepared = FloatArray(inputData.size)
+        val prepared = acquireInputData()
         bitmapToNCHW(resizedBitmap, prepared)
         return YoloInput(
-            buffer = FloatBuffer.wrap(prepared),
+            buffer = prepared,
             preprocessMs = nanosToMs(SystemClock.elapsedRealtimeNanos() - preprocessStart),
             totalStartNs = totalStart
         )
@@ -125,54 +146,67 @@ class YoloDetector(context: Context) {
     fun runInference(input: YoloInput): YoloRawOutput {
         // 3. ONNX 세션에 입력 이름 확인 (YOLO11은 보통 "images")
         val inputName = session.inputNames.iterator().next()
-        // 텐서 shape: [1, 3, 640, 640] = [batch, RGB채널, H, W]
+        // 텐서 shape: [1, 3, inputSize, inputSize] = [batch, RGB채널, H, W]
+        input.buffer.rewind()
         val tensor = OnnxTensor.createTensor(
             env, input.buffer, longArrayOf(1, 3, inputSize.toLong(), inputSize.toLong())
         )
 
         // 4. 추론 실행
-        val yoloStart = SystemClock.elapsedRealtimeNanos()
-        val output = session.run(mapOf(inputName to tensor))
-        val yoloMs = nanosToMs(SystemClock.elapsedRealtimeNanos() - yoloStart)
-        val outputTensor = output[0] as ai.onnxruntime.OnnxTensor
+        try {
+            val yoloStart = SystemClock.elapsedRealtimeNanos()
+            val output = session.run(mapOf(inputName to tensor))
+            val yoloMs = nanosToMs(SystemClock.elapsedRealtimeNanos() - yoloStart)
+            try {
+                val outputTensor = output[0] as ai.onnxruntime.OnnxTensor
 
-        // YOLO 출력 shape: [1, numFeatures, 8400]
-        // numFeatures = 4(bbox) + 클래스 수
-        // 8400 = 3가지 스케일 × 각 스케일의 격자 수 합 (20×20 + 40×40 + 80×80)
-        val shape       = outputTensor.info.shape
-        val numFeatures = shape[1].toInt()  // 84(COCO80) 또는 85(indoor81)
-        val numDet      = shape[2].toInt()  // 8400
-        val flatBuf     = outputTensor.floatBuffer  // 1D float 배열
-        val values      = FloatArray(numFeatures * numDet)
-        flatBuf.get(values)
+                // YOLO 출력 shape: [1, numFeatures, numDet]
+                // numFeatures = 4(bbox) + 클래스 수
+                // numDet = 320 입력 기준 2100, 640 입력 기준 8400
+                val shape       = outputTensor.info.shape
+                val numFeatures = shape[1].toInt()  // 84(COCO80) 또는 85(indoor81)
+                val numDet      = shape[2].toInt()  // 8400
+                val flatBuf     = outputTensor.floatBuffer  // 1D float 배열
+                val valueCount  = numFeatures * numDet
+                val values      = acquireOutputData(valueCount)
+                flatBuf.get(values, 0, valueCount)
 
-        tensor.close()
-        output.close()
-
-        return YoloRawOutput(
-            values = values,
-            numFeatures = numFeatures,
-            numDet = numDet,
-            preprocessMs = input.preprocessMs,
-            yoloMs = yoloMs,
-            totalStartNs = input.totalStartNs
-        )
+                return YoloRawOutput(
+                    values = values,
+                    numFeatures = numFeatures,
+                    numDet = numDet,
+                    valueCount = valueCount,
+                    preprocessMs = input.preprocessMs,
+                    yoloMs = yoloMs,
+                    totalStartNs = input.totalStartNs
+                )
+            } finally {
+                output.close()
+            }
+        } finally {
+            tensor.close()
+            releaseInput(input)
+        }
     }
 
     fun postprocess(raw: YoloRawOutput): YoloDetectionResult {
         val postStart = SystemClock.elapsedRealtimeNanos()
-        val result = postProcess(FloatBuffer.wrap(raw.values), raw.numFeatures, raw.numDet)
-        val postMs = nanosToMs(SystemClock.elapsedRealtimeNanos() - postStart)
-        val timing = YoloTiming(
-            preprocessMs = raw.preprocessMs,
-            yoloMs = raw.yoloMs,
-            postprocessMs = postMs,
-            totalMs = nanosToMs(SystemClock.elapsedRealtimeNanos() - raw.totalStartNs),
-            rawCandidates = result.rawCandidates,
-            keptCount = result.detections.size
-        )
-        lastTiming = timing
-        return YoloDetectionResult(result.detections, timing)
+        try {
+            val result = postProcess(raw.values, raw.numFeatures, raw.numDet)
+            val postMs = nanosToMs(SystemClock.elapsedRealtimeNanos() - postStart)
+            val timing = YoloTiming(
+                preprocessMs = raw.preprocessMs,
+                yoloMs = raw.yoloMs,
+                postprocessMs = postMs,
+                totalMs = nanosToMs(SystemClock.elapsedRealtimeNanos() - raw.totalStartNs),
+                rawCandidates = result.rawCandidates,
+                keptCount = result.detections.size
+            )
+            lastTiming = timing
+            return YoloDetectionResult(result.detections, timing)
+        } finally {
+            releaseOutput(raw)
+        }
     }
 
     fun detect(bitmap: Bitmap): List<Detection> {
@@ -190,16 +224,45 @@ class YoloDetector(context: Context) {
      * 메모리 배치: R채널 전체 → G채널 전체 → B채널 전체
      * (인터리브 방식 RGBRGBㆍㆍㆍ이 아님)
      */
-    private fun bitmapToNCHW(bitmap: Bitmap, target: FloatArray) {
+    private fun bitmapToNCHW(bitmap: Bitmap, target: FloatBuffer) {
         // getPixels: 픽셀을 ARGB Int 배열로 읽음
         bitmap.getPixels(inputPixels, 0, inputSize, 0, 0, inputSize, inputSize)
 
         for (i in inputPixels.indices) {
             // ARGB Int에서 각 채널 추출 (비트 시프트 + AND 마스크)
             val pixel = inputPixels[i]
-            target[i] = ((pixel shr 16) and 0xFF) / 255f
-            target[inputArea + i] = ((pixel shr 8) and 0xFF) / 255f
-            target[inputArea * 2 + i] = (pixel and 0xFF) / 255f
+            target.put(i, ((pixel shr 16) and 0xFF) / 255f)
+            target.put(inputArea + i, ((pixel shr 8) and 0xFF) / 255f)
+            target.put(inputArea * 2 + i, (pixel and 0xFF) / 255f)
+        }
+    }
+
+    private fun acquireInputData(): FloatBuffer {
+        synchronized(inputPoolLock) {
+            if (!inputPool.isEmpty()) return inputPool.removeFirst().also { it.clear() }
+        }
+        return FloatBuffer.allocate(inputTensorSize)
+    }
+
+    fun releaseInput(input: YoloInput) {
+        synchronized(inputPoolLock) {
+            if (inputPool.size < MAX_INPUT_POOL_SIZE) inputPool.addLast(input.buffer)
+        }
+    }
+
+    private fun acquireOutputData(minSize: Int): FloatArray {
+        synchronized(outputPoolLock) {
+            while (!outputPool.isEmpty()) {
+                val pooled = outputPool.removeFirst()
+                if (pooled.size >= minSize) return pooled
+            }
+        }
+        return FloatArray(minSize)
+    }
+
+    private fun releaseOutput(raw: YoloRawOutput) {
+        synchronized(outputPoolLock) {
+            if (outputPool.size < MAX_OUTPUT_POOL_SIZE) outputPool.addLast(raw.values)
         }
     }
 
@@ -214,7 +277,7 @@ class YoloDetector(context: Context) {
      * YOLO 출력 레이아웃 (NCHW가 아닌 특수 포맷):
      *   buf[feature_idx * numDet + det_idx]
      *
-     *   feature 0~3: bbox (cx, cy, w, h) — 640px 단위
+     *   feature 0~3: bbox (cx, cy, w, h) — inputSize px 단위
      *   feature 4~(4+numClasses-1): 각 클래스의 confidence score
      *
      * 각 박스 처리:
@@ -223,7 +286,7 @@ class YoloDetector(context: Context) {
      *   3. COCO_KO 맵에서 한국어 이름 찾기
      *   4. NMS로 겹치는 박스 제거
      */
-    private fun postProcess(buf: java.nio.FloatBuffer, numFeatures: Int, numDet: Int): PostProcessResult {
+    private fun postProcess(values: FloatArray, numFeatures: Int, numDet: Int): PostProcessResult {
         val numClasses = numFeatures - 4  // bbox 4개를 제외한 나머지 = 클래스 수
         val candidates = mutableListOf<Detection>()
 
@@ -232,7 +295,7 @@ class YoloDetector(context: Context) {
             var maxClass = -1
 
             for (c in 0 until numClasses) {
-                val s = buf.get((4 + c) * numDet + i)  // 클래스 c의 score
+                val s = values[(4 + c) * numDet + i]  // 클래스 c의 score
                 if (s > maxScore) { maxScore = s; maxClass = c }
             }
             if (maxClass < 0) continue  // confThreshold 넘은 클래스 없음 → 버림
@@ -242,11 +305,11 @@ class YoloDetector(context: Context) {
             candidates.add(Detection(
                 classKo    = name,
                 confidence = maxScore,
-                // YOLO 출력은 640px 단위 → 0~1 정규화
-                cx = buf.get(0 * numDet + i) / inputSize,
-                cy = buf.get(1 * numDet + i) / inputSize,
-                w  = buf.get(2 * numDet + i) / inputSize,
-                h  = buf.get(3 * numDet + i) / inputSize
+                // YOLO 출력은 inputSize px 단위 → 0~1 정규화
+                cx = values[i] / inputSize,
+                cy = values[numDet + i] / inputSize,
+                w  = values[2 * numDet + i] / inputSize,
+                h  = values[3 * numDet + i] / inputSize
             ))
         }
 
@@ -303,5 +366,12 @@ class YoloDetector(context: Context) {
         resizedBitmap.recycle()
         session.close()
         env.close()
+    }
+
+    companion object {
+        private const val TAG = "YoloDetector"
+        private const val MAX_INPUT_POOL_SIZE = 3
+        private const val MAX_OUTPUT_POOL_SIZE = 2
+        private const val USE_XNNPACK = false
     }
 }

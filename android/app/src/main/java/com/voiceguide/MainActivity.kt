@@ -20,6 +20,7 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.util.Log
 import android.util.Size
 import android.widget.Button
 import android.widget.EditText
@@ -166,7 +167,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // ── ONNX 온디바이스 추론 ───────────────────────────────────────────
     private var yoloDetector: YoloDetector? = null
     private var serverModeEnabled = false
-    private var lastPerfUpdateMs = 0L
+    private var fpsWindowStartMs = 0L
+    private var fpsWindowFrames = 0
+    private var displayedFps = 0.0
     private var lastPerfOverlayRenderMs = 0L
 
     private data class PreparedServerImage(
@@ -193,8 +196,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         private const val SERVER_IMAGE_MAX_SIDE = 768      // 서버 전송용 최대 변 길이(px)
         private const val SERVER_JPEG_QUALITY   = 75       // 서버 전송용 JPEG 품질
         private const val PERF_OVERLAY_MIN_UPDATE_MS = 1500L
-        private const val FAST_ANALYSIS_INTERVAL_MS = 100L
+        private const val FAST_ANALYSIS_INTERVAL_MS = 60L
         private const val FAST_GUIDE_MIN_INTERVAL_MS = 1800L
+        private const val STALE_PIPELINE_INPUT_MS = 250L
     }
 
     // ── 생명주기 ─────────────────────────────────────────────────────────
@@ -286,15 +290,19 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     override fun onDestroy() {
         // 앱 종료 시 모든 리소스 해제 (메모리 누수 방지)
-        tts.shutdown()
-        speechRecognizer.destroy()
-        yoloDetector?.close()         // ONNX 세션 닫기
-        cameraExecutor.shutdown()     // 카메라 스레드 종료
+        isAnalyzing.set(false)
+        handler.removeCallbacksAndMessages(null)
+        clearPipelineQueues()
         preprocessExecutor.shutdown()
         inferenceExecutor.shutdown()
         postprocessExecutor.shutdown()
-        clearPipelineQueues()
-        handler.removeCallbacksAndMessages(null)  // 예약된 루프 전부 취소
+        preprocessExecutor.awaitTermination(1, TimeUnit.SECONDS)
+        inferenceExecutor.awaitTermination(1, TimeUnit.SECONDS)
+        postprocessExecutor.awaitTermination(1, TimeUnit.SECONDS)
+        yoloDetector?.close()         // ONNX 세션 닫기
+        cameraExecutor.shutdown()
+        tts.shutdown()
+        speechRecognizer.destroy()
         super.onDestroy()
     }
 
@@ -1009,6 +1017,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         if (!forceUpdate && nowMs - lastPerfOverlayRenderMs < PERF_OVERLAY_MIN_UPDATE_MS) return
         lastPerfOverlayRenderMs = nowMs
 
+        Log.i(
+            "VoiceGuidePerf",
+            String.format(
+                Locale.US,
+                "route=%s state=%s fps=%.2f decode=%d yolo=%d post=%d total=%d count=%d",
+                route, state, fps, decodeMs, yoloMs, postMs, totalMs, count
+            )
+        )
+
         runOnUiThread {
             tvDebug.text = String.format(
                 Locale.KOREA,
@@ -1019,9 +1036,19 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     }
 
     private fun currentFps(nowMs: Long): Double {
-        val prev = lastPerfUpdateMs
-        lastPerfUpdateMs = nowMs
-        return if (prev > 0 && nowMs > prev) 1000.0 / (nowMs - prev).toDouble() else 0.0
+        if (fpsWindowStartMs == 0L) {
+            fpsWindowStartMs = nowMs
+            fpsWindowFrames = 0
+            displayedFps = 0.0
+        }
+        fpsWindowFrames += 1
+        val elapsed = nowMs - fpsWindowStartMs
+        if (elapsed >= 1000L) {
+            displayedFps = fpsWindowFrames * 1000.0 / elapsed.toDouble()
+            fpsWindowFrames = 0
+            fpsWindowStartMs = nowMs
+        }
+        return displayedFps
     }
 
     // ── 카메라 & 분석 루프 ──────────────────────────────────────────────
@@ -1050,7 +1077,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             imageAnalysis = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                .setTargetResolution(Size(640, 480))
+                .setTargetResolution(Size(320, 240))
                 .build()
                 .also { analysis ->
                     analysis.setAnalyzer(cameraExecutor) { imageProxy ->
@@ -1079,6 +1106,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         lastSentence = ""
         consecutiveFails.set(0)
         lastSuccessTime = System.currentTimeMillis()
+        fpsWindowStartMs = 0L
+        fpsWindowFrames = 0
+        displayedFps = 0.0
         btnToggle.text = "분석 중지"
         tvStatus.text  = "분석 중..."
         tvDetected.text = "인식: 분석 중"
@@ -1190,13 +1220,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     val input = yoloDetector?.preprocess(frame.bitmap)
                     frame.bitmap.recycle()
                     if (input != null) {
-                        latestInput.set(input)
+                        latestInput.getAndSet(input)?.let { dropped ->
+                            yoloDetector?.releaseInput(dropped)
+                        }
                         scheduleInference()
                     }
                 }
             } finally {
                 preprocessing.set(false)
-                if (latestFrame.get() != null) schedulePreprocess()
+                if (isAnalyzing.get() && latestFrame.get() != null) schedulePreprocess()
             }
         }
     }
@@ -1207,6 +1239,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             try {
                 while (isAnalyzing.get() && !serverModeEnabled) {
                     val input = latestInput.getAndSet(null) ?: break
+                    if (isPipelineInputStale(input.totalStartNs)) {
+                        yoloDetector?.releaseInput(input)
+                        continue
+                    }
                     val raw = yoloDetector?.runInference(input)
                     if (raw != null) {
                         latestRawOutput.set(raw)
@@ -1215,7 +1251,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 }
             } finally {
                 inferencing.set(false)
-                if (latestInput.get() != null) scheduleInference()
+                if (isAnalyzing.get() && latestInput.get() != null) scheduleInference()
             }
         }
     }
@@ -1231,7 +1267,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 }
             } finally {
                 postprocessing.set(false)
-                if (latestRawOutput.get() != null) schedulePostprocess()
+                if (isAnalyzing.get() && latestRawOutput.get() != null) schedulePostprocess()
             }
         }
     }
@@ -1263,7 +1299,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
         updatePerfOverlay(
             "디바이스",
-            "파이프라인 ONNX",
+            "ONNX ${yoloDetector?.providerName ?: "CPU"}",
             fps,
             timing.preprocessMs,
             timing.yoloMs,
@@ -1277,8 +1313,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     private fun clearPipelineQueues() {
         latestFrame.getAndSet(null)?.bitmap?.recycle()
-        latestInput.set(null)
+        latestInput.getAndSet(null)?.let { dropped ->
+            yoloDetector?.releaseInput(dropped)
+        }
         latestRawOutput.set(null)
+    }
+
+    private fun isPipelineInputStale(totalStartNs: Long): Boolean {
+        val ageMs = (SystemClock.elapsedRealtimeNanos() - totalStartNs) / 1_000_000
+        return ageMs > STALE_PIPELINE_INPUT_MS
     }
 
     private fun imageProxyToBitmap(imageProxy: ImageProxy): Bitmap {
