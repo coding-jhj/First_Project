@@ -140,7 +140,7 @@ POST /detect
 | 값 | 의미 | Android 동작 |
 |----|------|------------|
 | `critical` | 즉시 안내 필요 | TTS 바로 재생, 속도 1.25배 |
-| `beep` | 멀리 있는 물체 | 비프음만 (말 안 함) |
+| `beep` | 멀리 있는 물체 | 일반 속도 음성 안내 (비프음 제거됨) |
 | `silent` | 같은 말 반복 방지 | TTS 안 함, 화면만 업데이트 |
 
 ### TTS 중복 방지 로직
@@ -155,7 +155,9 @@ _DEDUP_SECS = 5.0  # 5초
 의자가 계속 카메라에 잡히면 1초마다 "의자가 있어요"가 나와서 피로해짐.
 이걸 막는 것.
 
-### 공간기억 (_space_changes)
+### 공간기억 (_space_changes) — 실험 기능
+
+> student guide 기준 2차 기능. 발표 MVP(장애물·찾기·확인) 범위 밖.
 
 ```python
 새로 생긴 것 = 이번에 있고 이전엔 없던 것 → "의자가 생겼어요"
@@ -163,7 +165,6 @@ _DEDUP_SECS = 5.0  # 5초
 ```
 
 WiFi SSID = 공간 ID. 같은 WiFi에 다시 오면 이전 방문과 비교함.
-매번 똑같은 설명 반복 안 하는 이유.
 
 ---
 
@@ -263,7 +264,7 @@ objects, hazards, scene = detect_and_depth(image_bytes)
 `src/vision/detect.py`의 결과가 `objects` 리스트로 옴.
 각 항목: `{"class_ko":"의자", "direction":"9시", "distance_m":1.5, "risk_score":1.0}`
 
-### 신유득 (Depth) / 문수찬 (Voice)
+### 신유득 (Depth)
 
 ```python
 # routes.py 에서 호출
