@@ -374,40 +374,7 @@ async def vision_clothing(
     return {"sentence": sentence}
 
 
-@router.post("/ocr/bus", dependencies=[Depends(_verify_api_key)])
-async def ocr_bus(
-    image:     UploadFile,
-    bus_crop:  str = Form(""),   # JSON 배열 문자열 "[x1,y1,x2,y2]" 또는 빈 문자열
-):
-    """
-    버스 번호 OCR — ML Kit(Android)이 실패했을 때 서버 EasyOCR로 재시도.
-
-    Android에서 호출 순서:
-      1. ML Kit OCR 시도 → 숫자 없으면
-      2. 이 엔드포인트 호출 (이미지 + bus_crop 좌표 전송)
-      3. EasyOCR + 이미지 전처리로 재시도
-      4. 결과 TTS로 읽어줌
-    """
-    import json
-    from src.ocr.bus_ocr import recognize_bus_number
-
-    image_bytes = await image.read()
-
-    # bus_crop: Android에서 JSON 문자열로 전달 "[x1,y1,x2,y2]"
-    crop = None
-    if bus_crop:
-        try:
-            crop = json.loads(bus_crop)
-        except Exception:
-            crop = None
-
-    bus_number = recognize_bus_number(image_bytes, crop)
-
-    if bus_number:
-        return {"success": True,  "bus_number": bus_number,
-                "sentence": f"{bus_number}번 버스예요."}
-    return {"success": False, "bus_number": None,
-            "sentence": "버스 번호를 읽지 못했어요. 번호판에 더 가까이 대보세요."}
+# /ocr/bus 엔드포인트 제거 — 버스 번호 OCR 실험 기능 비활성화
 
 
 # 개인 네비게이팅 엔드포인트 (/locations/*) 제거 — 실험 기능 비활성화

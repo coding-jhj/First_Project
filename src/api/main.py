@@ -19,7 +19,6 @@ async def lifespan(app: FastAPI):
     import threading
     threading.Thread(target=_warmup_yolo, daemon=True).start()
     threading.Thread(target=_warmup_depth, daemon=True).start()
-    threading.Thread(target=_warmup_ocr, daemon=True).start()
     threading.Thread(target=_warmup_tts, daemon=True).start()
     yield  # 서버 실행 중 (이 이후는 종료 시 실행)
 
@@ -41,14 +40,6 @@ def _warmup_depth():
         print("[main] Depth V2 워밍업 완료")
     except Exception as e:
         print(f"[main] Depth V2 워밍업 실패: {e}")
-
-
-def _warmup_ocr():
-    try:
-        from src.ocr.bus_ocr import warmup
-        warmup()
-    except Exception as e:
-        print(f"[main] EasyOCR 워밍업 실패: {e}")
 
 
 def _warmup_tts():

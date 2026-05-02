@@ -31,7 +31,7 @@ class BoundingBoxOverlay @JvmOverloads constructor(
 
     // sentence.py _VEHICLE_KO + 계단·낙차 위험 클래스
     private val CRITICAL_CLASSES = setOf(
-        "자동차", "오토바이", "버스", "트럭", "기차", "자전거",
+        "자동차", "오토바이", "트럭", "기차", "자전거",
         "곰", "코끼리", "계단"
     )
     // 날카로운 물체 + 바닥 장애물

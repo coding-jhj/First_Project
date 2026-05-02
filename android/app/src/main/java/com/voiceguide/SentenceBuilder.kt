@@ -17,7 +17,7 @@ object SentenceBuilder {
     // object = 싱글톤 (인스턴스 생성 없이 SentenceBuilder.build() 로 바로 호출)
 
     // 차량: 이동 중이라 같은 거리라도 의자보다 훨씬 위험 → 별도 처리
-    private val VEHICLE_CLASSES = setOf("자동차", "오토바이", "버스", "트럭", "기차", "자전거")
+    private val VEHICLE_CLASSES = setOf("자동차", "오토바이", "트럭", "기차", "자전거")
     // 고양이 추가: Python _ANIMAL_KO = {"개", "말", "고양이"} 와 동기화
     private val ANIMAL_CLASSES  = setOf("개", "말", "고양이")
 

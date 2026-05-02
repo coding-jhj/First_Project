@@ -221,7 +221,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private val ttsRequestId = java.util.concurrent.atomic.AtomicInteger(0)
 
     // ── 특정 버스 대기 ──────────────────────────────────────────────────
-    @Volatile private var waitingBusNumber = ""  // 기다리는 버스 번호 ("37", "N37")
 
     // ── 보호자 SOS ──────────────────────────────────────────────────────
     private var guardianPhone = ""  // SharedPreferences에 저장된 보호자 번호
@@ -639,20 +638,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 currentMode = "신호등"
                 captureAndProcess()
             }
-            "버스번호" -> {
-                speakBuiltIn("버스 번호를 확인할게요.")
-                captureForBusNumber()
-            }
-            "버스대기" -> {
-                // "37번 버스 기다려줘" → "37" 추출
-                val num = Regex("\\d{1,4}").find(text)?.value ?: ""
-                if (num.isEmpty()) {
-                    speak("몇 번 버스를 기다릴까요? 예 : 37번 버스 기다려줘.")
-                } else {
-                    waitingBusNumber = num
-                    speak("${num}번 버스를 기다릴게요. 가까이 오면 알려드릴게요.")
-                }
-            }
             "다시읽기" -> {
                 if (lastSentence.isEmpty()) speak("아직 안내한 내용이 없어요.")
                 else speak(lastSentence)
@@ -780,98 +765,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
      * "버스 번호 알려줘" 명령 처리.
      * 2단계: ML Kit OCR → 실패 시 서버 EasyOCR fallback
      */
-    private fun captureForBusNumber() {
-        val file = File.createTempFile("vg_bus_", ".jpg", cacheDir)
-        imageCapture?.takePicture(
-            ImageCapture.OutputFileOptions.Builder(file).build(),
-            cameraExecutor,
-            object : ImageCapture.OnImageSavedCallback {
-                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    Thread {
-                        try {
-                            val origBmp = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
-                            val matrix = android.graphics.ColorMatrix().apply { setSaturation(0f) }
-                            val contrastMatrix = android.graphics.ColorMatrix(floatArrayOf(
-                                1.5f, 0f, 0f, 0f, -30f,
-                                0f, 1.5f, 0f, 0f, -30f,
-                                0f, 0f, 1.5f, 0f, -30f,
-                                0f, 0f, 0f, 1f,   0f
-                            ))
-                            matrix.postConcat(contrastMatrix)
-                            val paint = android.graphics.Paint().apply {
-                                colorFilter = android.graphics.ColorMatrixColorFilter(matrix)
-                            }
-                            val processedBmp = android.graphics.Bitmap.createBitmap(
-                                origBmp.width, origBmp.height, android.graphics.Bitmap.Config.ARGB_8888
-                            )
-                            android.graphics.Canvas(processedBmp).drawBitmap(origBmp, 0f, 0f, paint)
-                            val recognizer = com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions.Builder().build()
-                                .let { com.google.mlkit.vision.text.TextRecognition.getClient(it) }
-                            val mlkitImage = com.google.mlkit.vision.common.InputImage.fromBitmap(processedBmp, 0)
-                            recognizer.process(mlkitImage)
-                                .addOnSuccessListener { result ->
-                                    val numbers = result.textBlocks
-                                        .flatMap { it.lines }
-                                        .mapNotNull { line ->
-                                            val clean = line.text.trim()
-                                            if (clean.matches(Regex("[A-Za-z]?\\d{1,4}"))) clean else null
-                                        }
-                                        .distinct()
-                                    if (numbers.isNotEmpty()) {
-                                        val best = numbers.minByOrNull { it.length } ?: numbers[0]
-                                        if (waitingBusNumber.isNotEmpty() && best == waitingBusNumber) {
-                                            val vibrator = getSystemService(VIBRATOR_SERVICE) as android.os.Vibrator
-                                            vibrator.vibrate(android.os.VibrationEffect.createWaveform(
-                                                longArrayOf(0, 400, 100, 400, 100, 400), -1))
-                                            speak("${best}번 버스 왔어요! 지금 손을 드세요!")
-                                            waitingBusNumber = ""
-                                        } else {
-                                            speak("${best}번 버스예요.")
-                                        }
-                                        origBmp.recycle(); processedBmp.recycle(); file.delete()
-                                    } else {
-                                        origBmp.recycle(); processedBmp.recycle()
-                                        sendBusOcrToServer(file)
-                                    }
-                                }
-                                .addOnFailureListener {
-                                    origBmp.recycle(); processedBmp.recycle()
-                                    sendBusOcrToServer(file)
-                                }
-                        } catch (_: Exception) { speak("버스 번호 인식에 실패했어요."); file.delete() }
-                    }.start()
-                }
-                override fun onError(e: ImageCaptureException) { speak("사진을 찍지 못했어요.") }
-            })
-    }
-
-    private fun sendBusOcrToServer(imageFile: File) {
-        val serverUrl = getSavedServerUrl().trimEnd('/')
-        if (serverUrl.isEmpty()) {
-            speak("버스 번호를 읽지 못했어요. 서버를 연결하면 더 잘 인식돼요.")
-            imageFile.delete()
-            return
-        }
-        Thread {
-            try {
-                val body = okhttp3.MultipartBody.Builder().setType(okhttp3.MultipartBody.FORM)
-                    .addFormDataPart("image", "bus.jpg",
-                        imageFile.asRequestBody("image/jpeg".toMediaType()))
-                    .build()
-                val response = httpClient.newCall(
-                    okhttp3.Request.Builder().url("$serverUrl/ocr/bus").post(body).build()
-                ).execute()
-                val json     = org.json.JSONObject(response.body?.string() ?: "{}")
-                val sentence = json.optString("sentence", "버스 번호를 읽지 못했어요.")
-                runOnUiThread { speak(sentence) }
-            } catch (_: Exception) {
-                runOnUiThread { speak("버스 번호 인식에 실패했어요.") }
-            } finally {
-                imageFile.delete()
-            }
-        }.start()
-    }
-
     // ── SOS 긴급 호출 ──────────────────────────────────────────────────
 
     private fun triggerSOS() {
@@ -1548,8 +1441,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 val perf = json.optJSONObject("perf")
                 lastProcessMs   = processMs
 
-                checkWaitingBus(json)
-
                 // FPS + 처리시간 UI 업데이트
                 val netMs = if (processMs > 0) roundTripMs - processMs else roundTripMs
                 val objectCount = json.optJSONArray("objects")?.length() ?: 0
@@ -1587,18 +1478,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     }
 
     // ── 결과 처리 & Failsafe ────────────────────────────────────────────
-
-    private fun checkWaitingBus(json: org.json.JSONObject) {
-        if (waitingBusNumber.isEmpty()) return
-        val objects = json.optJSONArray("objects") ?: return
-        for (i in 0 until objects.length()) {
-            val obj = objects.getJSONObject(i)
-            if (obj.optString("class") == "bus") {
-                captureForBusNumber()
-                return
-            }
-        }
-    }
 
     private fun handleSuccess(sentence: String, alertMode: String = "critical") {
         consecutiveFails.set(0)

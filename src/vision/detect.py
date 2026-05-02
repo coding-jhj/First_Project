@@ -69,7 +69,7 @@ CONF_THRESHOLD = 0.50   # 야외 원거리 탐지 위해 낮게 유지
 
 CLASS_MIN_CONF = {
     # 야외 차량: 멀리서도 일찍 잡아야 (안전 우선)
-    "car": 0.38, "motorcycle": 0.38, "bus": 0.38, "truck": 0.38,
+    "car": 0.38, "motorcycle": 0.38, "truck": 0.38,
     "bicycle": 0.42, "train": 0.35,
     # 사람
     "person": 0.42,
@@ -101,7 +101,7 @@ RISK_DIST = {
 # 이동 차량 = 생명 위협 / 동물 = 돌발 행동 / 날카로운 것 = 부상 위험
 CLASS_RISK_MULTIPLIER = {
     # 이동 차량 (최고 위험)
-    "car": 3.0, "motorcycle": 3.0, "bus": 3.5, "truck": 3.5,
+    "car": 3.0, "motorcycle": 3.0, "truck": 3.5,
     "train": 4.0, "bicycle": 2.0, "airplane": 1.5, "boat": 1.5,
     # 이동 물체
     "skateboard": 2.0, "sports ball": 1.3,
@@ -129,7 +129,7 @@ TARGET_CLASSES = {
     "car":             "자동차",
     "motorcycle":      "오토바이",
     "airplane":        "비행기",
-    "bus":             "버스",
+    "bus":             "자동차",  # 버스 → 자동차로 통합 (버스 OCR 제거)
     "train":           "기차",
     "truck":           "트럭",
     "boat":            "보트",
@@ -415,8 +415,6 @@ def detect_objects(image_bytes: bytes) -> tuple[list[dict], dict]:
         is_vehicle = cls_name in {"car","motorcycle","bus","truck","train","bicycle","airplane","boat"}
         is_animal  = cls_name in {"dog","cat","horse","cow","sheep","bird","elephant","bear","zebra","giraffe"}
         is_dangerous = cls_name in {"knife","scissors","wine glass","baseball bat"}
-        is_bus     = cls_name == "bus"
-
         # 위험도 점수 계산:
         # risk = 방향가중치 × 거리가중치 × 바닥가중치 × 클래스배수
         # 예) 12시 방향 + 가까이 + 바닥 + 자동차:
@@ -447,9 +445,6 @@ def detect_objects(image_bytes: bytes) -> tuple[list[dict], dict]:
         if cls_name == "traffic light":
             traffic_light_state = _detect_traffic_light_color(img, x1, y1, x2, y2)
 
-        # 버스 번호 인식 (bbox 상단 영역 OCR 준비용 crop 좌표 저장)
-        bus_crop = [x1, y1, x2, min(y1 + (y2-y1)//3, y2)] if is_bus else None
-
         all_detections.append({
             "class":                cls_name,
             "class_ko":             TARGET_CLASSES[cls_name],
@@ -466,7 +461,6 @@ def detect_objects(image_bytes: bytes) -> tuple[list[dict], dict]:
             "alert_level":          alert_level,
             "color":                color,
             "traffic_light_state":  traffic_light_state,
-            "bus_crop":             bus_crop,
         })
 
     scene = _compute_scene_analysis(all_detections)
