@@ -55,3 +55,14 @@ android/local.properties
 서버_DB_수정/ConnectionPool
 서버_DB_수정/dict[str
 서버_DB_수정/RoadGlass
+
+# vision_ML/ (Phase 4 Vision·ML 작업 트리 — 중첩 빌드·로컬 설정)
+vision_ML/android/app/build/
+vision_ML/android/.gradle/
+vision_ML/android/local.properties
+vision_ML/data/test_images/**/*.jpg
+vision_ML/data/test_images/**/*.jpeg
+vision_ML/data/test_images/**/*.png
+vision_ML/data/test_images/**/*.JPG
+vision_ML/data/test_images/**/*.JPEG
+vision_ML/data/test_images/**/*.PNG
