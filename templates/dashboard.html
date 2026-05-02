@@ -504,7 +504,6 @@ const markerIcon = L.divIcon({
 let marker    = null;
 let trackLine = null;
 let mapCentered = false;
-let autoSelectedLatestSession = false;
 
 function escapeHtml(value) {
   return String(value)
@@ -677,12 +676,7 @@ async function poll() {
 
     dot.className  = 'pulse-dot';
     const resolvedSession = data.session_id ?? sessionId;
-    if (!autoSelectedLatestSession && sessionId === '__default__' && resolvedSession !== '__default__') {
-      document.getElementById('sessionId').value = resolvedSession;
-      autoSelectedLatestSession = true;
-      mapCentered = false;
-    }
-    text.textContent = data.gps ? `연결됨 · ${resolvedSession}` : '연결됨 · GPS 대기';
+    text.textContent = data.gps ? `연결됨 · ${resolvedSession}` : '연결됨 · 세션 선택 필요';
 
     renderObjects(data.objects);
     renderGps(data.gps, data.track);
@@ -749,7 +743,7 @@ async function loadSessions() {
 function selectSession(s) {
   document.getElementById('sessionId').value = s;
   document.getElementById('sessionList').style.display = 'none';
-  prevObjectCount = 0; mapCentered = false; autoSelectedLatestSession = true;
+  prevObjectCount = 0; mapCentered = false;
   if (marker)    { map.removeLayer(marker);    marker    = null; }
   if (trackLine) { map.removeLayer(trackLine); trackLine = null; }
   poll();
@@ -759,7 +753,6 @@ function selectSession(s) {
 document.getElementById('sessionId').addEventListener('change', () => {
   prevObjectCount = 0;
   mapCentered     = false;
-  autoSelectedLatestSession = true;
   if (marker)    { map.removeLayer(marker);    marker    = null; }
   if (trackLine) { map.removeLayer(trackLine); trackLine = null; }
 });

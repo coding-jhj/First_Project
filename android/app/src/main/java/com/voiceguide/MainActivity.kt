@@ -282,6 +282,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         private const val PERM_CODE_SMS      = 102  // SMS — SOS 설정 시
         private const val PREFS_NAME       = "voiceguide"  // SharedPreferences 이름
         private const val PREF_URL         = "server_url"  // 저장된 서버 URL 키
+        private const val PREF_DEVICE_ID   = "device_id"   // 앱 설치별 대시보드 세션 ID
         private const val PREF_LOCATIONS   = "saved_locations"  // 저장 장소 JSON 배열 키
         private const val INTERVAL_MS      = 800L          // 캡처 간격: 0.8초 (빠른 응답)
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
@@ -362,6 +363,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     private fun getSavedServerUrl(): String =
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_URL, "") ?: ""
+
+    private fun getDeviceSessionId(): String {
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val saved = prefs.getString(PREF_DEVICE_ID, "") ?: ""
+        if (saved.isNotBlank()) return saved
+        val generated = "android-${java.util.UUID.randomUUID().toString().take(8)}"
+        prefs.edit().putString(PREF_DEVICE_ID, generated).apply()
+        return generated
+    }
 
     private fun showSettingsDialog() {
         val ctx = this
@@ -1055,11 +1065,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
         val lat = currentLat
         val lng = currentLng
+        val deviceId = getDeviceSessionId()
         val requestId = "gps-$now"
         Thread {
             try {
                 val body = okhttp3.FormBody.Builder()
                     .add("wifi_ssid", getWifiSsid())
+                    .add("device_id", deviceId)
                     .add("lat", lat.toString())
                     .add("lng", lng.toString())
                     .add("request_id", requestId)
@@ -1069,7 +1081,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 ).execute()
                 Log.d(
                     "VG_GPS",
-                    "heartbeat source=$source request_id=$requestId status=${response.code} lat=$lat lng=$lng"
+                    "heartbeat source=$source session=$deviceId request_id=$requestId status=${response.code} lat=$lat lng=$lng"
                 )
                 response.close()
             } catch (e: Exception) {
@@ -1307,6 +1319,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         imageFile.asRequestBody("image/jpeg".toMediaType()))
                     .addFormDataPart("camera_orientation", cameraOrientation)
                     .addFormDataPart("wifi_ssid", getWifiSsid())
+                    .addFormDataPart("device_id", getDeviceSessionId())
                     .addFormDataPart("mode", mode)
                     .addFormDataPart("query_text", "")
                     .addFormDataPart("lat", currentLat.toString())
@@ -1451,6 +1464,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
                 if (voted.isEmpty()) {
                     Log.d("VG_DETECT", "→ 장애물 없음")
+                    if (rawDetections.isEmpty() && getSavedServerUrl().isNotEmpty()) {
+                        Log.w("VG_DETECT", "on-device empty; falling back to server")
+                        sendToServer(imageFile, requestId)
+                        return@Thread
+                    }
+                    imageFile.delete()
                     handleSuccess("주변에 장애물이 없어요.")
                     return@Thread
                 }
@@ -1487,6 +1506,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         handleSuccess("주변에 장애물이 없어요.")
                     }
                 }
+                imageFile.delete()
             } catch (e: Exception) {
                 Log.e("VG_DETECT", "request_id=$requestId On-device detection failed", e)
                 bmp?.recycle()
@@ -1544,6 +1564,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         optimized.asRequestBody("image/jpeg".toMediaType()))
                     .addFormDataPart("camera_orientation", cameraOrientation)
                     .addFormDataPart("wifi_ssid", getWifiSsid())
+                    .addFormDataPart("device_id", getDeviceSessionId())
                     .addFormDataPart("mode", currentMode)
                     .addFormDataPart("query_text", findTarget)
                     .addFormDataPart("lat", currentLat.toString())

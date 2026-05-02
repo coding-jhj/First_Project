@@ -57,9 +57,10 @@ _last_sentence: dict[str, tuple[str, float]] = {}  # session_id → (sentence, t
 _DEDUP_SECS = 5.0   # 같은 문장 억제 시간
 
 
-def _normalize_session_id(wifi_ssid: str) -> str:
-    """Android가 SSID를 못 읽을 때도 Dashboard가 같은 기본 세션을 보게 정규화."""
-    value = (wifi_ssid or "").strip().strip('"')
+def _normalize_session_id(wifi_ssid: str = "", device_id: str = "") -> str:
+    """기기별 대시보드 세션 ID 정규화. device_id가 있으면 WiFi보다 우선한다."""
+    preferred = device_id or wifi_ssid
+    value = (preferred or "").strip().strip('"')
     if not value or value.lower() in {"<unknown ssid>", "unknown ssid", "0x"}:
         return "__default__"
     return value
@@ -133,6 +134,7 @@ def _space_changes(current: list[dict], previous: list[dict]) -> list[str]:
 async def detect(
     image:              UploadFile,
     wifi_ssid:          str   = Form(""),        # 공간 기억 + 장소 저장에 사용
+    device_id:          str   = Form(""),        # 앱 설치별 고유 세션 ID (대시보드 위치 분리)
     camera_orientation: str   = Form("front"),   # 방향 보정: front/back/left/right
     mode:               str   = Form("장애물"),  # STT가 결정한 모드
     query_text:         str   = Form(""),        # STT 원문 (찾기/저장 모드에서 추출에 사용)
@@ -151,7 +153,7 @@ async def detect(
 
     _t0 = _time.monotonic()
     request_id = request_id or f"srv-{int(_t0 * 1000)}"
-    session_id = _normalize_session_id(wifi_ssid)
+    session_id = _normalize_session_id(wifi_ssid, device_id)
     print(
         f"[LINK] request_id={request_id} START mode={mode} "
         f"session={session_id} lat={lat} lng={lng}"
@@ -390,12 +392,13 @@ async def vision_clothing(
 @router.post("/gps", dependencies=[Depends(_verify_api_key)])
 async def save_gps_ping(
     wifi_ssid:  str   = Form(""),
+    device_id:  str   = Form(""),
     lat:        float = Form(0.0),
     lng:        float = Form(0.0),
     request_id: str   = Form(""),
 ):
     """Android 온디바이스 모드에서도 대시보드가 위치를 받을 수 있게 GPS만 저장."""
-    session_id = _normalize_session_id(wifi_ssid)
+    session_id = _normalize_session_id(wifi_ssid, device_id)
     if lat == 0.0 and lng == 0.0:
         print(f"[GPS] ignored empty location request_id={request_id} session={session_id}")
         return {"saved": False, "session_id": session_id, "reason": "empty_location"}
@@ -412,12 +415,6 @@ async def get_session_status(session_id: str):
     """
     requested_session_id = _normalize_session_id(session_id)
     resolved_session_id = requested_session_id
-    # Dashboard 기본값(__default__)으로 열면 가장 최근 GPS 세션을 자동으로 보여준다.
-    # 앱이 WiFi SSID 세션으로 저장하는 경우와 __default__로 저장하는 경우를 모두 흡수한다.
-    if requested_session_id == "__default__":
-        latest = db.get_latest_session()
-        if latest:
-            resolved_session_id = latest
 
     gps = db.get_last_gps(resolved_session_id)
 
