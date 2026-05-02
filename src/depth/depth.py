@@ -44,7 +44,7 @@ DIST_FAR_M       = 7.0
 
 def is_depth_enabled() -> bool:
     """DEPTH_ENABLED=0/false/no/off이면 Depth V2 추론을 건너뜀."""
-    return os.environ.get("DEPTH_ENABLED", "1").strip().lower() not in _DEPTH_DISABLED_VALUES
+    return os.environ.get("DEPTH_ENABLED", "0").strip().lower() not in _DEPTH_DISABLED_VALUES
 
 
 def _check_model() -> bool:
