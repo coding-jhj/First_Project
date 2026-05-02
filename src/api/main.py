@@ -12,20 +12,35 @@ from src.api import db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 서버 시작 시: DB 초기화 + YOLO + Depth V2 워밍업
+    # DB 초기화는 동기적으로 (빠름)
     db.init_db()
-    import numpy as np
-    from src.vision.detect import model, CONF_THRESHOLD
-    # 640×640 더미 이미지로 YOLO 첫 추론 실행 — JIT 컴파일 및 GPU 초기화 완료
-    model(np.zeros((640, 640, 3), dtype=np.uint8), conf=CONF_THRESHOLD, verbose=False)
-    # Depth V2 모델 미리 로드 — 안 하면 첫 /detect 요청에서 10~30초 걸려 Android timeout 발생
-    from src.depth.depth import _load_model
-    _load_model()
-    # EasyOCR·TTS 워밍업: 느려도 무관하므로 백그라운드 스레드 (서버 준비 완료를 막지 않음)
+    # YOLO·Depth·OCR·TTS 워밍업은 모두 백그라운드 — yield 전에 블로킹하지 않아야
+    # Cloud Run이 PORT=8080을 즉시 감지할 수 있음 (동기 로드 시 30초+ 걸려 타임아웃 발생)
     import threading
-    threading.Thread(target=_warmup_ocr, daemon=True).start()  # daemon=True: 서버 종료 시 함께 종료
+    threading.Thread(target=_warmup_yolo, daemon=True).start()
+    threading.Thread(target=_warmup_depth, daemon=True).start()
+    threading.Thread(target=_warmup_ocr, daemon=True).start()
     threading.Thread(target=_warmup_tts, daemon=True).start()
     yield  # 서버 실행 중 (이 이후는 종료 시 실행)
+
+
+def _warmup_yolo():
+    try:
+        import numpy as np
+        from src.vision.detect import model, CONF_THRESHOLD
+        model(np.zeros((640, 640, 3), dtype=np.uint8), conf=CONF_THRESHOLD, verbose=False)
+        print("[main] YOLO 워밍업 완료")
+    except Exception as e:
+        print(f"[main] YOLO 워밍업 실패: {e}")
+
+
+def _warmup_depth():
+    try:
+        from src.depth.depth import _load_model
+        _load_model()
+        print("[main] Depth V2 워밍업 완료")
+    except Exception as e:
+        print(f"[main] Depth V2 워밍업 실패: {e}")
 
 
 def _warmup_ocr():
@@ -52,7 +67,7 @@ app = FastAPI(title="VoiceGuide API", lifespan=lifespan)
 _default_origins = (
     "http://localhost:8000,"
     "http://127.0.0.1:8000,"
-    "https://voiceguide-135456731041.asia-northeast3.run.app"
+    "https://voiceguide-1063164560758.asia-northeast3.run.app"
 )
 _origins = os.getenv("ALLOWED_ORIGINS", _default_origins)
 _allow_origins = ["*"] if _origins == "*" else [

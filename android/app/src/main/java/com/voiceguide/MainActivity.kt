@@ -256,7 +256,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private val stairsDetector = StairsDetector()
 
     companion object {
-        private const val PREF_API_KEY     = "server_api_key"
         private const val PERM_CODE          = 100  // 카메라 + 마이크 (앱 시작 시)
         private const val PERM_CODE_LOCATION = 101  // GPS — 하차알림 기능 사용 시
         private const val PERM_CODE_SMS      = 102  // SMS — SOS 설정 시
@@ -340,15 +339,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private fun getSavedServerUrl(): String =
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_URL, "") ?: ""
 
-    private fun getSavedApiKey(): String =
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_API_KEY, "") ?: ""
-
-    private fun Request.Builder.withSavedApiKey(): Request.Builder {
-        val apiKey = getSavedApiKey()
-        if (apiKey.isNotBlank()) header("X-API-Key", apiKey)
-        return this
-    }
-
     private fun showSettingsDialog() {
         val ctx = this
         val layout = android.widget.LinearLayout(ctx).apply {
@@ -364,14 +354,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }
         val tvUrlLabel = android.widget.TextView(ctx).apply { text = "서버 URL" }
 
-        val etApiKey = android.widget.EditText(ctx).apply {
-            hint = "API Key (optional)"
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setText(getSavedApiKey())
-            setSingleLine(true)
-        }
-        val tvApiKeyLabel = android.widget.TextView(ctx).apply { text = "API Key" }
-
         val swDebug = android.widget.Switch(ctx).apply {
             text = "디버그 모드 (FPS / 추론속도)"
             isChecked = debugVisible
@@ -379,8 +361,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
         layout.addView(tvUrlLabel)
         layout.addView(etUrl)
-        layout.addView(tvApiKeyLabel)
-        layout.addView(etApiKey)
         layout.addView(android.widget.Space(ctx).apply {
             minimumHeight = 32
         })
@@ -392,11 +372,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 .setView(layout)
                 .setPositiveButton("저장") { _, _ ->
                     val url = etUrl.text.toString().trim()
-                    val apiKey = etApiKey.text.toString().trim()
                     getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                         .edit()
                         .putString(PREF_URL, url)
-                        .putString(PREF_API_KEY, apiKey)
                         .apply()
                     debugVisible = swDebug.isChecked
                     val tvDebug = findViewById<android.widget.TextView>(R.id.tvDebug)
@@ -669,7 +647,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 // "37번 버스 기다려줘" → "37" 추출
                 val num = Regex("\\d{1,4}").find(text)?.value ?: ""
                 if (num.isEmpty()) {
-                    speak("몇 번 버스를 기다릴까요? 예) 37번 버스 기다려줘.")
+                    speak("몇 번 버스를 기다릴까요? 예 : 37번 버스 기다려줘.")
                 } else {
                     waitingBusNumber = num
                     speak("${num}번 버스를 기다릴게요. 가까이 오면 알려드릴게요.")
@@ -723,7 +701,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 // "8시에 약 먹어야 해" → 시간 추출
                 val hour = Regex("(\\d{1,2})시").find(text)?.groupValues?.get(1)?.toIntOrNull()
                 if (hour != null) setMedicationAlarm(hour)
-                else speak("몇 시에 약을 드실 건가요? 예) 8시에 약 먹어야 해.")
+                else speak("몇 시에 약을 드실 건가요? 예 : 8시에 약 먹어야 해.")
             }
             "하차알림" -> requestLocationPermission {
                 speak("현재 위치를 기준으로 200미터 이내에 도착하면 알려드릴게요.")
@@ -881,7 +859,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         imageFile.asRequestBody("image/jpeg".toMediaType()))
                     .build()
                 val response = httpClient.newCall(
-                    okhttp3.Request.Builder().url("$serverUrl/ocr/bus").post(body).withSavedApiKey().build()
+                    okhttp3.Request.Builder().url("$serverUrl/ocr/bus").post(body).build()
                 ).execute()
                 val json     = org.json.JSONObject(response.body?.string() ?: "{}")
                 val sentence = json.optString("sentence", "버스 번호를 읽지 못했어요.")
@@ -987,7 +965,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                                 .addFormDataPart("type", type)
                                 .build()
                             val resp = httpClient.newCall(
-                                okhttp3.Request.Builder().url("$serverUrl/vision/clothing").post(body).withSavedApiKey().build()
+                                okhttp3.Request.Builder().url("$serverUrl/vision/clothing").post(body).build()
                             ).execute()
                             val sentence = org.json.JSONObject(resp.body?.string() ?: "{}")
                                 .optString("sentence", "분석하지 못했어요.")
@@ -1317,7 +1295,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     .addFormDataPart("request_id", requestId)
                     .build()
                 val response = httpClient.newCall(
-                    Request.Builder().url("$serverUrl/detect").post(body).withSavedApiKey().build()
+                    Request.Builder().url("$serverUrl/detect").post(body).build()
                 ).execute()
                 val roundTripMs = System.currentTimeMillis() - reqStart
                 val json     = JSONObject(response.body?.string() ?: "{}")
@@ -1554,7 +1532,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     .build()
 
                 val response = httpClient.newCall(
-                    Request.Builder().url("$serverUrl/detect").post(body).withSavedApiKey().build()
+                    Request.Builder().url("$serverUrl/detect").post(body).build()
                 ).execute()
 
                 // 전체 왕복 시간 = 네트워크 + 서버 처리
@@ -1754,7 +1732,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         ttsExecutor.execute {
             try {
                 val body = okhttp3.FormBody.Builder().add("text", text).build()
-                val req = okhttp3.Request.Builder().url("$serverUrl/tts").post(body).withSavedApiKey().build()
+                val req = okhttp3.Request.Builder().url("$serverUrl/tts").post(body).build()
                 val resp = httpClient.newCall(req).execute()
                 if (ttsRequestId.get() != myId) { isElevenLabsSpeaking = false; return@execute }
                 if (!resp.isSuccessful) { isElevenLabsSpeaking = false; handler.post { speakBuiltIn(text) }; return@execute }
