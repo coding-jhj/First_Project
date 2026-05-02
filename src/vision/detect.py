@@ -1,7 +1,7 @@
 """
 VoiceGuide 객체 탐지 모듈 (2026-04-26)
 =====================================
-- COCO 80클래스 전체 커버 + 계단 파인튜닝(81번)
+- COCO 80클래스 매핑 (보행 관련만 출력)
 - 실내외 모든 위험 요소: 차량·동물·날카로운 물체·바닥 장애물 등
 - 안전 경로 제안, 군중 경고, 위험 물체 특별 경고
 - YOLO-World 옵션: 환경변수 YOLO_WORLD=1 로 활성화
@@ -19,7 +19,7 @@ if _USE_YOLO_WORLD:
     _model = _YOLOWorldCls("yolov8x-worldv2.pt")
     # 한국 특화 + COCO 외 위험 클래스 추가
     _WORLD_CLASSES = [
-        "person", "car", "motorcycle", "bus", "truck", "bicycle", "train",
+        "person", "car", "motorcycle", "truck", "bicycle", "train",
         "traffic light", "fire hydrant", "stop sign", "parking meter",
         "dog", "cat", "horse", "cow", "bird", "sheep", "elephant", "bear",
         "electric scooter",   # 전동킥보드 — COCO 없음, 한국 최대 위험
@@ -33,23 +33,16 @@ if _USE_YOLO_WORLD:
         "refrigerator", "potted plant", "bench",
         "backpack", "handbag", "suitcase", "umbrella",
         "knife", "scissors", "wine glass",
-        "stairs", "curb", "step",
+        "curb", "step",
     ]
     _model.set_classes(_WORLD_CLASSES)
     print(f"[YOLO-World] 모델 로드: yolov8x-worldv2.pt ({len(_WORLD_CLASSES)}클래스)")
 else:
-    _src = os.environ.get("YOLO_MODEL_PATH") or (
-        "yolo11m_indoor.pt" if os.path.exists("yolo11m_indoor.pt") else "yolo11m.pt"
-    )
+    _src = "yolo11n.pt"
     _model = YOLO(_src)
     print(f"[YOLO] 모델 로드: {_src}")
 
 model = _model
-
-try:
-    YOLO_IMGSZ = int(os.environ.get("YOLO_IMGSZ", "640"))
-except ValueError:
-    YOLO_IMGSZ = 640
 
 # ── 방향 구역 (9구역, 시계 방향) ─────────────────────────────────────────────
 ZONE_BOUNDARIES = [
@@ -68,19 +61,65 @@ DIST_FAR       = 0.01
 CONF_THRESHOLD = 0.50   # 야외 원거리 탐지 위해 낮게 유지
 
 CLASS_MIN_CONF = {
-    # 야외 차량: 멀리서도 일찍 잡아야 (안전 우선)
-    "car": 0.38, "motorcycle": 0.38, "truck": 0.38,
-    "bicycle": 0.42, "train": 0.35,
+    # 야외 차량: 멀리서도 일찍 잡아야 (안전 우선) → 임계값 낮게
+    "car": 0.35, "motorcycle": 0.35, "truck": 0.35,
+    "bicycle": 0.40, "train": 0.32,
     # 사람
-    "person": 0.42,
+    "person": 0.40,
     # 위험 동물
-    "dog": 0.45, "horse": 0.45, "cow": 0.45,
-    "bear": 0.40, "elephant": 0.40,
+    "dog": 0.42, "horse": 0.42, "cow": 0.42,
+    "bear": 0.38, "elephant": 0.38,
     # 교통 시설
-    "traffic light": 0.42,
+    "traffic light": 0.40,
+    # 날카로운 위험 물체 → 낮게 (부상 위험)
+    "knife": 0.42, "scissors": 0.45,
     # 실내 소형 (오탐 많아서 높게)
-    "cell phone": 0.65, "remote": 0.65, "mouse": 0.65,
+    "cell phone": 0.45, "remote": 0.65, "mouse": 0.65,
+    "keyboard": 0.35, "stairs": 0.35,
     "toothbrush": 0.70, "spoon": 0.70, "fork": 0.65,
+    # 실내 소형/오탐 잦은 클래스
+    "tie": 0.75, "umbrella": 0.68, "handbag": 0.65,
+    "wine glass": 0.70, "cup": 0.65, "bowl": 0.65,
+}
+
+# ── 항상 최우선 안내 클래스 (botvoting 없이 즉시 통과) ────────────────────────
+ALWAYS_CRITICAL = {
+    "car", "motorcycle", "truck", "train",  # 이동 차량
+    "bicycle",                                      # 자전거 (전동킥보드 대체)
+    "knife", "scissors",                            # 날카로운 위험
+    "bear", "elephant",                             # 위험 동물 대형
+}
+
+# ── 거리 무관하게 항상 경고할 위험 클래스 ────────────────────────────────────
+# 멀리 있어도 즉시 인지가 필요한 클래스 (ALWAYS_CRITICAL의 서버 버전)
+_ALWAYS_WARN = {
+    "car", "motorcycle", "truck", "train", "bicycle",
+    "knife", "scissors",
+    "bear", "elephant", "horse", "dog",  # 위험 동물
+    "fire hydrant",  # 도로에 돌출, 충돌 위험
+    "stairs",        # 실내 커스텀 모델 클래스: 계단/단차
+}
+
+# ── 가까울 때만 경고할 클래스 (2m 이상이면 무음) ─────────────────────────────
+# 멀리 있는 의자·소파 등은 사실상 위험 없음 → 경고 피로 방지
+_WARN_ONLY_CLOSE_M = 2.5   # 이 거리 이내에서만 경고
+_WARN_ONLY_CLOSE = {
+    "chair", "couch", "bed", "dining table", "potted plant",
+    "laptop", "mouse", "remote", "keyboard", "cell phone",
+    "microwave", "oven", "toaster", "refrigerator", "sink",
+    "book", "clock", "vase", "teddy bear", "hair drier", "toothbrush",
+    "bowl", "cup", "fork", "spoon", "bottle",
+    "tv", "umbrella", "tie", "handbag",
+    "apple", "orange", "broccoli", "carrot", "hot dog",
+    "pizza", "donut", "cake", "sandwich",
+    "frisbee", "skis", "snowboard", "kite",
+    "baseball glove", "surfboard", "tennis racket",
+}
+
+# ── 미끄럼 위험 유발 클래스 (바닥에 있을 때) ──────────────────────────────────
+_SLIPPERY_CLASSES = {
+    "banana", "apple", "orange", "pizza", "donut", "cake",
+    "sandwich", "hot dog", "broccoli",
 }
 
 # ── 방향별 위험도 가중치 ─────────────────────────────────────────────────────
@@ -105,6 +144,7 @@ CLASS_RISK_MULTIPLIER = {
     "train": 4.0, "bicycle": 2.0, "airplane": 1.5, "boat": 1.5,
     # 이동 물체
     "skateboard": 2.0, "sports ball": 1.3,
+    "stairs": 2.0,
     # 위험 동물
     "elephant": 4.0, "bear": 4.0, "horse": 2.5, "zebra": 2.0,
     "giraffe": 2.0, "cow": 2.0, "sheep": 1.5,
@@ -129,7 +169,6 @@ TARGET_CLASSES = {
     "car":             "자동차",
     "motorcycle":      "오토바이",
     "airplane":        "비행기",
-    "bus":             "자동차",  # 버스 → 자동차로 통합 (버스 OCR 제거)
     "train":           "기차",
     "truck":           "트럭",
     "boat":            "보트",
@@ -208,6 +247,7 @@ TARGET_CLASSES = {
     "remote":          "리모컨",
     "keyboard":        "키보드",
     "cell phone":      "휴대폰",
+    "stairs":          "계단",
 
     # 가전
     "microwave":       "전자레인지",
@@ -225,13 +265,11 @@ TARGET_CLASSES = {
     "hair drier":      "드라이기",
     "toothbrush":      "칫솔",
 
-    # 파인튜닝 추가 클래스
-    "stairs":          "계단",
 }
 
 # ── 물체 실제 크기 기반 거리 캘리브레이션 ────────────────────────────────────
 CLASS_CALIB_RATIO = {
-    "person": 0.10, "car": 0.35, "bus": 0.60, "truck": 0.50,
+    "person": 0.10, "car": 0.35, "truck": 0.50,
     "motorcycle": 0.08, "bicycle": 0.06, "airplane": 1.50,
     "train": 1.00, "boat": 0.40,
     "dog": 0.04, "horse": 0.20, "cow": 0.18, "elephant": 0.80,
@@ -245,13 +283,14 @@ CLASS_CALIB_RATIO = {
     "sports ball": 0.02, "baseball bat": 0.02,
     "knife": 0.005, "scissors": 0.005, "wine glass": 0.005,
     "bottle": 0.005, "vase": 0.008,
+    "cell phone": 0.012, "keyboard": 0.05, "stairs": 0.08,
 }
 _DEFAULT_CALIB = 0.06
 
 
 # ── 바닥 장애물 판별 ─────────────────────────────────────────────────────────
 _GROUND_CLASSES = {
-    "stairs", "fire hydrant", "parking meter",
+    "fire hydrant", "parking meter", "stairs",
     "dog", "cat", "bird", "backpack", "suitcase", "handbag",
     "frisbee", "sports ball", "skateboard",
     "knife", "scissors", "bottle", "wine glass",
@@ -363,8 +402,28 @@ def detect_objects(image_bytes: bytes) -> tuple[list[dict], dict]:
     img   = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     h, w  = img.shape[:2]      # 이미지 높이, 너비
 
+    def _sanitize_bbox(x1: int, y1: int, x2: int, y2: int) -> tuple[int, int, int, int] | None:
+        """
+        클라이언트(overlay)가 안정적으로 사각형을 그릴 수 있도록 bbox를 정규화.
+        - 좌표 뒤집힘(x1>x2 / y1>y2) 방지
+        - 이미지 경계 밖 값 클램프
+        - 너무 작은 박스 제거 (선처럼 보이는 현상 방지)
+        """
+        # 정렬
+        x1, x2 = (x1, x2) if x1 <= x2 else (x2, x1)
+        y1, y2 = (y1, y2) if y1 <= y2 else (y2, y1)
+        # 클램프
+        x1 = max(0, min(x1, w - 1))
+        x2 = max(0, min(x2, w - 1))
+        y1 = max(0, min(y1, h - 1))
+        y2 = max(0, min(y2, h - 1))
+        # 최소 크기
+        if (x2 - x1) < 2 or (y2 - y1) < 2:
+            return None
+        return x1, y1, x2, y2
+
     # YOLO 추론: conf=CONF_THRESHOLD 미만 박스는 자동 필터링
-    results    = model(img, conf=CONF_THRESHOLD, imgsz=YOLO_IMGSZ, verbose=False)[0]
+    results    = model(img, conf=CONF_THRESHOLD, imgsz=416)[0]
     all_detections = []
 
     for box in results.boxes:
@@ -381,6 +440,10 @@ def detect_objects(image_bytes: bytes) -> tuple[list[dict], dict]:
 
         # bbox 좌표: xyxy 포맷 (왼쪽상단x, 왼쪽상단y, 오른쪽하단x, 오른쪽하단y)
         x1, y1, x2, y2 = map(int, box.xyxy[0])
+        sanitized = _sanitize_bbox(x1, y1, x2, y2)
+        if sanitized is None:
+            continue
+        x1, y1, x2, y2 = sanitized
 
         # 방향 판단: bbox 중심의 x좌표를 이미지 너비로 정규화 (0~1)
         # → ZONE_BOUNDARIES와 비교해서 8시~4시 중 어느 구역인지 결정
@@ -412,13 +475,12 @@ def detect_objects(image_bytes: bytes) -> tuple[list[dict], dict]:
         # → 발에 걸릴 가능성이 높은 물체 (가중치 1.4배)
         y2_norm    = y2 / h
         is_ground  = y2_norm > 0.65 or cls_name in _GROUND_CLASSES
-        is_vehicle = cls_name in {"car","motorcycle","bus","truck","train","bicycle","airplane","boat"}
+        is_vehicle = cls_name in {"car","motorcycle","truck","train","bicycle","airplane","boat"}
         is_animal  = cls_name in {"dog","cat","horse","cow","sheep","bird","elephant","bear","zebra","giraffe"}
         is_dangerous = cls_name in {"knife","scissors","wine glass","baseball bat"}
+
         # 위험도 점수 계산:
         # risk = 방향가중치 × 거리가중치 × 바닥가중치 × 클래스배수
-        # 예) 12시 방향 + 가까이 + 바닥 + 자동차:
-        #     1.0 × 0.8 × 1.0 × 3.0 = 2.4 → min(2.4, 1.0) = 1.0 (최고 위험)
         ground_mult = 1.4 if is_ground and distance in ("매우 가까이","가까이","보통") else 1.0
         class_mult  = CLASS_RISK_MULTIPLIER.get(cls_name, 1.0)
         risk_score  = round(
@@ -426,16 +488,21 @@ def detect_objects(image_bytes: bytes) -> tuple[list[dict], dict]:
         )
         risk_score = min(risk_score, 1.0)  # 1.0 초과 방지
 
-        # 경고 레벨: Android에서 음성 vs 비프음 결정에 사용
-        # danger  → 즉시 음성 안내 (차량 접근, 칼 근처)
-        # warning → 음성 안내 (일반 장애물 가까이)
-        # info    → 비프음만 (멀리 있는 물체, 정보성)
-        if (is_vehicle and distance_m < 8.0) or (is_dangerous and distance_m < 3.0):
-            alert_level = "danger"
-        elif risk_score > 0.35 or distance_m < 1.5:
-            alert_level = "warning"
-        else:
-            alert_level = "info"
+        # ── 거리 기반 사물 필터 (경고 피로 방지) ──────────────────────────────
+        # 가까울 때만 경고할 사물이 멀면 탐지 목록에서 제외
+        if cls_name in _WARN_ONLY_CLOSE and distance_m > _WARN_ONLY_CLOSE_M:
+            continue  # 멀리 있는 의자·소파 등은 안내 생략 → 중요 경고에 집중
+
+        # ── 미끄럼 위험 감지 (바닥에 음식류) ────────────────────────────────────
+        # 바닥에 음식이 있으면 미끄럼 위험 → 별도 경고로 처리
+        is_slippery_risk = cls_name in _SLIPPERY_CLASSES and is_ground
+
+        # ── 전동킥보드 의심 감지 (자전거 + 보행자 조합) ───────────────────────
+        # COCO에 전동킥보드 클래스 없음 → 자전거 클래스로 탐지됨
+        # 자전거가 실내/보도에서 탐지되면 전동킥보드 가능성 높음 → 경고 강화
+        if cls_name == "bicycle" and area_ratio < 0.08:
+            # 소형 자전거 = 전동킥보드 가능성 → 위험도 상향
+            risk_score = min(risk_score * 1.5, 1.0)
 
         # 색상 감지
         color = _detect_color(img, x1, y1, x2, y2)
@@ -445,10 +512,23 @@ def detect_objects(image_bytes: bytes) -> tuple[list[dict], dict]:
         if cls_name == "traffic light":
             traffic_light_state = _detect_traffic_light_color(img, x1, y1, x2, y2)
 
+        bw = x2 - x1
+        bh = y2 - y1
+        bbox_xywh = [x1, y1, bw, bh]  # (left, top, width, height) in pixels
+        bbox_norm_xyxy = [round(x1 / w, 6), round(y1 / h, 6), round(x2 / w, 6), round(y2 / h, 6)]
+        bbox_norm_xywh = [round(x1 / w, 6), round(y1 / h, 6), round(bw / w, 6), round(bh / h, 6)]
+
         all_detections.append({
             "class":                cls_name,
             "class_ko":             TARGET_CLASSES[cls_name],
+            # 호환성을 위해 기본 bbox는 xyxy 픽셀 좌표 유지
             "bbox":                 [x1, y1, x2, y2],
+            # 클라이언트(overlay) 구현 실수 방지용으로 다양한 포맷도 함께 제공
+            "bbox_xyxy":            [x1, y1, x2, y2],
+            "bbox_xywh":            bbox_xywh,
+            "bbox_norm_xyxy":       bbox_norm_xyxy,
+            "bbox_norm_xywh":       bbox_norm_xywh,
+            "bbox_format":          "xyxy_pixels",
             "direction":            direction,
             "distance":             distance,
             "distance_m":           distance_m,
@@ -458,17 +538,25 @@ def detect_objects(image_bytes: bytes) -> tuple[list[dict], dict]:
             "is_vehicle":           is_vehicle,
             "is_animal":            is_animal,
             "is_dangerous":         is_dangerous,
-            "alert_level":          alert_level,
+            "is_slippery_risk":     is_slippery_risk,
             "color":                color,
             "traffic_light_state":  traffic_light_state,
         })
 
     scene = _compute_scene_analysis(all_detections)
 
-    # 점자 블록 위 장애물 경고: 바닥에 있는 물체가 이미지 하단 중앙 경로에 있을 때
+    # 점자 블록 위 장애물 경고
     _check_tactile_block_obstruction(all_detections, scene, w, h)
 
-    top3  = sorted(all_detections, key=lambda x: x["risk_score"], reverse=True)[:3]
+    # 미끄럼 위험 경고: 바닥 음식류 탐지 시
+    for det in all_detections:
+        if det.get("is_slippery_risk"):
+            name = det["class_ko"]
+            scene.setdefault("slippery_warning",
+                             f"바닥에 {name}{_i_ga(name)} 있어요. 미끄러울 수 있어요. 조심하세요.")
+            break
+
+    top3 = sorted(all_detections, key=lambda x: x["risk_score"], reverse=True)[:3]
     return top3, scene
 
 

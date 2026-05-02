@@ -57,9 +57,10 @@ _last_sentence: dict[str, tuple[str, float]] = {}  # session_id → (sentence, t
 _DEDUP_SECS = 5.0   # 같은 문장 억제 시간
 
 
-def _normalize_session_id(wifi_ssid: str) -> str:
-    """Android가 SSID를 못 읽을 때도 Dashboard가 같은 기본 세션을 보게 정규화."""
-    value = (wifi_ssid or "").strip().strip('"')
+def _normalize_session_id(wifi_ssid: str = "", device_id: str = "") -> str:
+    """기기별 대시보드 세션 ID 정규화. device_id가 있으면 WiFi보다 우선한다."""
+    preferred = device_id or wifi_ssid
+    value = (preferred or "").strip().strip('"')
     if not value or value.lower() in {"<unknown ssid>", "unknown ssid", "0x"}:
         return "__default__"
     return value
@@ -133,6 +134,7 @@ def _space_changes(current: list[dict], previous: list[dict]) -> list[str]:
 async def detect(
     image:              UploadFile,
     wifi_ssid:          str   = Form(""),        # 공간 기억 + 장소 저장에 사용
+    device_id:          str   = Form(""),        # 앱 설치별 고유 세션 ID (대시보드 위치 분리)
     camera_orientation: str   = Form("front"),   # 방향 보정: front/back/left/right
     mode:               str   = Form("장애물"),  # STT가 결정한 모드
     query_text:         str   = Form(""),        # STT 원문 (찾기/저장 모드에서 추출에 사용)
@@ -151,7 +153,7 @@ async def detect(
 
     _t0 = _time.monotonic()
     request_id = request_id or f"srv-{int(_t0 * 1000)}"
-    session_id = _normalize_session_id(wifi_ssid)
+    session_id = _normalize_session_id(wifi_ssid, device_id)
     print(
         f"[LINK] request_id={request_id} START mode={mode} "
         f"session={session_id} lat={lat} lng={lng}"
@@ -184,6 +186,8 @@ async def detect(
     previous = db.get_snapshot(wifi_ssid)
     space_changes = _space_changes(objects, previous) if previous else []
     db.save_snapshot(wifi_ssid, objects)  # 현재 상태를 다음 방문을 위해 저장
+    if objects:  # 빈 결과로 유효 스냅샷 덮어쓰지 않도록
+        db.save_snapshot(session_id, objects)
 
     all_changes = motion_changes + space_changes
 
@@ -390,12 +394,13 @@ async def vision_clothing(
 @router.post("/gps", dependencies=[Depends(_verify_api_key)])
 async def save_gps_ping(
     wifi_ssid:  str   = Form(""),
+    device_id:  str   = Form(""),
     lat:        float = Form(0.0),
     lng:        float = Form(0.0),
     request_id: str   = Form(""),
 ):
     """Android 온디바이스 모드에서도 대시보드가 위치를 받을 수 있게 GPS만 저장."""
-    session_id = _normalize_session_id(wifi_ssid)
+    session_id = _normalize_session_id(wifi_ssid, device_id)
     if lat == 0.0 and lng == 0.0:
         print(f"[GPS] ignored empty location request_id={request_id} session={session_id}")
         return {"saved": False, "session_id": session_id, "reason": "empty_location"}
@@ -412,17 +417,14 @@ async def get_session_status(session_id: str):
     """
     requested_session_id = _normalize_session_id(session_id)
     resolved_session_id = requested_session_id
-    # Dashboard 기본값(__default__)으로 열면 가장 최근 GPS 세션을 자동으로 보여준다.
-    # 앱이 WiFi SSID 세션으로 저장하는 경우와 __default__로 저장하는 경우를 모두 흡수한다.
-    if requested_session_id == "__default__":
-        latest = db.get_latest_session()
-        if latest:
-            resolved_session_id = latest
 
     gps = db.get_last_gps(resolved_session_id)
 
     tracker = get_tracker(resolved_session_id)
-    current = tracker.get_current_state(max_age_s=3.0)
+    current = tracker.get_current_state(max_age_s=5.0)
+    # in-memory tracker 비어 있으면 DB 스냅샷 폴백 (Cloud Run 다중 인스턴스 / 서버 재시작 대비)
+    if not current:
+        current = db.get_snapshot(resolved_session_id, max_age_s=8.0) or []
     track   = db.get_gps_track(resolved_session_id, limit=100)
     return {
         "session_id": resolved_session_id,
@@ -437,6 +439,20 @@ async def get_session_status(session_id: str):
 async def list_sessions():
     """GPS 데이터가 있는 최근 세션 ID 목록 반환 — 대시보드 세션 선택용."""
     return {"sessions": db.get_recent_sessions()}
+
+
+@router.get("/team-locations", dependencies=[Depends(_verify_api_key)])
+async def get_team_locations():
+    """최근 30분 내 활성 세션의 마지막 GPS 반환 — 대시보드 팀원 위치 표시용."""
+    from datetime import datetime, timedelta
+    cutoff = (datetime.now() - timedelta(minutes=30)).isoformat()
+    sessions = db.get_recent_sessions(limit=20)
+    locations = []
+    for s in sessions:
+        gps = db.get_last_gps(s)
+        if gps and gps.get("timestamp", "") >= cutoff:
+            locations.append({"session_id": s, "lat": gps["lat"], "lng": gps["lng"]})
+    return {"locations": locations}
 
 
 @router.get("/dashboard", dependencies=[Depends(_verify_api_key)])
