@@ -8,8 +8,11 @@ __pycache__/
 *.log
 *.csv
 
-# 큰 모델 파일 (Depth V2 제외 — bbox fallback 사용)
-depth_anything_v2_vits.pth
+# 큰 모델 파일 (서버 컨테이너에 COPY 안 하므로 업로드 불필요)
+*.pt
+*.onnx
+*.onnx.data
+*.pth
 
 # 개발용 폴더
 train/

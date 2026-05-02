@@ -23,8 +23,10 @@ import android.widget.EditText
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -37,6 +39,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -75,6 +78,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     // ── 카메라 & 분석 루프 ─────────────────────────────────────────────
     private var imageCapture: ImageCapture? = null
+    private var imageAnalysis: ImageAnalysis? = null
+    private var lastStreamFrameTime = 0L
+    private var lastStreamSkipLogTime = 0L
     // newSingleThreadExecutor: 카메라 캡처를 UI 스레드와 분리 (UI 멈춤 방지)
     private val cameraExecutor = Executors.newSingleThreadExecutor()
     // Handler: 메인 스레드에서 지연 작업 예약 (1초 간격 루프, Watchdog)
@@ -234,6 +240,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     // ── GPS 하차 알림 + 현재 위치 (대시보드 지도용) ──────────────────────
     private var locationManager: android.location.LocationManager? = null
+    private lateinit var fusedLocationClient: com.google.android.gms.location.FusedLocationProviderClient
     private var targetBusStop: android.location.Location? = null
     @Volatile private var currentLat = 0.0  // 현재 GPS 위도 (서버 /detect 전송용)
     @Volatile private var currentLng = 0.0  // 현재 GPS 경도
@@ -259,6 +266,18 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         sendGpsHeartbeat(source)
     }
 
+    private fun handleLocationForGps(
+        loc: android.location.Location,
+        source: String,
+        enableArrivalAlert: Boolean = false
+    ) {
+        updateCurrentLocation(loc, source)
+        if (enableArrivalAlert && targetBusStop == null) {
+            targetBusStop = loc
+            speak("현재 위치를 하차 알림 기준 위치로 저장했어요.")
+        }
+    }
+
     // ── ONNX 온디바이스 추론 ───────────────────────────────────────────
     private var yoloDetector: YoloDetector? = null
     private val stairsDetector = StairsDetector()
@@ -269,6 +288,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         private const val PERM_CODE_SMS      = 102  // SMS — SOS 설정 시
         private const val PREFS_NAME       = "voiceguide"  // SharedPreferences 이름
         private const val PREF_URL         = "server_url"  // 저장된 서버 URL 키
+        private const val PREF_DEVICE_ID   = "device_id"   // 앱 설치별 대시보드 세션 ID
+        private const val DEFAULT_SERVER_URL =
+            "https://voiceguide-1063164560758.asia-northeast3.run.app"
         private const val PREF_LOCATIONS   = "saved_locations"  // 저장 장소 JSON 배열 키
         private const val INTERVAL_MS      = 800L          // 캡처 간격: 0.8초 (빠른 응답)
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
@@ -310,6 +332,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
         sensorManager   = getSystemService(SENSOR_SERVICE) as SensorManager
         locationManager = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
+        fusedLocationClient = com.google.android.gms.location.LocationServices
+            .getFusedLocationProviderClient(this)
         initSpeechRecognizer()
         tryInitYoloDetector()
 
@@ -345,8 +369,19 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }
     }
 
-    private fun getSavedServerUrl(): String =
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_URL, "") ?: ""
+    private fun getSavedServerUrl(): String {
+        val saved = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_URL, "") ?: ""
+        return saved.ifBlank { DEFAULT_SERVER_URL }
+    }
+
+    private fun getDeviceSessionId(): String {
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val saved = prefs.getString(PREF_DEVICE_ID, "") ?: ""
+        if (saved.isNotBlank()) return saved
+        val generated = "android-${java.util.UUID.randomUUID().toString().take(8)}"
+        prefs.edit().putString(PREF_DEVICE_ID, generated).apply()
+        return generated
+    }
 
     private fun showSettingsDialog() {
         val ctx = this
@@ -952,6 +987,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     @Suppress("MissingPermission")
     private fun startGpsTracking(enableArrivalAlert: Boolean = false) {
         try {
+            Log.d(
+                "VG_GPS",
+                "start enableArrivalAlert=$enableArrivalAlert fine=${hasPerm(Manifest.permission.ACCESS_FINE_LOCATION)} coarse=${hasPerm(Manifest.permission.ACCESS_COARSE_LOCATION)} server=${getSavedServerUrl()}"
+            )
             val providers = listOf(
                 android.location.LocationManager.GPS_PROVIDER,
                 android.location.LocationManager.NETWORK_PROVIDER
@@ -972,17 +1011,41 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 .maxByOrNull { it.time }
 
             if (lastLoc != null) {
-                updateCurrentLocation(lastLoc, "lastKnown")
-                if (enableArrivalAlert) {
-                    targetBusStop = lastLoc
-                    speak("현재 위치를 하차 알림 기준 위치로 저장했어요.")
-                }
+                handleLocationForGps(lastLoc, "lastKnown", enableArrivalAlert)
             } else {
                 Log.w("VG_GPS", "location not ready providers=$providers")
                 if (enableArrivalAlert) {
                     speak("GPS 신호를 찾는 중이에요. 잠시 후 다시 시도해 주세요.")
                 }
             }
+
+            fusedLocationClient.lastLocation
+                .addOnSuccessListener { loc ->
+                    if (loc != null) {
+                        handleLocationForGps(loc, "fusedLast", enableArrivalAlert)
+                    } else {
+                        Log.w("VG_GPS", "fused lastLocation is null")
+                    }
+                }
+                .addOnFailureListener { e ->
+                    Log.e("VG_GPS", "fused lastLocation failed", e)
+                }
+
+            val tokenSource = com.google.android.gms.tasks.CancellationTokenSource()
+            fusedLocationClient.getCurrentLocation(
+                com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY,
+                tokenSource.token
+            )
+                .addOnSuccessListener { loc ->
+                    if (loc != null) {
+                        handleLocationForGps(loc, "fusedCurrent", enableArrivalAlert)
+                    } else {
+                        Log.w("VG_GPS", "fused currentLocation is null")
+                    }
+                }
+                .addOnFailureListener { e ->
+                    Log.e("VG_GPS", "fused currentLocation failed", e)
+                }
         } catch (e: Exception) {
             Log.e("VG_GPS", "GPS start failed", e)
             if (enableArrivalAlert) {
@@ -1012,11 +1075,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
         val lat = currentLat
         val lng = currentLng
+        val deviceId = getDeviceSessionId()
         val requestId = "gps-$now"
         Thread {
             try {
                 val body = okhttp3.FormBody.Builder()
                     .add("wifi_ssid", getWifiSsid())
+                    .add("device_id", deviceId)
                     .add("lat", lat.toString())
                     .add("lng", lng.toString())
                     .add("request_id", requestId)
@@ -1026,7 +1091,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 ).execute()
                 Log.d(
                     "VG_GPS",
-                    "heartbeat source=$source request_id=$requestId status=${response.code} lat=$lat lng=$lng"
+                    "heartbeat source=$source session=$deviceId request_id=$requestId status=${response.code} lat=$lat lng=$lng"
                 )
                 response.close()
             } catch (e: Exception) {
@@ -1079,10 +1144,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     /** GPS 기능(하차알림) 사용 시에만 위치 권한 요청 */
     private fun requestLocationPermission(onGranted: () -> Unit) {
-        if (hasPerm(Manifest.permission.ACCESS_FINE_LOCATION)) { onGranted(); return }
+        if (hasLocationPerm()) { onGranted(); return }
         locationPermissionCallback = onGranted
         ActivityCompat.requestPermissions(this,
-            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), PERM_CODE_LOCATION)
+            arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            ), PERM_CODE_LOCATION)
     }
 
     /** SOS 보호자 문자 설정 시에만 SMS 권한 요청 */
@@ -1096,6 +1164,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private fun hasPerm(p: String) =
         ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
 
+    private fun hasLocationPerm(): Boolean =
+        hasPerm(Manifest.permission.ACCESS_FINE_LOCATION) ||
+            hasPerm(Manifest.permission.ACCESS_COARSE_LOCATION)
+
     private fun startCamera() {
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
@@ -1104,9 +1176,24 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 .also { it.setSurfaceProvider(previewView.surfaceProvider) }
             imageCapture = ImageCapture.Builder()
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build()
+            imageAnalysis = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setTargetResolution(android.util.Size(640, 480))
+                .build()
+                .also { analysis ->
+                    analysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                        analyzeStreamFrame(imageProxy)
+                    }
+                }
             try {
                 provider.unbindAll()
-                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageCapture)
+                provider.bindToLifecycle(
+                    this,
+                    CameraSelector.DEFAULT_BACK_CAMERA,
+                    preview,
+                    imageCapture,
+                    imageAnalysis
+                )
                 startAnalysis()
             } catch (e: Exception) {
                 tvStatus.text = "카메라 오류: ${e.message}"
@@ -1129,8 +1216,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         tvStatus.text  = "분석 중..."
         // GPS 시작 — 대시보드 지도에 위치 표시. 하차 알림 문구/target 설정은 하지 않는다.
         requestLocationPermission { startGpsTracking(enableArrivalAlert = false) }
-        captureAndProcess()
-        scheduleNext()
         scheduleWatchdog()
         scheduleAutoListen()
     }
@@ -1183,6 +1268,109 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }, SILENCE_WARN_MS)
     }
 
+    private fun analyzeStreamFrame(imageProxy: ImageProxy) {
+        try {
+            if (!isAnalyzing.get()) return
+            checkRevisit()
+
+            val now = System.currentTimeMillis()
+            if (now - lastStreamFrameTime < INTERVAL_MS) return
+            if (!isSending.compareAndSet(false, true)) {
+                if (now - lastStreamSkipLogTime > 1000L) {
+                    lastStreamSkipLogTime = now
+                    Log.d("VG_FLOW", "stream frame skipped: previous frame still processing")
+                }
+                return
+            }
+            lastStreamFrameTime = now
+
+            val requestId = nextRequestId()
+            val route = if (shouldUseOnDeviceDetector()) "on_device" else "server"
+            val file = imageProxyToJpegFile(imageProxy)
+            Log.d("VG_FLOW", "request_id=$requestId route=$route mode=$currentMode stream_file=${file.length()}B")
+            if (route == "on_device") processOnDevice(file, requestId)
+            else sendToServer(file, requestId)
+        } catch (e: Exception) {
+            if (isSending.get()) isSending.set(false)
+            Log.e("VG_FLOW", "stream analysis failed", e)
+            handleFail()
+        } finally {
+            imageProxy.close()
+        }
+    }
+
+    private fun imageProxyToJpegFile(imageProxy: ImageProxy): File {
+        val nv21 = yuv420ToNv21(imageProxy)
+        val yuvImage = android.graphics.YuvImage(
+            nv21,
+            android.graphics.ImageFormat.NV21,
+            imageProxy.width,
+            imageProxy.height,
+            null
+        )
+        val jpegBytes = ByteArrayOutputStream().use { out ->
+            yuvImage.compressToJpeg(
+                android.graphics.Rect(0, 0, imageProxy.width, imageProxy.height),
+                75,
+                out
+            )
+            out.toByteArray()
+        }
+
+        val rotation = imageProxy.imageInfo.rotationDegrees
+        val outFile = File.createTempFile("vg_stream_", ".jpg", cacheDir)
+        if (rotation == 0) {
+            outFile.writeBytes(jpegBytes)
+            return outFile
+        }
+
+        val raw = android.graphics.BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
+        val matrix = android.graphics.Matrix().apply { postRotate(rotation.toFloat()) }
+        val rotated = android.graphics.Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, matrix, true)
+        outFile.outputStream().use { stream ->
+            rotated.compress(android.graphics.Bitmap.CompressFormat.JPEG, 75, stream)
+        }
+        raw.recycle()
+        rotated.recycle()
+        return outFile
+    }
+
+    private fun yuv420ToNv21(imageProxy: ImageProxy): ByteArray {
+        val image = imageProxy.image ?: throw IllegalStateException("ImageProxy has no image")
+        val width = image.width
+        val height = image.height
+        val ySize = width * height
+        val uvSize = width * height / 2
+        val nv21 = ByteArray(ySize + uvSize)
+
+        val yPlane = image.planes[0]
+        val uPlane = image.planes[1]
+        val vPlane = image.planes[2]
+
+        var out = 0
+        val yBuffer = yPlane.buffer
+        for (row in 0 until height) {
+            val rowStart = row * yPlane.rowStride
+            yBuffer.position(rowStart)
+            yBuffer.get(nv21, out, width)
+            out += width
+        }
+
+        val uBuffer = uPlane.buffer
+        val vBuffer = vPlane.buffer
+        val chromaHeight = height / 2
+        val chromaWidth = width / 2
+        for (row in 0 until chromaHeight) {
+            for (col in 0 until chromaWidth) {
+                val vIndex = row * vPlane.rowStride + col * vPlane.pixelStride
+                val uIndex = row * uPlane.rowStride + col * uPlane.pixelStride
+                nv21[out++] = vBuffer.get(vIndex)
+                nv21[out++] = uBuffer.get(uIndex)
+            }
+        }
+        return nv21
+    }
+
     private fun captureAndProcess() {
         // isSending 체크: 이전 요청이 아직 진행 중이면 새 캡처 스킵 (중복 방지)
         if (isSending.get()) {
@@ -1215,6 +1403,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     private fun shouldUseOnDeviceDetector(): Boolean {
         if (yoloDetector == null) return false
+        if (getSavedServerUrl().isNotBlank()) return false
         return currentMode == "장애물" || currentMode == "찾기"
     }
 
@@ -1257,6 +1446,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         imageFile.asRequestBody("image/jpeg".toMediaType()))
                     .addFormDataPart("camera_orientation", cameraOrientation)
                     .addFormDataPart("wifi_ssid", getWifiSsid())
+                    .addFormDataPart("device_id", getDeviceSessionId())
                     .addFormDataPart("mode", mode)
                     .addFormDataPart("query_text", "")
                     .addFormDataPart("lat", currentLat.toString())
@@ -1276,7 +1466,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     "server=${processMs}ms perf=${perf?.toString() ?: "{}"}")
                 // 질문 응답 후 3초간 periodic capture의 TTS 억제
                 suppressPeriodicUntil = System.currentTimeMillis() + 3000L
-                runOnUiThread { tvStatus.text = sentence; speak(sentence) }
+                val alertMode = json.optString("alert_mode", "normal")
+                handleSuccess(sentence, alertMode)  // dedup 로직 통합 (직접 speak() 우회 방지)
             } catch (e: Exception) {
                 Log.e("VG_LINK", "request_id=$requestId mode=$mode server request failed", e)
                 runOnUiThread { speak("서버 연결에 실패했어요.") }
@@ -1401,6 +1592,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
                 if (voted.isEmpty()) {
                     Log.d("VG_DETECT", "→ 장애물 없음")
+                    if (rawDetections.isEmpty() && getSavedServerUrl().isNotEmpty()) {
+                        Log.w("VG_DETECT", "on-device empty; falling back to server")
+                        sendToServer(imageFile, requestId)
+                        return@Thread
+                    }
+                    imageFile.delete()
                     handleSuccess("주변에 장애물이 없어요.")
                     return@Thread
                 }
@@ -1437,6 +1634,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         handleSuccess("주변에 장애물이 없어요.")
                     }
                 }
+                imageFile.delete()
             } catch (e: Exception) {
                 Log.e("VG_DETECT", "request_id=$requestId On-device detection failed", e)
                 bmp?.recycle()
@@ -1487,6 +1685,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
                 val optimized = optimizeImageForUpload(imageFile)
                 val uploadBytes = optimized.length()
+                // 업로드 이미지 크기 — 서버 bbox 좌표 스케일링에 사용
+                val dimOpts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeFile(optimized.absolutePath, dimOpts)
+                val uploadImgW = if (dimOpts.outWidth > 0) dimOpts.outWidth else 640
+                val uploadImgH = if (dimOpts.outHeight > 0) dimOpts.outHeight else 480
                 Log.d("VG_GPS", "send detect lat=$currentLat lng=$currentLng")
 
                 val body = MultipartBody.Builder().setType(MultipartBody.FORM)
@@ -1494,6 +1697,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         optimized.asRequestBody("image/jpeg".toMediaType()))
                     .addFormDataPart("camera_orientation", cameraOrientation)
                     .addFormDataPart("wifi_ssid", getWifiSsid())
+                    .addFormDataPart("device_id", getDeviceSessionId())
                     .addFormDataPart("mode", currentMode)
                     .addFormDataPart("query_text", findTarget)
                     .addFormDataPart("lat", currentLat.toString())
@@ -1542,6 +1746,35 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                                   "왕복   : ${roundTripMs}ms\n" +
                                   "업로드 : ${uploadBytes / 1024}KB"
                     }
+                }
+
+                // 서버 응답 bbox로 바운딩 박스 오버레이 업데이트
+                val serverDetections = mutableListOf<Detection>()
+                val objArray = json.optJSONArray("objects")
+                if (objArray != null) {
+                    for (i in 0 until objArray.length()) {
+                        val obj = objArray.optJSONObject(i) ?: continue
+                        val normXywh = obj.optJSONArray("bbox_norm_xywh") ?: continue
+                        if (normXywh.length() < 4) continue
+                        val x1n = normXywh.optDouble(0).toFloat()
+                        val y1n = normXywh.optDouble(1).toFloat()
+                        val wn  = normXywh.optDouble(2).toFloat()
+                        val hn  = normXywh.optDouble(3).toFloat()
+                        val classKo = obj.optString("class_ko", "")
+                        if (classKo.isEmpty() || wn <= 0f || hn <= 0f) continue
+                        serverDetections.add(Detection(
+                            classKo    = classKo,
+                            confidence = obj.optDouble("confidence", 0.9).toFloat(),
+                            cx         = x1n + wn / 2f,
+                            cy         = y1n + hn / 2f,
+                            w          = wn,
+                            h          = hn
+                        ))
+                    }
+                }
+                runOnUiThread {
+                    if (serverDetections.isEmpty()) boundingBoxOverlay.clearDetections()
+                    else boundingBoxOverlay.setDetections(serverDetections, uploadImgW, uploadImgH)
                 }
 
                 handleSuccess(sentence, alertMode)
@@ -1789,9 +2022,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         when (requestCode) {
             PERM_CODE -> if (grantResults.all { it == PackageManager.PERMISSION_GRANTED }) startCamera()
             PERM_CODE_LOCATION -> {
-                if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+                if (hasLocationPerm()) {
+                    Log.d("VG_GPS", "location permission granted fine=${hasPerm(Manifest.permission.ACCESS_FINE_LOCATION)} coarse=${hasPerm(Manifest.permission.ACCESS_COARSE_LOCATION)}")
                     locationPermissionCallback?.invoke()
                 } else {
+                    Log.w("VG_GPS", "location permission denied")
                     speak("위치 권한이 없어요. 설정에서 허용해 주세요.")
                 }
                 locationPermissionCallback = null

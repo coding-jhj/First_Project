@@ -504,7 +504,46 @@ const markerIcon = L.divIcon({
 let marker    = null;
 let trackLine = null;
 let mapCentered = false;
-let autoSelectedLatestSession = false;
+const teamMarkers = {};  // session_id → Leaflet marker
+
+const TEAM_COLORS = ['#ff6b35','#f7c59f','#efefd0','#00a8e8','#f72585','#7209b7','#3a86ff'];
+function teamColor(sessionId) {
+  let hash = 0;
+  for (let c of sessionId) hash = (hash * 31 + c.charCodeAt(0)) & 0xffffffff;
+  return TEAM_COLORS[Math.abs(hash) % TEAM_COLORS.length];
+}
+function makeTeamIcon(color, label) {
+  return L.divIcon({
+    html: `<div style="
+      background:${color};border:2px solid #fff;border-radius:50%;
+      width:12px;height:12px;box-shadow:0 0 0 3px ${color}55;
+    " title="${label}"></div>`,
+    iconSize: [12, 12], iconAnchor: [6, 6], className: ''
+  });
+}
+
+function renderTeamLocations(locations, mySessionId) {
+  const active = new Set();
+  for (const loc of locations) {
+    if (loc.session_id === mySessionId) continue;  // 내 위치는 기본 마커로 표시
+    active.add(loc.session_id);
+    const pos = [Number(loc.lat), Number(loc.lng)];
+    if (!Number.isFinite(pos[0]) || !Number.isFinite(pos[1])) continue;
+    if (teamMarkers[loc.session_id]) {
+      teamMarkers[loc.session_id].setLatLng(pos);
+    } else {
+      const color = teamColor(loc.session_id);
+      const shortId = loc.session_id.slice(-6);
+      teamMarkers[loc.session_id] = L.marker(pos, { icon: makeTeamIcon(color, shortId) })
+        .bindTooltip(shortId, { permanent: false, direction: 'top' })
+        .addTo(map);
+    }
+  }
+  // 비활성 팀원 마커 제거
+  for (const sid of Object.keys(teamMarkers)) {
+    if (!active.has(sid)) { map.removeLayer(teamMarkers[sid]); delete teamMarkers[sid]; }
+  }
+}
 
 function escapeHtml(value) {
   return String(value)
@@ -677,15 +716,16 @@ async function poll() {
 
     dot.className  = 'pulse-dot';
     const resolvedSession = data.session_id ?? sessionId;
-    if (!autoSelectedLatestSession && sessionId === '__default__' && resolvedSession !== '__default__') {
-      document.getElementById('sessionId').value = resolvedSession;
-      autoSelectedLatestSession = true;
-      mapCentered = false;
-    }
-    text.textContent = data.gps ? `연결됨 · ${resolvedSession}` : '연결됨 · GPS 대기';
+    text.textContent = data.gps ? `연결됨 · ${resolvedSession}` : '연결됨 · 세션 선택 필요';
 
     renderObjects(data.objects);
     renderGps(data.gps, data.track);
+
+    // 팀원 위치 업데이트 (실패해도 무시)
+    fetch(`${SERVER_BASE}/team-locations`)
+      .then(r => r.json())
+      .then(d => renderTeamLocations(d.locations ?? [], resolvedSession))
+      .catch(() => {});
 
     // 새 물체 감지 시 토스트
     const currCount = (data.objects ?? []).length;
@@ -749,7 +789,7 @@ async function loadSessions() {
 function selectSession(s) {
   document.getElementById('sessionId').value = s;
   document.getElementById('sessionList').style.display = 'none';
-  prevObjectCount = 0; mapCentered = false; autoSelectedLatestSession = true;
+  prevObjectCount = 0; mapCentered = false;
   if (marker)    { map.removeLayer(marker);    marker    = null; }
   if (trackLine) { map.removeLayer(trackLine); trackLine = null; }
   poll();
@@ -759,7 +799,6 @@ function selectSession(s) {
 document.getElementById('sessionId').addEventListener('change', () => {
   prevObjectCount = 0;
   mapCentered     = false;
-  autoSelectedLatestSession = true;
   if (marker)    { map.removeLayer(marker);    marker    = null; }
   if (trackLine) { map.removeLayer(trackLine); trackLine = null; }
 });

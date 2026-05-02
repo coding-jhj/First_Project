@@ -42,19 +42,19 @@ class YoloDetector(context: Context) {
     private val env = OrtEnvironment.getEnvironment()  // ONNX 실행 환경 (앱당 1개)
     private val session: OrtSession                    // 모델 세션 (추론 단위)
     private val inputSize   = 640       // YOLO 입력 해상도 (640×640)
-    private val confThreshold = 0.35f   // 모바일 카메라 흔들림/어두운 환경에서 놓침을 줄이기 위해 완화
+    private val confThreshold = 0.25f   // 모바일 카메라 흔들림/어두운 환경에서 놓침을 줄이기 위해 완화
     private val iouThreshold  = 0.45f   // NMS IoU 임계값: 겹치는 박스 제거 기준
 
     init {
         // assets 폴더에서 ONNX 모델 로드
         // 실제 배포 모델: yolo11n.onnx (10.7MB, 경량)
-        // 고정밀 모델:    yolo11m.onnx (없으면 n으로 fallback)
+        // 고정밀 모델:    yolo11m.onnx (서버/비교용)
         // 발표 시: "앱 내장 모델은 YOLO11n ONNX, 서버는 YOLO11m PyTorch"
         val modelName = try {
-            context.assets.open("yolo11m.onnx").close()
-            "yolo11m.onnx"  // 고정밀 모델 (있을 때만)
+            context.assets.open("yolo11n.onnx").close()
+            "yolo11n.onnx"
         } catch (_: Exception) {
-            "yolo11n.onnx"  // 기본 경량 모델 (현재 배포 기준)
+            "yolo11m.onnx"
         }
         val bytes = context.assets.open(modelName).readBytes()
         val opts = OrtSession.SessionOptions().apply {
