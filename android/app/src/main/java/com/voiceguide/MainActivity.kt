@@ -1831,7 +1831,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         lastSentence     = sentence
                         lastCriticalTime = now
                         tvStatus.text    = sentence
-                        tts.setSpeechRate(1.25f)
+                        tts.setSpeechRate(1.0f)
                         if (isVehicleDanger) {
                             speakBuiltIn(sentence, immediate = true)
                         } else {
