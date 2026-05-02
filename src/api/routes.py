@@ -22,7 +22,7 @@ import os
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, UploadFile, Form, Header, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 # ── API Key 인증 ────────────────────────────────────────────────────────────
 # .env에 API_KEY=비밀값 설정 시 민감 API 요청에 Authorization: Bearer <키> 또는 X-API-Key 필요
@@ -353,10 +353,8 @@ def _extract_find_target(text: str) -> str:
 
 @router.post("/tts", dependencies=[Depends(_verify_api_key)])
 async def tts_endpoint(text: str = Form("")):
-    """ElevenLabs / gTTS — 텍스트를 음성 파일(MP3)로 변환해 Android 앱에 반환.
-    API 키 없으면 gTTS로 자동 폴백."""
+    """Azure TTS — 텍스트를 WAV로 변환해 Android 앱에 반환."""
     from src.voice.tts import _cache_path, _generate
-    from fastapi.responses import JSONResponse
     import os
     if not text:
         return JSONResponse({"error": "text is empty"}, status_code=400)
@@ -364,7 +362,7 @@ async def tts_endpoint(text: str = Form("")):
     if not os.path.exists(path):
         if not _generate(text, path):
             return JSONResponse({"error": "TTS generation failed"}, status_code=500)
-    return FileResponse(path, media_type="audio/mpeg")
+    return FileResponse(path, media_type="audio/wav")
 
 
 @router.post("/vision/clothing", dependencies=[Depends(_verify_api_key)])
