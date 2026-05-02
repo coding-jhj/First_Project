@@ -1,2 +1,0 @@
--keep class okhttp3.** { *; }
--keep class okio.** { *; }
