@@ -1162,6 +1162,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         btnToggle.text = "■ 분석 중지"
         btnToggle.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFDC2626.toInt())
         tvStatus.text  = "분석 중..."
+        // GPS 시작 — 대시보드 지도에 위치 표시 및 /detect 요청에 lat/lng 포함
+        requestLocationPermission { startGpsTracking() }
         captureAndProcess()
         scheduleNext()
         scheduleWatchdog()
@@ -1176,6 +1178,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         btnToggle.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFF2563EB.toInt())
         tvStatus.text  = "분석 중지됨"
         boundingBoxOverlay.clearDetections()
+        stopGpsTracking()  // GPS 중지 — 배터리 절약
     }
 
     // ── 재방문 알림 ───────────────────────────────────────────────────────
