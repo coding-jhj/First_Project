@@ -501,7 +501,7 @@ captureAndProcess()
 ```
 
 - `sentence`: Android TTS로 읽을 문장
-- `alert_mode`: `critical`(즉시 안내) / `silent`(UI만 업데이트) / `beep`(비프음)
+- `alert_mode`: `critical`(즉시 안내, 1.25× 속도) / `beep`(일반 속도 음성) / `silent`(UI만 업데이트)
 - `objects`: 탐지된 물체 목록. bbox는 전송한 이미지 기준 픽셀 좌표
 - `process_ms`: 서버 내부 처리 시간 (네트워크 시간 제외)
 
