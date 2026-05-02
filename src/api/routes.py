@@ -45,7 +45,6 @@ from src.nlg.sentence import (
 )
 from src.api import db
 from src.api.tracker import get_tracker
-from src.voice.stt import extract_label
 
 router = APIRouter()
 
@@ -56,6 +55,14 @@ router = APIRouter()
 import time as _time
 _last_sentence: dict[str, tuple[str, float]] = {}  # session_id → (sentence, timestamp)
 _DEDUP_SECS = 5.0   # 같은 문장 억제 시간
+
+
+def _normalize_session_id(wifi_ssid: str) -> str:
+    """Android가 SSID를 못 읽을 때도 Dashboard가 같은 기본 세션을 보게 정규화."""
+    value = (wifi_ssid or "").strip().strip('"')
+    if not value or value.lower() in {"<unknown ssid>", "unknown ssid", "0x"}:
+        return "__default__"
+    return value
 
 
 def _with_perf(
@@ -144,7 +151,7 @@ async def detect(
 
     _t0 = _time.monotonic()
     request_id = request_id or f"srv-{int(_t0 * 1000)}"
-    session_id = wifi_ssid or "__default__"
+    session_id = _normalize_session_id(wifi_ssid)
     print(
         f"[LINK] request_id={request_id} START mode={mode} "
         f"session={session_id} lat={lat} lng={lng}"
@@ -386,12 +393,23 @@ async def get_session_status(session_id: str):
     세션(WiFi SSID)의 현재 추적 상태 반환 — 대시보드 폴링용.
     최근 3초 이내에 탐지된 물체 목록과 마지막 GPS 좌표를 반환.
     """
-    tracker = get_tracker(session_id)
+    requested_session_id = _normalize_session_id(session_id)
+    resolved_session_id = requested_session_id
+    # Dashboard 기본값(__default__)으로 열면 가장 최근 GPS 세션을 자동으로 보여준다.
+    # 앱이 WiFi SSID 세션으로 저장하는 경우와 __default__로 저장하는 경우를 모두 흡수한다.
+    if requested_session_id == "__default__":
+        latest = db.get_latest_session()
+        if latest:
+            resolved_session_id = latest
+
+    gps = db.get_last_gps(resolved_session_id)
+
+    tracker = get_tracker(resolved_session_id)
     current = tracker.get_current_state(max_age_s=3.0)
-    gps     = db.get_last_gps(session_id)
-    track   = db.get_gps_track(session_id, limit=100)
+    track   = db.get_gps_track(resolved_session_id, limit=100)
     return {
-        "session_id": session_id,
+        "session_id": resolved_session_id,
+        "requested_session_id": requested_session_id,
         "objects":    current,
         "gps":        gps,
         "track":      track,
