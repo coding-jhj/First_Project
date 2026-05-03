@@ -883,6 +883,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         btnToggle.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFDC2626.toInt())
         tvStatus.text  = "분석 중..."
         startGpsUpdates()
+        scheduleFallbackCapture()
         scheduleWatchdog()
         scheduleAutoListen()
     }
@@ -921,6 +922,19 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 scheduleNext()       // 100ms 후 다시 시도 (실제 FPS = 추론시간에 의해 결정)
             }
         }, INTERVAL_MS)
+    }
+
+    private fun scheduleFallbackCapture() {
+        handler.postDelayed({
+            if (!isAnalyzing.get()) return@postDelayed
+            val streamStalled = lastStreamFrameTime == 0L ||
+                System.currentTimeMillis() - lastStreamFrameTime > 1500L
+            if (streamStalled && inFlightCount.get() == 0) {
+                Log.w("VG_FLOW", "stream analyzer stalled; using ImageCapture fallback")
+                captureAndProcess()
+            }
+            scheduleFallbackCapture()
+        }, 1000L)
     }
 
     private fun scheduleWatchdog() {
@@ -1271,11 +1285,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
                 if (voted.isEmpty()) {
                     Log.d("VG_DETECT", "→ 장애물 없음")
-                    if (rawDetections.isEmpty() && isServerFallbackAvailable()) {
-                        Log.w("VG_DETECT", "on-device empty; falling back to server")
-                        sendToServer(imageFile, requestId)
-                        return@Thread
-                    }
                     imageFile.delete()
                     handleSuccess("주변에 장애물이 없어요.")
                     return@Thread
@@ -1486,11 +1495,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
         runOnUiThread {
             if (sentence == "주변에 장애물이 없어요.") {
-                // 마지막 탐지 후 6초 지난 경우에만 "장애물 없음"으로 교체
-                // (투표 버퍼 재확정 시간 + 여유 고려)
-                if (System.currentTimeMillis() - lastDetectionTime > 6000) {
-                    tvStatus.text = "장애물 없음"
-                }
+                tvStatus.text = "장애물 없음"
                 return@runOnUiThread
             }
             lastDetectionTime = System.currentTimeMillis()
