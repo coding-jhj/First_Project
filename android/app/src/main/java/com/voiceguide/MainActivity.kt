@@ -623,8 +623,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     handler.postDelayed({ requestPermissions() }, 800)
                 } else speak("이미 분석 중이에요.")
             }
-            "긴급" -> requestSmsPermission { triggerSOS() }
-
             "unknown" -> speak("다시 말씀해 주세요.")
             else -> {
                 currentMode = mode
@@ -829,15 +827,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         detectionHistory.clear()
         lastSentence = ""
         consecutiveFails.set(0)
-        lastGpsSentTime = 0L
         lastSuccessTime = System.currentTimeMillis()
         lastStreamFrameTime = 0L   // 재시작 시 첫 프레임 즉시 처리 (700ms 초기 지연 방지)
         inFlightCount.set(0)       // stuck in-flight 요청 초기화 (카메라 재바인딩 없는 재시작 대비)
         btnToggle.text = "■ 분석 중지"
         btnToggle.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFDC2626.toInt())
         tvStatus.text  = "분석 중..."
-        // GPS 시작 — 대시보드 지도에 위치 표시. 하차 알림 문구/target 설정은 하지 않는다.
-        requestLocationPermission { startGpsTracking(enableArrivalAlert = false) }
         scheduleWatchdog()
         scheduleAutoListen()
     }
