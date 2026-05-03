@@ -293,7 +293,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         private const val DEFAULT_SERVER_URL =
             "https://voiceguide-1063164560758.asia-northeast3.run.app"
         private const val PREF_LOCATIONS   = "saved_locations"  // 저장 장소 JSON 배열 키
-        private const val INTERVAL_MS      = 100L          // 캡처 간격: 0.1초 (10fps 목표)
+        private const val INTERVAL_MS      = 700L          // 캡처 간격: 0.7초 (발열·배터리 고려)
         private const val MAX_IN_FLIGHT    = 2             // 동시 서버 요청 최대 수
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
         private const val FAIL_WARN_COUNT  = 3             // 연속 3회 실패 시 경고
@@ -658,14 +658,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 SentenceBuilder.clearStableClocks()
                 speakBuiltIn("${findTarget.ifEmpty { "물건" }} 찾기 모드.")
             }
-            "텍스트" -> {
-                speakBuiltIn("텍스트를 인식할게요.")
-                captureForOcr()
-            }
-            "바코드" -> {
-                speakBuiltIn("바코드를 인식할게요.")
-                captureForBarcode()
-            }
+
             "색상" -> {
                 speakBuiltIn("색상을 확인할게요.")
                 currentMode = "색상"
@@ -748,70 +741,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }
     }
 
-    /**
-     * "글자 읽어줘" 명령 처리 — ML Kit OCR로 카메라 이미지의 텍스트 인식.
-     */
-    private fun captureForOcr() {
-        val file = File.createTempFile("vg_ocr_", ".jpg", cacheDir)
-        imageCapture?.takePicture(
-            ImageCapture.OutputFileOptions.Builder(file).build(),
-            cameraExecutor,
-            object : ImageCapture.OnImageSavedCallback {
-                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    Thread {
-                        try {
-                            val bmp = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
-                            val recognizer = com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions.Builder().build()
-                                .let { com.google.mlkit.vision.text.TextRecognition.getClient(it) }
-                            val image = com.google.mlkit.vision.common.InputImage.fromBitmap(bmp, 0)
-                            recognizer.process(image)
-                                .addOnSuccessListener { result ->
-                                    val text = result.text.trim()
-                                    if (text.isEmpty()) speak("텍스트를 찾지 못했어요.")
-                                    else speak(text)
-                                    file.delete()
-                                }
-                                .addOnFailureListener { speak("텍스트 인식에 실패했어요."); file.delete() }
-                        } catch (_: Exception) { speak("텍스트 인식에 실패했어요."); file.delete() }
-                    }.start()
-                }
-                override fun onError(e: ImageCaptureException) { speak("사진을 찍지 못했어요.") }
-            })
-    }
-
-    /**
-     * "바코드" 명령 처리 — ML Kit Barcode Scanning으로 상품 정보 인식.
-     */
-    private fun captureForBarcode() {
-        val file = File.createTempFile("vg_bc_", ".jpg", cacheDir)
-        imageCapture?.takePicture(
-            ImageCapture.OutputFileOptions.Builder(file).build(),
-            cameraExecutor,
-            object : ImageCapture.OnImageSavedCallback {
-                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    Thread {
-                        try {
-                            val bmp = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
-                            val scanner = com.google.mlkit.vision.barcode.BarcodeScanning.getClient()
-                            val image = com.google.mlkit.vision.common.InputImage.fromBitmap(bmp, 0)
-                            scanner.process(image)
-                                .addOnSuccessListener { barcodes ->
-                                    if (barcodes.isEmpty()) speak("바코드를 찾지 못했어요.")
-                                    else speak("${barcodes[0].displayValue ?: "알 수 없는 상품"}이에요.")
-                                    file.delete()
-                                }
-                                .addOnFailureListener { speak("바코드 인식에 실패했어요."); file.delete() }
-                        } catch (_: Exception) { speak("바코드 인식에 실패했어요."); file.delete() }
-                    }.start()
-                }
-                override fun onError(e: ImageCaptureException) { speak("사진을 찍지 못했어요.") }
-            })
-    }
-
-    /**
-     * "버스 번호 알려줘" 명령 처리.
-     * 2단계: ML Kit OCR → 실패 시 서버 EasyOCR fallback
-     */
     // ── SOS 긴급 호출 ──────────────────────────────────────────────────
 
     private fun triggerSOS() {
@@ -1967,15 +1896,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     /** 직전 프레임과의 시간 간격으로 FPS 계산 + 스파크라인 업데이트 */
     private fun calcFps(): String {
         val now = System.currentTimeMillis()
-        val fps = if (lastFrameDoneTime > 0L && now > lastFrameDoneTime) {
+        val instant = if (lastFrameDoneTime > 0L && now > lastFrameDoneTime) {
             1000.0f / (now - lastFrameDoneTime)
         } else 0.0f
         lastFrameDoneTime = now
-        currentFps = fps
+        currentFps = instant
 
-        // 최근 10프레임 FPS 기록
+        // 최근 10프레임 이동평균 — 동시 요청으로 인한 순간 spike 완화
         if (fpsHistory.size >= 10) fpsHistory.removeFirst()
-        fpsHistory.addLast(fps)
+        fpsHistory.addLast(instant)
+        val fps = fpsHistory.average().toFloat()
 
         val fpsStr = if (fps >= 10f) "%.0f".format(fps) else "%.1f".format(fps)
         return fpsStr

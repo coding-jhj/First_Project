@@ -16,7 +16,7 @@
 | 이름 | 담당 | 먼저 볼 문서 | 코드 |
 |---|---|---|---|
 | 정환주 | 팀장, 서버, 프론트엔드 | `docs/03_server/README.md`, `docs/03_server/DEPLOY_GUIDE.md`, `docs/01_study/FUNCTION_DEEP_DIVE.md` | `src/api/`, `templates/` |
-| 신유득 | Vision, ML | `docs/01_study/FUNCTION_DEEP_DIVE.md`, `docs/07_debug/DETECTION_DEBUG.md` | `src/vision/`, `src/depth/`, `src/ocr/`, `train/` |
+| 신유득 | Vision, ML | `docs/01_study/FUNCTION_DEEP_DIVE.md`, `docs/07_debug/DETECTION_DEBUG.md` | `src/vision/`, `src/depth/`, `train/` |
 | 김재현 | Android, UX | `docs/04_team/ANDROID_PERFORMANCE_GUIDE.md`, `docs/01_study/FUNCTION_DEEP_DIVE.md`, `docs/07_debug/PERF_DEBUG.md` | `android/app/` |
 | 임명광 | NLG, 서버 도움 | `docs/04_team/ROLE_GUIDE.md`, `docs/01_study/FUNCTION_DEEP_DIVE.md`, `docs/03_server/SERVER_ROLE_GUIDE.md` | `src/nlg/`, `src/api/routes.py` |
 | 문수찬 | Voice, Q&A 시트 | `docs/06_presentation/`, `docs/04_team/ROLE_GUIDE.md` | `src/voice/` |

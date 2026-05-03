@@ -22,6 +22,13 @@
 - `setSpeechRate(1.25f)` → `1.0f` — critical 경고 속도 정상화
 - `tracker.py _MAX_AGE_S` 4.0 → **8.0초** — 10fps 환경에서 일시적 miss로 인한 "사라졌어요" 남발 방지
 
+### 버그 수정 — TTS/조사/발음/FPS 표시
+- `tracker.py`: `seen_count` 추가 — **3회 이상** 안정적으로 탐지된 물체만 "사라졌어요" 안내 (오탐 1~2회짜리 차단)
+- `sentence.py`: `_ENG_NO_BATCHIM` 추가 — 영문 마지막 글자 발음 기준 조사 자동 선택
+  - "TV이 있어요" → **"TV가 있어요"**, "PC이" → **"PC가"**, "USB이" → **"USB가"**
+- `detect.py` / `VoiceGuideConstants.kt`: `"TV"` → **`"티비"`** — TTS "티브이" 발음 오류 수정
+- `MainActivity.kt` `calcFps()`: 순간값 → **최근 10프레임 이동평균** — 동시 요청으로 인한 FPS 수치 급등 완화
+
 ### NLG 문장 간소화 (feature/myunggwang merge)
 - `sentence.py`: `"코 앞"` → `"코앞"`, 위험 문장 `"위험! {방향} 앞 {이름}! 조심!"` 통일
 - `SentenceBuilder.kt`: 위험 문장 거리 기반 → 방향 기반으로 수정 (`"바로 코앞"` → `"코앞"`)

@@ -88,26 +88,30 @@ def get_alert_mode(obj: dict, is_hazard: bool = False) -> str:
 
 # ── 한국어 조사 자동화 ────────────────────────────────────────────────────────
 
+# 영문 알파벳 발음 기준 받침 없는 글자 (B=비, C=씨, D=디, E=이, T=티, V=브이 등)
+_ENG_NO_BATCHIM = set('BCDEGHIJKOPQTUVWYZbcdeghijkopqtuvwyz')
+
 def _josa(word: str, 받침있음: str, 받침없음: str) -> str:
     """
     한국어 받침 유무에 따라 올바른 조사를 반환하는 핵심 함수.
 
     원리:
-      한국어 유니코드 배치: 가(0xAC00) ~ 힣(0xD7A3)
-      각 글자 = 초성(19) × 중성(21) × 종성(28) 조합
-      (글자코드 - 0xAC00) % 28 == 0 이면 종성(받침) 없음
-
+      한국어: (글자코드 - 0xAC00) % 28 == 0 이면 받침 없음
+      영문자: 발음 기준 — B(비)/C(씨)/D(디)/T(티)/V(브이) 등은 받침 없음
+                         F(에프)/L(엘)/M(엠)/N(엔)/S(에스)/X(엑스) 등은 받침 있음
     예시:
-      "의자": 마지막 글자 "자"(0xC790) → (51088-44032)%28 = 0 → 받침 없음 → "가"
-      "책":   마지막 글자 "책"(0xCC45) → (52293-44032)%28 = 1 → 받침 있음 → "이"
-      "소파": 마지막 글자 "파"(0xD30C) → (54028-44032)%28 = 0 → 받침 없음 → "가"
+      "TV"  → 마지막 V → 받침없음 → "TV가"
+      "PC"  → 마지막 C → 받침없음 → "PC가"
+      "USB" → 마지막 B → 받침없음 → "USB가"
     """
     if not word:
-        return 받침있음  # 빈 문자열이면 안전하게 받침 있는 쪽 반환
+        return 받침있음
     last = word[-1]
-    if '가' <= last <= '힣':  # 한글 범위 내인지 확인
+    if '가' <= last <= '힣':
         return 받침있음 if (ord(last) - 0xAC00) % 28 != 0 else 받침없음
-    return 받침있음  # 영문/숫자/기타 → 받침 있는 쪽으로 fallback
+    if last in _ENG_NO_BATCHIM:
+        return 받침없음
+    return 받침있음  # F, L, M, N, R, S, X 및 숫자 등 → 받침 있는 쪽
 
 
 def _i_ga(word: str) -> str:
@@ -142,9 +146,9 @@ def _format_dist(dist_m: float) -> str:
     if dist_m < 3.0:
         r = round(dist_m * 2) / 2          # 0.5m 단위
         r_str = f"{r:.1f}".rstrip("0").rstrip(".")
-        return f"약 {r_str}미터 앞"
+        return f"약 {r_str}미터"
     r = round(dist_m)                      # 1m 단위
-    return f"약 {r}미터 앞"
+    return f"약 {r}미터"
 
 
 # ── 주요 물체 문장 생성 (위험도 1순위) ────────────────────────────────────────
@@ -177,7 +181,7 @@ def _primary(obj: dict, abs_clock: str) -> str:
     )
 
     if is_critical:
-        return f"위험! {direction} 앞 {name}! 조심!"
+        return f"위험! {direction} {dist_str}에 {name}! 조심!"
 
     return f"{direction} {dist_str}에 {name}{ig} 있어요."
 
