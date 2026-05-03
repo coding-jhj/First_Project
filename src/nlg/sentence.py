@@ -151,7 +151,7 @@ def _primary(obj: dict, abs_clock: str) -> str:
     """가장 위험한 물체 1개에 대한 안내 문장 생성.
 
     색상 체계와 동일한 기준으로 문장 형식 결정:
-      빨강(critical) → "위험! 방향 물체! 조심!"
+      빨강(critical) → "위험! 방향 거리에 물체가 있어요! 액션!"
       노랑(caution) → "방향 거리에 물체가 있어요. 액션"
       초록(info) → "방향 거리에 물체가 있어요."
 
@@ -177,7 +177,7 @@ def _primary(obj: dict, abs_clock: str) -> str:
     )
 
     if is_critical:
-        return f"위험! {direction} {name}! 조심!"
+        return f"위험! {loc_str}에 {name}{ig} 있어요! {action}!"
 
     # 생활 물체: 액션 없이 위치만 안내
     if name in _EVERYDAY_KO:

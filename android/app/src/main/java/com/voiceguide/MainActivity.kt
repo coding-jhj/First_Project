@@ -1682,11 +1682,22 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     speakCooldownUntil = System.currentTimeMillis() + 700L
                     handler.postDelayed({
                         ttsBusy.set(false)
-                        scheduleAutoListen()
+                        if (awaitingStartConfirm) {
+                            handler.postDelayed({
+                                if (awaitingStartConfirm && !isListening) startListening()
+                            }, 600L)
+                        } else {
+                            scheduleAutoListen()
+                        }
                     }, 700)
                 }
                 @Deprecated("Deprecated in Java")
-                override fun onError(uid: String?) {}
+                override fun onError(uid: String?) {
+                    ttsBusy.set(false)
+                    if (awaitingStartConfirm && !isListening) {
+                        handler.postDelayed({ startListening() }, 600L)
+                    }
+                }
             })
             handler.postDelayed({ promptAutoStart() }, 1000)
         }
@@ -1699,15 +1710,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             "시작 버튼을 누르거나 '네'라고 말하면 장애물 안내를 시작해요. " +
             "'찾기', '확인', '질문' 같은 음성 명령도 사용할 수 있어요."
         )
-        handler.post(object : Runnable {
-            override fun run() {
-                if (tts.isSpeaking) {
-                    handler.postDelayed(this, 200)
-                } else {
-                    handler.postDelayed({ if (awaitingStartConfirm) startListening() }, 600)
-                }
-            }
-        })
     }
 
     override fun onRequestPermissionsResult(

@@ -94,8 +94,9 @@ object SentenceBuilder {
             val dir     = CLOCK_TO_DIRECTION[clock] ?: clock
             val action  = DIRECTION_ACTION[clock] ?: "즉시 멈추세요"
             val distStr = formatDist(nearVehicle.w, nearVehicle.h)
+            val locStr  = if (distStr == "코앞" && dir == "바로 앞") "바로 코앞" else "$dir $distStr"
             val ig      = josaIGa(nearVehicle.classKo)
-            return "위험! ${dir} ${nearVehicle.classKo}! 조심!"
+            return "위험! ${locStr}에 ${nearVehicle.classKo}${ig} 있어요! $action!"
         }
 
         // 2순위: 일반 장애물 — 최대 2개까지 문장 생성
