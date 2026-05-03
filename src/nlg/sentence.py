@@ -181,7 +181,7 @@ def _primary(obj: dict, abs_clock: str) -> str:
     )
 
     if is_critical:
-        return f"위험! {direction} 앞 {name}! 조심!"
+        return f"위험! {direction} {dist_str}에 {name}! 조심!"
 
     return f"{direction} {dist_str}에 {name}{ig} 있어요."
 

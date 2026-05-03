@@ -169,6 +169,7 @@ TARGET_CLASSES = {
     "car":             "자동차",
     "motorcycle":      "오토바이",
     "airplane":        "비행기",
+    "bus":             "버스",
     "train":           "기차",
     "truck":           "트럭",
     "boat":            "보트",
