@@ -236,11 +236,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     @Volatile private var currentLng = 0.0  // 현재 GPS 경도
     @Volatile private var lastGpsSentTime = 0L
     private var locationManager: android.location.LocationManager? = null
+    private lateinit var fusedLocationClient: com.google.android.gms.location.FusedLocationProviderClient
     private val locationListener = android.location.LocationListener { loc ->
-        currentLat = loc.latitude
-        currentLng = loc.longitude
-        Log.d("VG_GPS", "location updated lat=$currentLat lng=$currentLng")
-        sendGpsHeartbeat("listener")
+        updateCurrentLocation(loc, "listener:${loc.provider}")
     }
 
     // ── ONNX 온디바이스 추론 ───────────────────────────────────────────
@@ -296,6 +294,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }
 
         sensorManager   = getSystemService(SENSOR_SERVICE) as SensorManager
+        fusedLocationClient = com.google.android.gms.location.LocationServices
+            .getFusedLocationProviderClient(this)
         initSpeechRecognizer()
         tryInitYoloDetector()
 
@@ -737,32 +737,79 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             try {
                 val lm = getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
                 locationManager = lm
-                val provider = when {
-                    lm.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) ->
-                        android.location.LocationManager.GPS_PROVIDER
-                    lm.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER) ->
-                        android.location.LocationManager.NETWORK_PROVIDER
-                    else -> null
-                } ?: run {
-                    Log.w("VG_GPS", "no location provider available")
-                    return@requestLocationPermission
-                }
                 if (!hasLocationPerm()) return@requestLocationPermission
+
+                val providers = listOf(
+                    android.location.LocationManager.GPS_PROVIDER,
+                    android.location.LocationManager.NETWORK_PROVIDER
+                ).filter { provider -> lm.isProviderEnabled(provider) }
+
+                if (providers.isEmpty()) {
+                    Log.w("VG_GPS", "no location provider available; trying fused location")
+                }
+
                 @Suppress("MissingPermission")
-                lm.requestLocationUpdates(provider, 3000L, 0f, locationListener)
+                providers.forEach { provider ->
+                    lm.requestLocationUpdates(provider, 3000L, 0f, locationListener)
+                    Log.d("VG_GPS", "requestLocationUpdates provider=$provider")
+                }
+
                 // 마지막 알려진 위치로 즉시 초기화 (GPS fix 전까지 사용)
                 @Suppress("MissingPermission")
-                lm.getLastKnownLocation(provider)?.let {
-                    currentLat = it.latitude
-                    currentLng = it.longitude
-                    Log.d("VG_GPS", "last known location lat=$currentLat lng=$currentLng")
-                    sendGpsHeartbeat("lastKnown")
+                val lastKnown = providers
+                    .mapNotNull { provider -> lm.getLastKnownLocation(provider) }
+                    .maxByOrNull { it.time }
+                if (lastKnown != null) {
+                    updateCurrentLocation(lastKnown, "lastKnown:${lastKnown.provider}")
+                } else {
+                    Log.w("VG_GPS", "last known location is null providers=$providers")
                 }
-                Log.d("VG_GPS", "GPS updates started provider=$provider")
+
+                requestFusedLocation()
+                Log.d("VG_GPS", "GPS updates started providers=$providers")
             } catch (e: Exception) {
                 Log.e("VG_GPS", "startGpsUpdates failed", e)
             }
         }
+    }
+
+    private fun updateCurrentLocation(loc: android.location.Location, source: String) {
+        if (loc.latitude == 0.0 && loc.longitude == 0.0) {
+            Log.w("VG_GPS", "ignore zero location source=$source provider=${loc.provider}")
+            return
+        }
+        currentLat = loc.latitude
+        currentLng = loc.longitude
+        Log.d(
+            "VG_GPS",
+            "source=$source provider=${loc.provider} lat=$currentLat lng=$currentLng accuracy=${loc.accuracy}"
+        )
+        sendGpsHeartbeat(source)
+    }
+
+    private fun requestFusedLocation() {
+        if (!hasLocationPerm()) return
+        @Suppress("MissingPermission")
+        fusedLocationClient.lastLocation
+            .addOnSuccessListener { loc ->
+                if (loc != null) updateCurrentLocation(loc, "fusedLast")
+                else Log.w("VG_GPS", "fused lastLocation is null")
+            }
+            .addOnFailureListener { e -> Log.e("VG_GPS", "fused lastLocation failed", e) }
+
+        val priority = if (hasPerm(Manifest.permission.ACCESS_FINE_LOCATION)) {
+            com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY
+        } else {
+            com.google.android.gms.location.Priority.PRIORITY_BALANCED_POWER_ACCURACY
+        }
+        val tokenSource = com.google.android.gms.tasks.CancellationTokenSource()
+        @Suppress("MissingPermission")
+        fusedLocationClient.getCurrentLocation(priority, tokenSource.token)
+            .addOnSuccessListener { loc ->
+                if (loc != null) updateCurrentLocation(loc, "fusedCurrent")
+                else Log.w("VG_GPS", "fused currentLocation is null")
+            }
+            .addOnFailureListener { e -> Log.e("VG_GPS", "fused currentLocation failed", e) }
     }
 
     /** 분석 중지 시 GPS 위치 업데이트 중단 (배터리 절약) */
