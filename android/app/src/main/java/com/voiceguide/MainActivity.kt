@@ -1556,7 +1556,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
         runOnUiThread {
             if (sentence == "주변에 장애물이 없어요.") {
-                tvStatus.text = "장애물 없음"
+                if (!isSpeaking()) tvStatus.text = "장애물 없음"
                 return@runOnUiThread
             }
             lastDetectionTime = System.currentTimeMillis()
