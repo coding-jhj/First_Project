@@ -151,8 +151,9 @@ def _primary(obj: dict, abs_clock: str) -> str:
     """가장 위험한 물체 1개에 대한 안내 문장 생성.
 
     색상 체계와 동일한 기준으로 문장 형식 결정:
-      빨강(critical) → "위험! 방향 거리에 물체가 있어요! action!"
-      노랑(caution) / 초록(info) → "방향 거리에 물체가 있어요."
+      빨강(critical) → "위험! 방향 물체! 조심!"
+      노랑(caution) → "방향 거리에 물체가 있어요. 액션"
+      초록(info) → "방향 거리에 물체가 있어요."
 
     생활 물체(_EVERYDAY_KO)는 아무리 가까워도 긴급 표현 금지.
     SentenceBuilder.kt의 EVERYDAY_CLASSES 예외 처리와 동일 정책.
@@ -162,10 +163,11 @@ def _primary(obj: dict, abs_clock: str) -> str:
     ig         = _i_ga(name)
     direction  = CLOCK_TO_DIRECTION.get(abs_clock, abs_clock)
     dist_str   = _format_dist(dist_m)
+    # "바로 앞" + "코앞" 중복 방지: "바로 앞 코앞에" → "바로 코앞에"
+    loc_str    = "바로 코앞" if dist_str == "코앞" and direction == "바로 앞" else f"{direction} {dist_str}"
     is_vehicle = obj.get("is_vehicle", name in _VEHICLE_KO)
     is_animal  = obj.get("is_animal",  name in _ANIMAL_KO)
     is_hazard  = obj.get("is_hazard", False)
-    # action: 방향별 회피 동작 ("멈추세요", "왼쪽으로 피하세요" 등)
     action     = CLOCK_ACTION.get(abs_clock, "조심하세요").rstrip(".")
 
     # 생활 물체는 거리·크기 무관하게 긴급 표현 금지 (이중 방어)
@@ -175,9 +177,13 @@ def _primary(obj: dict, abs_clock: str) -> str:
     )
 
     if is_critical:
-        return f"위험! {direction} {dist_str}에 {name}! 조심!"
+        return f"위험! {direction} {name}! 조심!"
 
-    return f"{direction} {dist_str}에 {name}{ig} 있어요."
+    # 생활 물체: 액션 없이 위치만 안내
+    if name in _EVERYDAY_KO:
+        return f"{loc_str}에 {name}{ig} 있어요."
+
+    return f"{loc_str}에 {name}{ig} 있어요. {action}"
 
 
 # ── 보조 물체 문장 생성 (위험도 2순위) ────────────────────────────────────────
@@ -193,12 +199,12 @@ def _secondary(obj: dict, abs_clock: str) -> str:
     name       = obj["class_ko"]
     direction  = CLOCK_TO_DIRECTION.get(abs_clock, abs_clock)
     dist_str   = _format_dist(dist_m)
+    loc_str    = "바로 코앞" if dist_str == "코앞" and direction == "바로 앞" else f"{direction} {dist_str}"
     is_vehicle = obj.get("is_vehicle", name in _VEHICLE_KO)
 
-    # 2순위 물체는 action까지 넣으면 정보 과다 → 방향+거리만 안내
     if is_vehicle and dist_m < 8.0:
-        return f"{direction} {dist_str}에 {name}도 있어요!"
-    return f"{direction} {dist_str}에 {name}도 있어요."
+        return f"{loc_str}에 {name}도 있어요!"
+    return f"{loc_str}에 {name}도 있어요."
 
 
 # ── 공개 함수들 ───────────────────────────────────────────────────────────────
