@@ -41,7 +41,7 @@ def _verify_api_key(
 from src.depth.depth import detect_and_depth
 from src.nlg.sentence import (
     build_sentence, build_hazard_sentence, build_find_sentence,
-    build_navigation_sentence, build_question_sentence, get_alert_mode, _i_ga, _un_neun,
+    build_question_sentence, get_alert_mode, _i_ga, _un_neun,
 )
 from src.api import db
 from src.api.tracker import get_tracker
@@ -212,38 +212,6 @@ async def detect(
             "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
         }, _t0, request_id, _detect_ms, _tracker_ms)
 
-    # ── 식사 도우미 모드: 식기·음식 위치 집중 안내 ──────────────────────────
-    if mode == "식사":
-        sentence = _build_meal_sentence(objects)
-        return _with_perf({
-            "mode": mode,
-            "sentence":    sentence,
-            "objects":     objects,
-            "hazards":     [],
-            "changes":     [],
-            "alert_mode":  "silent",
-            "depth_source": objects[0].get("depth_source","bbox") if objects else "bbox",
-        }, _t0, request_id, _detect_ms, _tracker_ms)
-
-    # ── 색상 모드: 가장 큰 물체의 색상 안내 ─────────────────────────────────
-    if mode == "색상":
-        if objects:
-            top = objects[0]  # 위험도 기준 1위 (가장 크거나 가까운 물체)
-            color = top.get("color", "")
-            name  = top.get("class_ko", "물체")
-            sentence = f"{name}는 {color} 계열이에요." if color else f"{name}의 색상을 인식하지 못했어요."
-        else:
-            sentence = "색상을 확인할 물체가 보이지 않아요. 카메라를 물체에 가까이 대주세요."
-        return _with_perf({
-            "mode": mode,
-            "sentence":    sentence,
-            "alert_mode":  "silent",
-            "objects":     objects,
-            "hazards":     hazards,
-            "changes":     [],
-            "depth_source": objects[0].get("depth_source","bbox") if objects else "bbox",
-        }, _t0, request_id, _detect_ms, _tracker_ms)
-
     # ── 찾기 모드: 특정 물체를 타깃으로 탐색 ────────────────────────────────
     if mode == "찾기":
         target = _extract_find_target(query_text)  # "의자 찾아줘" → "의자"
@@ -299,43 +267,6 @@ async def detect(
     }, _t0, request_id, _detect_ms, _tracker_ms)
 
 
-_MEAL_CLASSES = {
-    "포크", "칼", "숟가락", "그릇", "컵", "병", "유리잔",
-    "바나나", "사과", "오렌지", "샌드위치", "피자", "도넛",
-    "케이크", "핫도그", "브로콜리", "당근",
-}
-_MEAL_DIRECTIONS = {
-    "바로 앞": "바로 앞에",
-    "왼쪽 앞": "왼쪽 앞에",
-    "오른쪽 앞": "오른쪽 앞에",
-    "왼쪽": "왼쪽에",
-    "오른쪽": "오른쪽에",
-}
-
-
-def _build_meal_sentence(objects: list[dict]) -> str:
-    """식사 모드 전용 문장 — 식기·음식 위치를 친근하게 안내."""
-    from src.nlg.templates import CLOCK_TO_DIRECTION
-    from src.nlg.sentence import _i_ga, _format_dist
-    meal_items = [o for o in objects if o.get("class_ko") in _MEAL_CLASSES]
-    if not meal_items:
-        return "식기나 음식이 보이지 않아요. 카메라를 식탁 쪽으로 향해 주세요."
-    parts = []
-    for obj in meal_items[:3]:
-        name = obj.get("class_ko", "")
-        if not name:
-            continue
-        direction = CLOCK_TO_DIRECTION.get(obj.get("direction", "12시"), "앞")
-        dist = obj.get("distance_m", 1.0)
-        ig = _i_ga(name)
-        loc = _MEAL_DIRECTIONS.get(direction, f"{direction}에")
-        if dist < 0.8:
-            parts.append(f"{loc} {name}{ig} 있어요. 손 뻗으면 닿아요.")
-        else:
-            parts.append(f"{loc} {name}{ig} 있어요.")
-    return " ".join(parts) if parts else "식기나 음식이 보이지 않아요."
-
-
 def _extract_find_target(text: str) -> str:
     """
     찾기 명령어에서 대상 물체 이름 추출.
@@ -371,21 +302,8 @@ async def tts_endpoint(text: str = Form("")):
     return FileResponse(path, media_type="audio/mpeg")
 
 
-@router.post("/vision/clothing", dependencies=[Depends(_verify_api_key)])
-async def vision_clothing(
-    image: UploadFile,
-    type:  str = Form("matching"),   # "matching" or "pattern"
-):
-    """옷 매칭·패턴 분석 — GPT-4o Vision 활용."""
-    from src.vision.gpt_vision import analyze_clothing
-    if type not in ("matching", "pattern"):
-        type = "matching"   # 잘못된 값이면 기본값으로 fallback
-    image_bytes = await image.read()
-    sentence = analyze_clothing(image_bytes, type)
-    return {"sentence": sentence}
-
-
 # /ocr/bus 엔드포인트 제거 — 버스 번호 OCR 실험 기능 비활성화
+# /vision/clothing 엔드포인트 제거 — 옷 매칭·패턴 분석 기능 제거
 
 
 # 개인 네비게이팅 엔드포인트 (/locations/*) 제거 — 실험 기능 비활성화

@@ -88,7 +88,7 @@ object SentenceBuilder {
             val action  = DIRECTION_ACTION[clock] ?: "즉시 멈추세요"
             val distStr = formatDist(nearVehicle.w, nearVehicle.h)
             val ig      = josaIGa(nearVehicle.classKo)
-            return "위험! ${dir} ${distStr}에 ${nearVehicle.classKo}! 조심!"
+            return "위험! ${dir} ${nearVehicle.classKo}! 조심!"
         }
 
         // 2순위: 일반 장애물 — 최대 2개까지 문장 생성
