@@ -146,9 +146,9 @@ def _format_dist(dist_m: float) -> str:
     if dist_m < 3.0:
         r = round(dist_m * 2) / 2          # 0.5m 단위
         r_str = f"{r:.1f}".rstrip("0").rstrip(".")
-        return f"약 {r_str}미터 앞"
+        return f"약 {r_str}미터"
     r = round(dist_m)                      # 1m 단위
-    return f"약 {r}미터 앞"
+    return f"약 {r}미터"
 
 
 # ── 주요 물체 문장 생성 (위험도 1순위) ────────────────────────────────────────
