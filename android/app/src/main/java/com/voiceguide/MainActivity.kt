@@ -293,7 +293,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         private const val DEFAULT_SERVER_URL =
             "https://voiceguide-1063164560758.asia-northeast3.run.app"
         private const val PREF_LOCATIONS   = "saved_locations"  // 저장 장소 JSON 배열 키
-        private const val INTERVAL_MS      = 100L          // 캡처 간격: 0.1초 (10fps 목표)
+        private const val INTERVAL_MS      = 700L          // 캡처 간격: 0.7초 (발열·배터리 고려)
         private const val MAX_IN_FLIGHT    = 2             // 동시 서버 요청 최대 수
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
         private const val FAIL_WARN_COUNT  = 3             // 연속 3회 실패 시 경고

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- VoiceGuide 앱 테마 — 다크 + 액션바 없음 -->
+    <!-- 스플래시 배경이 검정으로 유지되어 흰 배경 플래시 방지 -->
+    <style name="Theme.VoiceGuide" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:statusBarColor">@android:color/black</item>
+        <item name="android:navigationBarColor">@android:color/black</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="colorPrimary">@color/vg_primary</item>
+        <item name="colorPrimaryDark">@color/vg_primary_dark</item>
+    </style>
+</resources>
