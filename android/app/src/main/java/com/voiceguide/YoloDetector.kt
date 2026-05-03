@@ -58,11 +58,11 @@ class YoloDetector(context: Context) {
         }
         val bytes = context.assets.open(modelName).readBytes()
         val opts = OrtSession.SessionOptions().apply {
-            setIntraOpNumThreads(4)
-            setInterOpNumThreads(2)
+            setIntraOpNumThreads(2)
+            setInterOpNumThreads(1)
             // NNAPI는 FP16 연산으로 클래스 신뢰도가 0에 수렴 → 탐지 0개 오류 발생
             // → CPU 추론 유지 (정확도 우선)
-            android.util.Log.d("VG_PERF", "CPU 4스레드 추론 — $modelName")
+            android.util.Log.d("VG_PERF", "CPU 2스레드 추론 — $modelName")
         }
         session = env.createSession(bytes, opts)
     }
@@ -125,22 +125,16 @@ class YoloDetector(context: Context) {
         // getPixels: 픽셀을 ARGB Int 배열로 읽음
         bitmap.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
 
-        val buf = FloatBuffer.allocate(3 * inputSize * inputSize)
-        val r = FloatArray(inputSize * inputSize)
-        val g = FloatArray(inputSize * inputSize)
-        val b = FloatArray(inputSize * inputSize)
-
+        val planeSize = inputSize * inputSize
+        val data = FloatArray(3 * planeSize)
         for (i in pixels.indices) {
             // ARGB Int에서 각 채널 추출 (비트 시프트 + AND 마스크)
-            r[i] = ((pixels[i] shr 16) and 0xFF) / 255f  // R: 비트 16~23
-            g[i] = ((pixels[i] shr 8)  and 0xFF) / 255f  // G: 비트 8~15
-            b[i] = ((pixels[i])        and 0xFF) / 255f  // B: 비트 0~7
+            data[i] = ((pixels[i] shr 16) and 0xFF) / 255f                 // R
+            data[planeSize + i] = ((pixels[i] shr 8) and 0xFF) / 255f      // G
+            data[planeSize * 2 + i] = (pixels[i] and 0xFF) / 255f          // B
         }
 
-        // NCHW 순서로 버퍼에 쓰기: R 전체 → G 전체 → B 전체
-        buf.put(r); buf.put(g); buf.put(b)
-        buf.rewind()
-        return buf
+        return FloatBuffer.wrap(data)
     }
 
     /**

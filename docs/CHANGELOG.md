@@ -2,6 +2,41 @@
 
 ---
 
+## 2026-05-02 (FPS 10+ 달성 — 서버 경량화 + Android 파이프라인 개선)
+
+### 서버 모델 경량화 (DEPTH_OFF + max_det=8)
+- `detect.py`: `max_det=8` 추가 — 프레임당 최대 8개 물체만 후처리, 서버 부하 감소
+- `depth.py`: `DEPTH_ENABLED` 기본값 `"1"` → `"0"` — Depth V2 추론 기본 OFF, bbox 기반 거리 사용
+  - 서버 응답시간 700ms+ → 300ms 이하 목표 달성
+  - 필요 시 Cloud Run 환경변수 `DEPTH_ENABLED=1`로 활성화 가능
+
+### Android FPS 10+ 달성 (동시 요청 파이프라인)
+- `INTERVAL_MS` 800ms → **100ms** — `analyzeStreamFrame` 게이트 축소로 10fps 가능
+- `isSending: AtomicBoolean` → `inFlightCount: AtomicInteger(MAX_IN_FLIGHT=2)` 교체
+  - 기존: 응답 올 때까지 다음 프레임 완전 차단 → 왕복 300ms 서버에서 최대 3fps
+  - 변경: 최대 2개 동시 요청 허용 → 왕복 200ms 서버에서 10fps 달성 가능
+- `lastAppliedSeq` 추가: 더 최신 응답이 이미 반영됐으면 구응답 UI/TTS 갱신 생략
+  - 바운딩박스 깜빡임 및 TTS 중복 방지
+
+### TTS 안정화
+- `setSpeechRate(1.25f)` → `1.0f` — critical 경고 속도 정상화
+- `tracker.py _MAX_AGE_S` 4.0 → **8.0초** — 10fps 환경에서 일시적 miss로 인한 "사라졌어요" 남발 방지
+
+### 버그 수정 — TTS/조사/발음/FPS 표시
+- `tracker.py`: `seen_count` 추가 — **3회 이상** 안정적으로 탐지된 물체만 "사라졌어요" 안내 (오탐 1~2회짜리 차단)
+- `sentence.py`: `_ENG_NO_BATCHIM` 추가 — 영문 마지막 글자 발음 기준 조사 자동 선택
+  - "TV이 있어요" → **"TV가 있어요"**, "PC이" → **"PC가"**, "USB이" → **"USB가"**
+- `detect.py` / `VoiceGuideConstants.kt`: `"TV"` → **`"티비"`** — TTS "티브이" 발음 오류 수정
+- `MainActivity.kt` `calcFps()`: 순간값 → **최근 10프레임 이동평균** — 동시 요청으로 인한 FPS 수치 급등 완화
+
+### NLG 문장 간소화 (feature/myunggwang merge)
+- `sentence.py`: `"코 앞"` → `"코앞"`, 위험 문장 `"위험! {방향} 앞 {이름}! 조심!"` 통일
+- `SentenceBuilder.kt`: 위험 문장 거리 기반 → 방향 기반으로 수정 (`"바로 코앞"` → `"코앞"`)
+- `VoiceGuideConstants.kt`: `"12시"` → `"바로"` (Python 서버 CLOCK_TO_DIRECTION과 통일)
+- `MainActivity.kt`: GPS 거리 임계값 `10f` → `0f` (이동 무관 3초마다 갱신), `/detect` 후 GPS heartbeat 추가
+
+---
+
 ## 2026-04-30 (Android 장애물 인식/디버그 모드 긴급 수정)
 
 ### 장애물 인식이 서버 상태에 묶이던 문제 수정

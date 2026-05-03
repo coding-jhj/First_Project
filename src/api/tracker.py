@@ -26,7 +26,7 @@ from src.nlg.sentence import _i_ga
 _EMA_ALPHA   = 0.55   # 현재 55% + 이전 45% → 균형점
 
 # 이 시간 동안 탐지 안 되면 "사라진 물체"로 처리
-_MAX_AGE_S   = 4.0    # 4초 (카메라 1초 간격이므로 4프레임 이상 미탐지)
+_MAX_AGE_S   = 8.0    # 8초 — 10fps에서 일시적 miss 때문에 "사라졌어요" 남발 방지
 
 # 이 거리 이상 가까워지면 "접근 중" 경고
 _APPROACH_TH = 0.4    # 0.4m (한 프레임에 40cm 이상 가까워지면 이동 물체)
@@ -111,10 +111,10 @@ class SessionTracker:
             if cls not in current_keys:
                 age = now - tr["last_seen"]  # 마지막으로 봤을 때로부터 경과 시간(초)
                 if age > _MAX_AGE_S:
-                    # 가까웠던 물체가 사라진 경우만 안내 (멀리 있던 건 안내 불필요)
-                    if tr["distance_m"] < 3.0:
-                        name = tr["class_ko"]
-                        changes.append(f"{name}{_i_ga(name)} 사라졌어요")
+                    # 3회 이상 안정적으로 탐지된 가까운 물체가 사라진 경우만 안내
+                    # (오탐 1~2회짜리는 "사라졌어요" 생략)
+                    # 앱 시작/재연결 직후 stale tracker 상태가 TTS로 새어 나가지 않도록
+                    # "사라짐" 변화는 상태 정리만 하고 음성 안내에는 쓰지 않는다.
                     del self._tracks[cls]  # 트랙 삭제
 
         # ── EMA 평활화 + 접근 감지 ─────────────────────────────────────────
@@ -153,6 +153,7 @@ class SessionTracker:
 
                 tr["distance_m"] = smooth_d
                 tr["last_seen"]  = now
+                tr["seen_count"] = tr.get("seen_count", 0) + 1
                 tr["direction"]  = obj.get("direction", tr.get("direction", "12시"))
             else:
                 # 새로 나타난 물체 → 트랙 생성
@@ -162,6 +163,7 @@ class SessionTracker:
                     "class_ko":     obj["class_ko"],
                     "direction":    obj.get("direction", "12시"),
                     "last_seen":    now,
+                    "seen_count":   1,           # 연속 탐지 횟수 — 3회 미만이면 "사라졌어요" 생략
                     "alerted":      False,       # 일반 접근 경고 발생 여부
                     "alerted_fast": False,       # 빠른 접근 경고 발생 여부
                 }

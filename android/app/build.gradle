@@ -71,9 +71,4 @@ dependencies {
     // ONNX Runtime — 온디바이스 YOLO 추론 (서버 없이 폰 단독 동작)
     implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.19.0'
 
-    // ML Kit — OCR (한국어 포함): 텍스트 읽기 / 버스 번호 인식 1차 시도
-    implementation 'com.google.mlkit:text-recognition-korean:16.0.1'
-
-    // ML Kit — 바코드 스캔: 상품 바코드 인식
-    implementation 'com.google.mlkit:barcode-scanning:17.2.0'
 }

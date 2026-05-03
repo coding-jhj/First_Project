@@ -31,7 +31,7 @@
 | `src/nlg/templates.py` | 카메라 방향 보정, 방향 템플릿 | P1 |
 | `src/voice/stt.py` | PC/서버용 STT 보조 | P2 |
 | `src/voice/tts.py` | 서버 TTS 보조 | P2 |
-| `src/ocr/bus_ocr.py` | 버스 번호 OCR 실험 기능 | P2 |
+| ~~`src/ocr/bus_ocr.py`~~ | ~~버스 번호 OCR 실험 기능~~ → **제거됨** (`legacy/ocr_src/`) | — |
 | `src/vision/gpt_vision.py` | 옷 매칭/패턴 실험 기능 | P2 |
 | `templates/dashboard.html` | 서버 대시보드 화면 | P1 |
 | `tools/*.py` | 검증/벤치마크/배포 확인 도구 | P1 |
@@ -84,7 +84,7 @@
 | `calcFps()` | 없음 | FPS 문자열 | debug UI | 1.4fps 같은 병목 확인 |
 | `getWifiSsid()` | 없음 | WiFi SSID/session id | 서버 form `wifi_ssid` | 대시보드 session mismatch 원인 |
 | `saveLocation()`, `getLocations()`, `findNearbyLocation()` | label/ssid | SharedPreferences 위치 저장/조회 | 위치목록/저장 모드 | 현재 MVP 밖, 실험/보조 |
-| `captureForOcr()`, `captureForBarcode()`, `captureForBusNumber()` | 없음 | OCR/바코드/버스 OCR 실행 | ML Kit 또는 서버 OCR | 실험 기능 |
+| ~~`captureForOcr()`, `captureForBarcode()`~~ | ~~없음~~ | ~~OCR/바코드 실행~~ | — | **제거됨** (ML Kit 의존성 삭제) |
 | `triggerSOS()`, `scheduleFallCheck()` | 없음 | SMS/SOS 흐름 | 권한 요청 | 현재 MVP 밖 |
 | `startGpsTracking()`, `stopGpsTracking()` | 없음 | GPS 업데이트 | 서버 `/detect` lat/lng | 대시보드 데이터 생성 조건 |
 

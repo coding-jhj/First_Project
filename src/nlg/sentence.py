@@ -15,7 +15,6 @@ routes.py에서 호출되는 공개 함수:
   build_sentence()         — 장애물/확인 모드
   build_hazard_sentence()  — 계단·낙차 최우선 안내
   build_find_sentence()    — 찾기 모드
-  build_navigation_sentence() — 개인 네비게이팅
 """
 
 from src.nlg.templates import (
@@ -88,36 +87,35 @@ def get_alert_mode(obj: dict, is_hazard: bool = False) -> str:
 
 # ── 한국어 조사 자동화 ────────────────────────────────────────────────────────
 
+# 영문 알파벳 발음 기준 받침 없는 글자 (B=비, C=씨, D=디, E=이, T=티, V=브이 등)
+_ENG_NO_BATCHIM = set('BCDEGHIJKOPQTUVWYZbcdeghijkopqtuvwyz')
+
 def _josa(word: str, 받침있음: str, 받침없음: str) -> str:
     """
     한국어 받침 유무에 따라 올바른 조사를 반환하는 핵심 함수.
 
     원리:
-      한국어 유니코드 배치: 가(0xAC00) ~ 힣(0xD7A3)
-      각 글자 = 초성(19) × 중성(21) × 종성(28) 조합
-      (글자코드 - 0xAC00) % 28 == 0 이면 종성(받침) 없음
-
+      한국어: (글자코드 - 0xAC00) % 28 == 0 이면 받침 없음
+      영문자: 발음 기준 — B(비)/C(씨)/D(디)/T(티)/V(브이) 등은 받침 없음
+                         F(에프)/L(엘)/M(엠)/N(엔)/S(에스)/X(엑스) 등은 받침 있음
     예시:
-      "의자": 마지막 글자 "자"(0xC790) → (51088-44032)%28 = 0 → 받침 없음 → "가"
-      "책":   마지막 글자 "책"(0xCC45) → (52293-44032)%28 = 1 → 받침 있음 → "이"
-      "소파": 마지막 글자 "파"(0xD30C) → (54028-44032)%28 = 0 → 받침 없음 → "가"
+      "TV"  → 마지막 V → 받침없음 → "TV가"
+      "PC"  → 마지막 C → 받침없음 → "PC가"
+      "USB" → 마지막 B → 받침없음 → "USB가"
     """
     if not word:
-        return 받침있음  # 빈 문자열이면 안전하게 받침 있는 쪽 반환
+        return 받침있음
     last = word[-1]
-    if '가' <= last <= '힣':  # 한글 범위 내인지 확인
+    if '가' <= last <= '힣':
         return 받침있음 if (ord(last) - 0xAC00) % 28 != 0 else 받침없음
-    return 받침있음  # 영문/숫자/기타 → 받침 있는 쪽으로 fallback
+    if last in _ENG_NO_BATCHIM:
+        return 받침없음
+    return 받침있음  # F, L, M, N, R, S, X 및 숫자 등 → 받침 있는 쪽
 
 
 def _i_ga(word: str) -> str:
     """주어 조사: "의자가", "책이" """
     return _josa(word, "이", "가")
-
-
-def _eul_reul(word: str) -> str:
-    """목적어 조사: "의자를", "책을" """
-    return _josa(word, "을", "를")
 
 
 def _un_neun(word: str) -> str:
@@ -138,13 +136,13 @@ def _format_dist(dist_m: float) -> str:
     """
     dist_m = max(0.1, min(dist_m, 15.0))
     if dist_m < 0.5:
-        return "코 앞"
+        return "코앞"
     if dist_m < 3.0:
         r = round(dist_m * 2) / 2          # 0.5m 단위
         r_str = f"{r:.1f}".rstrip("0").rstrip(".")
-        return f"약 {r_str}미터 앞"
+        return f"약 {r_str}미터"
     r = round(dist_m)                      # 1m 단위
-    return f"약 {r}미터 앞"
+    return f"약 {r}미터"
 
 
 # ── 주요 물체 문장 생성 (위험도 1순위) ────────────────────────────────────────
@@ -153,8 +151,9 @@ def _primary(obj: dict, abs_clock: str) -> str:
     """가장 위험한 물체 1개에 대한 안내 문장 생성.
 
     색상 체계와 동일한 기준으로 문장 형식 결정:
-      빨강(critical) → "위험! 방향 거리에 물체가 있어요! action!"
-      노랑(caution) / 초록(info) → "방향 거리에 물체가 있어요."
+      빨강(critical) → "위험! 방향 거리에 물체가 있어요! 액션!"
+      노랑(caution) → "방향 거리에 물체가 있어요. 액션"
+      초록(info) → "방향 거리에 물체가 있어요."
 
     생활 물체(_EVERYDAY_KO)는 아무리 가까워도 긴급 표현 금지.
     SentenceBuilder.kt의 EVERYDAY_CLASSES 예외 처리와 동일 정책.
@@ -164,10 +163,11 @@ def _primary(obj: dict, abs_clock: str) -> str:
     ig         = _i_ga(name)
     direction  = CLOCK_TO_DIRECTION.get(abs_clock, abs_clock)
     dist_str   = _format_dist(dist_m)
+    # "바로 앞" + "코앞" 중복 방지: "바로 앞 코앞에" → "바로 코앞에"
+    loc_str    = "바로 코앞" if dist_str == "코앞" and direction == "바로 앞" else f"{direction} {dist_str}"
     is_vehicle = obj.get("is_vehicle", name in _VEHICLE_KO)
     is_animal  = obj.get("is_animal",  name in _ANIMAL_KO)
     is_hazard  = obj.get("is_hazard", False)
-    # action: 방향별 회피 동작 ("멈추세요", "왼쪽으로 피하세요" 등)
     action     = CLOCK_ACTION.get(abs_clock, "조심하세요").rstrip(".")
 
     # 생활 물체는 거리·크기 무관하게 긴급 표현 금지 (이중 방어)
@@ -177,11 +177,13 @@ def _primary(obj: dict, abs_clock: str) -> str:
     )
 
     if is_critical:
-        # 수정 전: "위험! 바로 앞 약 3미터 앞에 자동차가 있어요! 멈추세요!"
-        # 수정 후: "위험, 바로 앞 자동차. 조심" (문장 간소화)
-        return f"위험! {direction} {name}! 조심"
+        return f"위험! {loc_str}에 {name}{ig} 있어요! {action}!"
 
-    return f"{direction} {dist_str}에 {name}{ig} 있어요."
+    # 생활 물체: 액션 없이 위치만 안내
+    if name in _EVERYDAY_KO:
+        return f"{loc_str}에 {name}{ig} 있어요."
+
+    return f"{loc_str}에 {name}{ig} 있어요. {action}"
 
 
 # ── 보조 물체 문장 생성 (위험도 2순위) ────────────────────────────────────────
@@ -197,12 +199,12 @@ def _secondary(obj: dict, abs_clock: str) -> str:
     name       = obj["class_ko"]
     direction  = CLOCK_TO_DIRECTION.get(abs_clock, abs_clock)
     dist_str   = _format_dist(dist_m)
+    loc_str    = "바로 코앞" if dist_str == "코앞" and direction == "바로 앞" else f"{direction} {dist_str}"
     is_vehicle = obj.get("is_vehicle", name in _VEHICLE_KO)
 
-    # 2순위 물체는 action까지 넣으면 정보 과다 → 방향+거리만 안내
     if is_vehicle and dist_m < 8.0:
-        return f"{direction} {dist_str}에 {name}도 있어요!"
-    return f"{direction} {dist_str}에 {name}도 있어요."
+        return f"{loc_str}에 {name}도 있어요!"
+    return f"{loc_str}에 {name}도 있어요."
 
 
 # ── 공개 함수들 ───────────────────────────────────────────────────────────────
@@ -369,40 +371,3 @@ def build_question_sentence(
     return " ".join(parts)
 
 
-def build_navigation_sentence(
-    label: str,
-    action: str,
-    locations: list[dict] | None = None,
-    wifi_ssid: str = "",
-) -> str:
-    """
-    개인 네비게이팅 모드의 안내 문장.
-
-    action 종류:
-      "save"       → "편의점을 저장했어요."
-      "found_here" → "편의점이 저장된 위치예요! 도착했어요."
-      "not_found"  → "편의점은 저장된 장소에 없어요."
-      "deleted"    → "편의점을 삭제했어요."
-      "list"       → "저장된 장소는 편의점, 화장실이에요."
-
-    locations: DB에서 조회한 장소 목록 (list 액션에서만 사용)
-    최대 5개만 읽어줌 — TTS가 너무 길어지는 것 방지
-    """
-    if action == "save":
-        label_str = label or "이 장소"
-        return f"{label_str}{_eul_reul(label_str)} 저장했어요."
-    if action == "found_here":
-        return f"{label}{_i_ga(label)} 저장된 위치예요! 도착했어요."
-    if action == "not_found":
-        return f"{label}{_un_neun(label)} 저장된 장소에 없어요. 먼저 그 곳에서 저장해 주세요."
-    if action == "deleted":
-        return f"{label}{_eul_reul(label)} 삭제했어요."
-    if action == "list":
-        if not locations:
-            return "저장된 장소가 없어요. 가고 싶은 곳에서 '여기 저장해줘'라고 말해보세요."
-        names  = [loc["label"] for loc in locations[:5]]  # 최대 5개
-        joined = ", ".join(names)
-        # 5개 초과이면 "외 N곳" 추가
-        suffix = f" 외 {len(locations) - 5}곳" if len(locations) > 5 else ""
-        return f"저장된 장소는 {joined}{suffix}이에요."
-    return "안내를 처리하지 못했어요."

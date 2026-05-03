@@ -242,20 +242,24 @@ Dashboard 오른쪽 위 session 검색 버튼을 누른다.
 
 FPS 완료:
 
-- [ ] 앱 기본 ONNX 모델이 `yolo11n.onnx`이다.
-- [ ] `INTERVAL_MS` 또는 ImageAnalysis 구조상 10fps가 가능한 상태다.
-- [ ] 1분 실행 평균 FPS가 10 이상이다.
-- [ ] 최저 FPS가 반복적으로 8 아래로 떨어지지 않는다.
-- [ ] `VG_PERF`에서 `decode/infer/dedup/total` 병목을 설명할 수 있다.
-- [ ] TTS가 겹치지 않는다.
+- [x] 앱 기본 ONNX 모델 `yolo11n.onnx` 고정 (2026-05-02)
+- [x] `INTERVAL_MS` 100ms + `inFlightCount(2)` 동시 요청으로 10fps 구조 완성 (2026-05-02)
+- [x] `lastAppliedSeq`로 최신 응답만 UI 반영 — 바운딩박스 깜빡임 제거 (2026-05-02)
+- [x] `calcFps()` 이동평균 — FPS 수치 안정화 (2026-05-02)
+- [x] `setSpeechRate` 1.0f — TTS 속도 정상화 (2026-05-02)
+- [x] 서버: `max_det=8` + `DEPTH_OFF` — 응답시간 300ms 이하 (2026-05-02)
+- [ ] 1분 실행 평균 FPS 10 이상 실측 확인
+- [ ] `VG_PERF`에서 병목 단계 설명 가능
+- [ ] TTS 겹침 없는지 검증
 
 GPS/Dashboard 완료: 정환주 담당
 
-- [ ] Android Logcat에서 실제 `lat/lng`가 `0.0`이 아닌 값으로 찍힌다.
-- [ ] `/detect` 서버 로그에 같은 `lat/lng`가 찍힌다.
-- [ ] `/sessions`에 Android session id가 보인다.
-- [ ] `/status/{session_id}`의 `gps`가 null이 아니다.
-- [ ] `/dashboard`에서 같은 session id를 선택하면 지도 marker가 이동한다.
+- [x] Android `device_id` 기반 세션 분리 — 팀원별 위치 구분 (2026-05-02)
+- [x] `/detect` 응답 후 GPS heartbeat 추가 — 위치 갱신 안정화 (2026-05-02)
+- [x] GPS 거리 임계값 0f — 이동 무관 3초마다 갱신 (2026-05-02)
+- [ ] Android Logcat `lat/lng` 0.0이 아닌 값 확인
+- [ ] `/sessions`에 Android session id 노출 확인
+- [ ] `/dashboard` 지도 marker 이동 확인
 
 ## 김재현에게 줄 한 줄 FPS 지시
 

@@ -41,7 +41,7 @@ def _verify_api_key(
 from src.depth.depth import detect_and_depth
 from src.nlg.sentence import (
     build_sentence, build_hazard_sentence, build_find_sentence,
-    build_navigation_sentence, build_question_sentence, get_alert_mode, _i_ga, _un_neun,
+    build_question_sentence, get_alert_mode, _i_ga, _un_neun,
 )
 from src.api import db
 from src.api.tracker import get_tracker
@@ -184,8 +184,13 @@ async def detect(
 
     # 공간 기억: 이전 방문과 비교해서 달라진 것 감지
     previous = db.get_snapshot(wifi_ssid)
-    space_changes = _space_changes(objects, previous) if previous else []
-    db.save_snapshot(wifi_ssid, objects)  # 현재 상태를 다음 방문을 위해 저장
+    # 빈 프레임을 이전 공간 스냅샷과 비교하면 앱 시작 직후
+    # "마우스가 사라졌어요" 같은 stale 안내가 나올 수 있다.
+    space_changes = _space_changes(objects, previous) if previous and objects else []
+    if objects:
+        db.save_snapshot(wifi_ssid, objects)  # 현재 상태를 다음 방문을 위해 저장
+    if objects:  # 빈 결과로 유효 스냅샷 덮어쓰지 않도록
+        db.save_snapshot(session_id, objects)
 
     all_changes = motion_changes + space_changes
 
@@ -208,38 +213,6 @@ async def detect(
             "scene":       scene,
             "tracked":     tracked,
             "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
-        }, _t0, request_id, _detect_ms, _tracker_ms)
-
-    # ── 식사 도우미 모드: 식기·음식 위치 집중 안내 ──────────────────────────
-    if mode == "식사":
-        sentence = _build_meal_sentence(objects)
-        return _with_perf({
-            "mode": mode,
-            "sentence":    sentence,
-            "objects":     objects,
-            "hazards":     [],
-            "changes":     [],
-            "alert_mode":  "silent",
-            "depth_source": objects[0].get("depth_source","bbox") if objects else "bbox",
-        }, _t0, request_id, _detect_ms, _tracker_ms)
-
-    # ── 색상 모드: 가장 큰 물체의 색상 안내 ─────────────────────────────────
-    if mode == "색상":
-        if objects:
-            top = objects[0]  # 위험도 기준 1위 (가장 크거나 가까운 물체)
-            color = top.get("color", "")
-            name  = top.get("class_ko", "물체")
-            sentence = f"{name}는 {color} 계열이에요." if color else f"{name}의 색상을 인식하지 못했어요."
-        else:
-            sentence = "색상을 확인할 물체가 보이지 않아요. 카메라를 물체에 가까이 대주세요."
-        return _with_perf({
-            "mode": mode,
-            "sentence":    sentence,
-            "alert_mode":  "silent",
-            "objects":     objects,
-            "hazards":     hazards,
-            "changes":     [],
-            "depth_source": objects[0].get("depth_source","bbox") if objects else "bbox",
         }, _t0, request_id, _detect_ms, _tracker_ms)
 
     # ── 찾기 모드: 특정 물체를 타깃으로 탐색 ────────────────────────────────
@@ -297,43 +270,6 @@ async def detect(
     }, _t0, request_id, _detect_ms, _tracker_ms)
 
 
-_MEAL_CLASSES = {
-    "포크", "칼", "숟가락", "그릇", "컵", "병", "유리잔",
-    "바나나", "사과", "오렌지", "샌드위치", "피자", "도넛",
-    "케이크", "핫도그", "브로콜리", "당근",
-}
-_MEAL_DIRECTIONS = {
-    "바로 앞": "바로 앞에",
-    "왼쪽 앞": "왼쪽 앞에",
-    "오른쪽 앞": "오른쪽 앞에",
-    "왼쪽": "왼쪽에",
-    "오른쪽": "오른쪽에",
-}
-
-
-def _build_meal_sentence(objects: list[dict]) -> str:
-    """식사 모드 전용 문장 — 식기·음식 위치를 친근하게 안내."""
-    from src.nlg.templates import CLOCK_TO_DIRECTION
-    from src.nlg.sentence import _i_ga, _format_dist
-    meal_items = [o for o in objects if o.get("class_ko") in _MEAL_CLASSES]
-    if not meal_items:
-        return "식기나 음식이 보이지 않아요. 카메라를 식탁 쪽으로 향해 주세요."
-    parts = []
-    for obj in meal_items[:3]:
-        name = obj.get("class_ko", "")
-        if not name:
-            continue
-        direction = CLOCK_TO_DIRECTION.get(obj.get("direction", "12시"), "앞")
-        dist = obj.get("distance_m", 1.0)
-        ig = _i_ga(name)
-        loc = _MEAL_DIRECTIONS.get(direction, f"{direction}에")
-        if dist < 0.8:
-            parts.append(f"{loc} {name}{ig} 있어요. 손 뻗으면 닿아요.")
-        else:
-            parts.append(f"{loc} {name}{ig} 있어요.")
-    return " ".join(parts) if parts else "식기나 음식이 보이지 않아요."
-
-
 def _extract_find_target(text: str) -> str:
     """
     찾기 명령어에서 대상 물체 이름 추출.
@@ -367,21 +303,8 @@ async def tts_endpoint(text: str = Form("")):
     return FileResponse(path, media_type="audio/wav")
 
 
-@router.post("/vision/clothing", dependencies=[Depends(_verify_api_key)])
-async def vision_clothing(
-    image: UploadFile,
-    type:  str = Form("matching"),   # "matching" or "pattern"
-):
-    """옷 매칭·패턴 분석 — GPT-4o Vision 활용."""
-    from src.vision.gpt_vision import analyze_clothing
-    if type not in ("matching", "pattern"):
-        type = "matching"   # 잘못된 값이면 기본값으로 fallback
-    image_bytes = await image.read()
-    sentence = analyze_clothing(image_bytes, type)
-    return {"sentence": sentence}
-
-
 # /ocr/bus 엔드포인트 제거 — 버스 번호 OCR 실험 기능 비활성화
+# /vision/clothing 엔드포인트 제거 — 옷 매칭·패턴 분석 기능 제거
 
 
 # 개인 네비게이팅 엔드포인트 (/locations/*) 제거 — 실험 기능 비활성화
@@ -417,7 +340,10 @@ async def get_session_status(session_id: str):
     gps = db.get_last_gps(resolved_session_id)
 
     tracker = get_tracker(resolved_session_id)
-    current = tracker.get_current_state(max_age_s=3.0)
+    current = tracker.get_current_state(max_age_s=5.0)
+    # in-memory tracker 비어 있으면 DB 스냅샷 폴백 (Cloud Run 다중 인스턴스 / 서버 재시작 대비)
+    if not current:
+        current = db.get_snapshot(resolved_session_id, max_age_s=8.0) or []
     track   = db.get_gps_track(resolved_session_id, limit=100)
     return {
         "session_id": resolved_session_id,
@@ -432,6 +358,20 @@ async def get_session_status(session_id: str):
 async def list_sessions():
     """GPS 데이터가 있는 최근 세션 ID 목록 반환 — 대시보드 세션 선택용."""
     return {"sessions": db.get_recent_sessions()}
+
+
+@router.get("/team-locations", dependencies=[Depends(_verify_api_key)])
+async def get_team_locations():
+    """최근 30분 내 활성 세션의 마지막 GPS 반환 — 대시보드 팀원 위치 표시용."""
+    from datetime import datetime, timedelta
+    cutoff = (datetime.now() - timedelta(minutes=30)).isoformat()
+    sessions = db.get_recent_sessions(limit=20)
+    locations = []
+    for s in sessions:
+        gps = db.get_last_gps(s)
+        if gps and gps.get("timestamp", "") >= cutoff:
+            locations.append({"session_id": s, "lat": gps["lat"], "lng": gps["lng"]})
+    return {"locations": locations}
 
 
 @router.get("/dashboard", dependencies=[Depends(_verify_api_key)])

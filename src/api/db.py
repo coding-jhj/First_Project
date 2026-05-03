@@ -120,19 +120,33 @@ def _init_postgres():
 
 # ── 공간 스냅샷 ───────────────────────────────────────────────────────────────
 
-def get_snapshot(space_id: str) -> list[dict] | None:
+def get_snapshot(space_id: str, max_age_s: float | None = None) -> list[dict] | None:
+    cutoff = None
+    if max_age_s is not None:
+        from datetime import timedelta
+        cutoff = (datetime.now() - timedelta(seconds=max_age_s)).isoformat()
     with _conn() as conn:
         if _IS_POSTGRES:
             with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT objects FROM snapshots WHERE space_id = %s "
-                    "ORDER BY id DESC LIMIT 1", (space_id,))
+                if cutoff:
+                    cur.execute(
+                        "SELECT objects FROM snapshots WHERE space_id = %s "
+                        "AND timestamp > %s ORDER BY id DESC LIMIT 1", (space_id, cutoff))
+                else:
+                    cur.execute(
+                        "SELECT objects FROM snapshots WHERE space_id = %s "
+                        "ORDER BY id DESC LIMIT 1", (space_id,))
                 row = cur.fetchone()
             return json.loads(row["objects"]) if row else None
         else:
-            row = conn.execute(
-                "SELECT objects FROM snapshots WHERE space_id = ? "
-                "ORDER BY id DESC LIMIT 1", (space_id,)).fetchone()
+            if cutoff:
+                row = conn.execute(
+                    "SELECT objects FROM snapshots WHERE space_id = ? "
+                    "AND timestamp > ? ORDER BY id DESC LIMIT 1", (space_id, cutoff)).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT objects FROM snapshots WHERE space_id = ? "
+                    "ORDER BY id DESC LIMIT 1", (space_id,)).fetchone()
             return json.loads(row[0]) if row else None
 
 

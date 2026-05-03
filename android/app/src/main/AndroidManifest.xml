@@ -34,7 +34,7 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.AppCompat.Light.DarkActionBar"
+        android:theme="@style/Theme.VoiceGuide"
         android:usesCleartextTraffic="true"> <!-- HTTP 서버 접속 허용 (로컬 ngrok 등) -->
 
         <activity
