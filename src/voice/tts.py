@@ -11,6 +11,7 @@ os.makedirs(_CACHE_DIR, exist_ok=True)
 
 _api_key = os.getenv("AZURE_SPEECH_KEY")
 _region = os.getenv("AZURE_SPEECH_REGION", "koreacentral")
+_hf_token = os.getenv("HF_TOKEN", "")
 
 
 def _cache_path(text: str, mode: str = "normal") -> str:
@@ -35,39 +36,70 @@ def _build_ssml(text: str, mode: str) -> str:
 """
 
 
-def _generate(text: str, path: str, mode: str = "normal") -> bool:
-    """Azure를 통해 wav 파일 생성."""
+def _generate_azure(text: str, path: str, mode: str = "normal") -> bool:
+    """Azure TTS로 wav 파일 생성."""
     if not _api_key:
         return False
-
     if not text or not text.strip():
         text = "안내할 내용이 없습니다."
-
     if os.path.exists(path):
         return True
-
     try:
-        speech_config = speechsdk.SpeechConfig(
-            subscription=_api_key,
-            region=_region
-        )
+        speech_config = speechsdk.SpeechConfig(subscription=_api_key, region=_region)
         speech_config.speech_synthesis_voice_name = "ko-KR-SoonBokNeural"
         speech_config.set_speech_synthesis_output_format(
             speechsdk.SpeechSynthesisOutputFormat.Riff16Khz16BitMonoPcm
         )
-
         audio_config = speechsdk.audio.AudioOutputConfig(filename=path)
-        synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config, audio_config=audio_config)
-
+        synthesizer = speechsdk.SpeechSynthesizer(
+            speech_config=speech_config, audio_config=audio_config
+        )
         ssml = _build_ssml(text, mode)
         result = synthesizer.speak_ssml_async(ssml).get()
-
-        if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-            return True
-        return False
+        return result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted
     except Exception as e:
-        print(f"TTS 생성 중 에러 발생: {e}")
+        print(f"[TTS] Azure 에러: {e}")
         return False
+
+
+def _generate_qwen3(text: str, path: str) -> bool:
+    """Qwen3-TTS via HuggingFace Inference API.
+
+    주의: 평균 응답 시간 3~8초 — 실시간 장애물 안내용이 아닌
+    비실시간(환영 메시지, 설정 안내 등) 용도에 적합.
+    HF_TOKEN 환경변수 필요. 무료 티어 1000req/day.
+    """
+    if not _hf_token:
+        return False
+    if not text or not text.strip():
+        return False
+    try:
+        import requests
+        resp = requests.post(
+            "https://api-inference.huggingface.co/models/"
+            "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+            headers={"Authorization": f"Bearer {_hf_token}"},
+            json={"inputs": text},
+            timeout=20,
+        )
+        if resp.status_code == 200 and resp.content:
+            with open(path, "wb") as f:
+                f.write(resp.content)
+            return True
+        print(f"[TTS] Qwen3 HTTP {resp.status_code}: {resp.text[:100]}")
+    except Exception as e:
+        print(f"[TTS] Qwen3 에러: {e}")
+    return False
+
+
+def _generate(text: str, path: str, mode: str = "normal") -> bool:
+    """TTS 생성. Qwen3(HF_TOKEN 있을 때) → Azure 순으로 시도."""
+    if os.path.exists(path):
+        return True
+    # Qwen3-TTS: 자연스러운 한국어 음성, 단 latency 높아 실시간 안내엔 Azure 선호
+    if _hf_token and mode != "critical" and _generate_qwen3(text, path):
+        return True
+    return _generate_azure(text, path, mode)
 
 
 def warmup_cache() -> None:
@@ -79,10 +111,9 @@ def warmup_cache() -> None:
 
 
 def get_tts_audio(text: str, mode: str = "normal"):
-    """Azure를 통해 wav를 생성하고 파일 경로를 반환."""
+    """TTS 오디오 파일 경로 반환. 없으면 생성."""
     if not text or not text.strip():
         text = "안내할 내용이 없습니다."
-
     path = _cache_path(text, mode)
     if os.path.exists(path):
         return path
