@@ -113,9 +113,8 @@ class SessionTracker:
                 if age > _MAX_AGE_S:
                     # 3회 이상 안정적으로 탐지된 가까운 물체가 사라진 경우만 안내
                     # (오탐 1~2회짜리는 "사라졌어요" 생략)
-                    if tr["distance_m"] < 3.0 and tr.get("seen_count", 0) >= 3:
-                        name = tr["class_ko"]
-                        changes.append(f"{name}{_i_ga(name)} 사라졌어요")
+                    # 앱 시작/재연결 직후 stale tracker 상태가 TTS로 새어 나가지 않도록
+                    # "사라짐" 변화는 상태 정리만 하고 음성 안내에는 쓰지 않는다.
                     del self._tracks[cls]  # 트랙 삭제
 
         # ── EMA 평활화 + 접근 감지 ─────────────────────────────────────────

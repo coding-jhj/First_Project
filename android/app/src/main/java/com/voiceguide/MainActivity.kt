@@ -234,11 +234,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // ── GPS 현재 위치 (서버 /detect 전송용) ──────────────────────────────────
     @Volatile private var currentLat = 0.0  // 현재 GPS 위도 (서버 /detect 전송용)
     @Volatile private var currentLng = 0.0  // 현재 GPS 경도
+    @Volatile private var lastGpsSentTime = 0L
     private var locationManager: android.location.LocationManager? = null
     private val locationListener = android.location.LocationListener { loc ->
         currentLat = loc.latitude
         currentLng = loc.longitude
         Log.d("VG_GPS", "location updated lat=$currentLat lng=$currentLng")
+        sendGpsHeartbeat("listener")
     }
 
     // ── ONNX 온디바이스 추론 ───────────────────────────────────────────
@@ -254,10 +256,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         private const val DEFAULT_SERVER_URL =
             "https://voiceguide-1063164560758.asia-northeast3.run.app"
         private const val PREF_LOCATIONS   = "saved_locations"  // 저장 장소 JSON 배열 키
-        private const val INTERVAL_MS      = 700L          // 캡처 간격: 0.7초 (발열·배터리 고려)
+        private const val INTERVAL_MS      = 100L          // 캡처 간격: 10fps 목표
         private const val MAX_IN_FLIGHT    = 2             // 동시 서버 요청 최대 수
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
         private const val FAIL_WARN_COUNT  = 3             // 연속 3회 실패 시 경고
+        private const val GPS_SEND_INTERVAL_MS = 3000L     // 대시보드 위치 갱신 최소 간격
         private const val CSV_LOG_ENABLED  = true          // 성능 CSV 로깅 (항상 활성화)
     }
 
@@ -328,6 +331,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         return saved.ifBlank { DEFAULT_SERVER_URL }
     }
 
+    private fun getConfiguredServerUrl(): String =
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_URL, "")?.trim() ?: ""
+
     private fun getDeviceSessionId(): String {
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         val saved = prefs.getString(PREF_DEVICE_ID, "") ?: ""
@@ -347,7 +353,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         val etUrl = android.widget.EditText(ctx).apply {
             hint = "서버 URL (비우면 온디바이스 모드)"
             inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI
-            setText(getSavedServerUrl())
+            setText(getConfiguredServerUrl())
             setSingleLine(true)
         }
         val tvUrlLabel = android.widget.TextView(ctx).apply { text = "서버 URL" }
@@ -750,6 +756,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     currentLat = it.latitude
                     currentLng = it.longitude
                     Log.d("VG_GPS", "last known location lat=$currentLat lng=$currentLng")
+                    sendGpsHeartbeat("lastKnown")
                 }
                 Log.d("VG_GPS", "GPS updates started provider=$provider")
             } catch (e: Exception) {
@@ -765,6 +772,47 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             Log.d("VG_GPS", "GPS updates stopped")
         } catch (_: Exception) {}
         locationManager = null
+    }
+
+    private fun sendGpsHeartbeat(source: String) {
+        if (!isAnalyzing.get()) return
+        if (currentLat == 0.0 && currentLng == 0.0) return
+
+        val now = System.currentTimeMillis()
+        if (now - lastGpsSentTime < GPS_SEND_INTERVAL_MS) return
+        lastGpsSentTime = now
+
+        val serverUrl = getSavedServerUrl().trimEnd('/')
+        if (serverUrl.isEmpty() || !isNetworkAvailable()) {
+            Log.d("VG_GPS", "skip heartbeat source=$source network=${isNetworkAvailable()} server=$serverUrl")
+            return
+        }
+
+        val lat = currentLat
+        val lng = currentLng
+        val deviceId = getDeviceSessionId()
+        val requestId = "gps-$now"
+        Thread {
+            try {
+                val body = okhttp3.FormBody.Builder()
+                    .add("wifi_ssid", getWifiSsid())
+                    .add("device_id", deviceId)
+                    .add("lat", lat.toString())
+                    .add("lng", lng.toString())
+                    .add("request_id", requestId)
+                    .build()
+                val response = httpClient.newCall(
+                    Request.Builder().url("$serverUrl/gps").post(body).build()
+                ).execute()
+                Log.d(
+                    "VG_GPS",
+                    "heartbeat source=$source session=$deviceId request_id=$requestId status=${response.code} lat=$lat lng=$lng"
+                )
+                response.close()
+            } catch (e: Exception) {
+                Log.e("VG_GPS", "heartbeat failed source=$source request_id=$requestId", e)
+            }
+        }.start()
     }
 
     /** GPS 위치 권한 요청 */
@@ -827,12 +875,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         detectionHistory.clear()
         lastSentence = ""
         consecutiveFails.set(0)
+        lastGpsSentTime = 0L
         lastSuccessTime = System.currentTimeMillis()
-        lastStreamFrameTime = 0L   // 재시작 시 첫 프레임 즉시 처리 (700ms 초기 지연 방지)
+        lastStreamFrameTime = 0L   // 재시작 시 첫 프레임 즉시 처리 (초기 지연 방지)
         inFlightCount.set(0)       // stuck in-flight 요청 초기화 (카메라 재바인딩 없는 재시작 대비)
         btnToggle.text = "■ 분석 중지"
         btnToggle.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFDC2626.toInt())
         tvStatus.text  = "분석 중..."
+        startGpsUpdates()
+        scheduleFallbackCapture()
         scheduleWatchdog()
         scheduleAutoListen()
     }
@@ -871,6 +922,19 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 scheduleNext()       // 100ms 후 다시 시도 (실제 FPS = 추론시간에 의해 결정)
             }
         }, INTERVAL_MS)
+    }
+
+    private fun scheduleFallbackCapture() {
+        handler.postDelayed({
+            if (!isAnalyzing.get()) return@postDelayed
+            val streamStalled = lastStreamFrameTime == 0L ||
+                System.currentTimeMillis() - lastStreamFrameTime > 1500L
+            if (streamStalled && inFlightCount.get() == 0) {
+                Log.w("VG_FLOW", "stream analyzer stalled; using ImageCapture fallback")
+                captureAndProcess()
+            }
+            scheduleFallbackCapture()
+        }, 1000L)
     }
 
     private fun scheduleWatchdog() {
@@ -1021,9 +1085,20 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     private fun shouldUseOnDeviceDetector(): Boolean {
         if (yoloDetector == null) return false
-        if (getSavedServerUrl().isNotBlank()) return false
+        if (!isNetworkAvailable()) return currentMode == "장애물" || currentMode == "찾기"
+        if (getConfiguredServerUrl().isNotBlank()) return false
         return currentMode == "장애물" || currentMode == "찾기"
     }
+
+    private fun isNetworkAvailable(): Boolean {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        val network = cm.activeNetwork ?: return false
+        val caps = cm.getNetworkCapabilities(network) ?: return false
+        return caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    private fun isServerFallbackAvailable(): Boolean =
+        isNetworkAvailable() && getConfiguredServerUrl().isNotBlank()
 
     /**
      * 질문 모드 전용 즉시 캡처.
@@ -1210,11 +1285,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
                 if (voted.isEmpty()) {
                     Log.d("VG_DETECT", "→ 장애물 없음")
-                    if (rawDetections.isEmpty() && getSavedServerUrl().isNotEmpty()) {
-                        Log.w("VG_DETECT", "on-device empty; falling back to server")
-                        sendToServer(imageFile, requestId)
-                        return@Thread
-                    }
                     imageFile.delete()
                     handleSuccess("주변에 장애물이 없어요.")
                     return@Thread
@@ -1256,7 +1326,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             } catch (e: Exception) {
                 Log.e("VG_DETECT", "request_id=$requestId On-device detection failed", e)
                 bmp?.recycle()
-                if (getSavedServerUrl().isNotEmpty()) {
+                if (isServerFallbackAvailable()) {
                     sendToServer(imageFile, requestId)  // 온디바이스 실패 → 서버 시도 (서버도 실패시 handleFail)
                 } else {
                     imageFile.delete()
@@ -1331,6 +1401,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
                 // 전체 왕복 시간 = 네트워크 + 서버 처리
                 val roundTripMs = System.currentTimeMillis() - reqStart
+                sendGpsHeartbeat("detect")
                 val json        = JSONObject(response.body?.string() ?: "{}")
                 val sentence    = json.optString("sentence", "주변에 장애물이 없어요.")
                 val alertMode   = json.optString("alert_mode", "critical")
@@ -1424,11 +1495,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
         runOnUiThread {
             if (sentence == "주변에 장애물이 없어요.") {
-                // 마지막 탐지 후 6초 지난 경우에만 "장애물 없음"으로 교체
-                // (투표 버퍼 재확정 시간 + 여유 고려)
-                if (System.currentTimeMillis() - lastDetectionTime > 6000) {
-                    tvStatus.text = "장애물 없음"
-                }
+                tvStatus.text = "장애물 없음"
                 return@runOnUiThread
             }
             lastDetectionTime = System.currentTimeMillis()
