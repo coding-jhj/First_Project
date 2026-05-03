@@ -86,7 +86,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private val handler = Handler(Looper.getMainLooper())
     // AtomicBoolean: 여러 스레드가 동시에 접근해도 안전한 boolean
     private val isAnalyzing  = AtomicBoolean(false)
-    private val inFlightCount = AtomicInteger(0)  // 동시 서버 요청 수 (최대 MAX_IN_FLIGHT)
+    private val inFlightCount = AtomicInteger(0)  // 동시 분석/서버 요청 수
     // 카메라 바인딩 완료 여부 — true면 재시작 시 unbindAll() 없이 startAnalysis()만 호출
     private var isCameraReady = false
     private var lastSentence = ""
@@ -255,7 +255,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             "https://voiceguide-1063164560758.asia-northeast3.run.app"
         private const val PREF_LOCATIONS   = "saved_locations"  // 저장 장소 JSON 배열 키
         private const val INTERVAL_MS      = 100L          // 캡처 간격: 10fps 목표
-        private const val MAX_IN_FLIGHT    = 2             // 동시 서버 요청 최대 수
+        private const val MAX_ON_DEVICE_IN_FLIGHT = 3      // 온디바이스 동시 추론 최대 수
+        private const val MAX_SERVER_IN_FLIGHT    = 4      // 서버 동시 요청 최대 수
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
         private const val FAIL_WARN_COUNT  = 3             // 연속 3회 실패 시 경고
         private const val GPS_SEND_INTERVAL_MS = 3000L     // 대시보드 위치 갱신 최소 간격
@@ -823,7 +824,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     private fun sendGpsHeartbeat(source: String) {
         if (!isAnalyzing.get()) return
-        if (currentLat == 0.0 && currentLng == 0.0) return
+        if (!hasValidLocation()) {
+            Log.d("VG_GPS", "skip heartbeat source=$source empty location lat=$currentLat lng=$currentLng")
+            return
+        }
 
         val now = System.currentTimeMillis()
         if (now - lastGpsSentTime < GPS_SEND_INTERVAL_MS) return
@@ -890,7 +894,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build()
             imageAnalysis = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setTargetResolution(android.util.Size(640, 480))
+                .setTargetResolution(android.util.Size(480, 360))
                 .build()
                 .also { analysis ->
                     analysis.setAnalyzer(cameraExecutor) { imageProxy ->
@@ -1003,18 +1007,19 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
             val now = System.currentTimeMillis()
             if (now - lastStreamFrameTime < INTERVAL_MS) return
-            if (inFlightCount.getAndIncrement() >= MAX_IN_FLIGHT) {
+            val route = if (shouldUseOnDeviceDetector()) "on_device" else "server"
+            val maxInFlight = if (route == "server") MAX_SERVER_IN_FLIGHT else MAX_ON_DEVICE_IN_FLIGHT
+            if (inFlightCount.getAndIncrement() >= maxInFlight) {
                 inFlightCount.decrementAndGet()
                 if (now - lastStreamSkipLogTime > 1000L) {
                     lastStreamSkipLogTime = now
-                    Log.d("VG_FLOW", "stream frame skipped: inFlight=${inFlightCount.get()}/$MAX_IN_FLIGHT")
+                    Log.d("VG_FLOW", "stream frame skipped: route=$route inFlight=${inFlightCount.get()}/$maxInFlight")
                 }
                 return
             }
             lastStreamFrameTime = now
 
             val requestId = nextRequestId()
-            val route = if (shouldUseOnDeviceDetector()) "on_device" else "server"
             val file = imageProxyToJpegFile(imageProxy)
             Log.d("VG_FLOW", "request_id=$requestId route=$route mode=$currentMode stream_file=${file.length()}B")
             if (route == "on_device") processOnDevice(file, requestId)
@@ -1147,6 +1152,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private fun isServerFallbackAvailable(): Boolean =
         isNetworkAvailable() && getConfiguredServerUrl().isNotBlank()
 
+    private fun hasValidLocation(): Boolean =
+        currentLat != 0.0 || currentLng != 0.0
+
     /**
      * 질문 모드 전용 즉시 캡처.
      * 서버에 mode="질문" 전송 → tracker 누적 상태 포함 포괄 응답을 받음.
@@ -1181,7 +1189,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             try {
                 val reqStart = System.currentTimeMillis()
                 Log.d("VG_GPS", "send question lat=$currentLat lng=$currentLng")
-                val body = MultipartBody.Builder().setType(MultipartBody.FORM)
+                val bodyBuilder = MultipartBody.Builder().setType(MultipartBody.FORM)
                     .addFormDataPart("image", "frame.jpg",
                         imageFile.asRequestBody("image/jpeg".toMediaType()))
                     .addFormDataPart("camera_orientation", cameraOrientation)
@@ -1189,10 +1197,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     .addFormDataPart("device_id", getDeviceSessionId())
                     .addFormDataPart("mode", mode)
                     .addFormDataPart("query_text", "")
-                    .addFormDataPart("lat", currentLat.toString())
-                    .addFormDataPart("lng", currentLng.toString())
                     .addFormDataPart("request_id", requestId)
-                    .build()
+                if (hasValidLocation()) {
+                    bodyBuilder
+                        .addFormDataPart("lat", currentLat.toString())
+                        .addFormDataPart("lng", currentLng.toString())
+                }
+                val body = bodyBuilder.build()
                 val response = httpClient.newCall(
                     Request.Builder().url("$serverUrl/detect").post(body).build()
                 ).execute()
@@ -1220,7 +1231,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     /**
      * 서버 전송 전 이미지 최적화 — FPS 개선 핵심
      *
-     * 원본 이미지(예: 4000×3000, JPEG 90%) → 640×480, JPEG 75%로 변환
+     * 원본 이미지(예: 4000×3000, JPEG 90%) → 480px 폭, JPEG 65%로 변환
      * 전송 크기 약 40~60% 감소 → 네트워크 지연 단축 → 체감 FPS 향상
      * YOLO 입력은 어차피 640×640으로 리사이즈되므로 품질 손실 없음
      */
@@ -1229,7 +1240,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             val bmp = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
                 ?: return file
 
-            val maxW = 640
+            val maxW = 480
             val scaled = if (bmp.width > maxW) {
                 val ratio = maxW.toFloat() / bmp.width
                 val newH  = (bmp.height * ratio).toInt()
@@ -1239,7 +1250,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
             val out = File.createTempFile("vg_opt_", ".jpg", cacheDir)
             out.outputStream().use { stream ->
-                scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 75, stream)
+                scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 65, stream)
             }
             scaled.recycle()
             file.delete()
@@ -1429,7 +1440,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 val uploadImgH = if (dimOpts.outHeight > 0) dimOpts.outHeight else 480
                 Log.d("VG_GPS", "send detect lat=$currentLat lng=$currentLng")
 
-                val body = MultipartBody.Builder().setType(MultipartBody.FORM)
+                val bodyBuilder = MultipartBody.Builder().setType(MultipartBody.FORM)
                     .addFormDataPart("image", "frame.jpg",
                         optimized.asRequestBody("image/jpeg".toMediaType()))
                     .addFormDataPart("camera_orientation", cameraOrientation)
@@ -1437,10 +1448,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     .addFormDataPart("device_id", getDeviceSessionId())
                     .addFormDataPart("mode", currentMode)
                     .addFormDataPart("query_text", findTarget)
-                    .addFormDataPart("lat", currentLat.toString())
-                    .addFormDataPart("lng", currentLng.toString())
                     .addFormDataPart("request_id", requestId)
-                    .build()
+                if (hasValidLocation()) {
+                    bodyBuilder
+                        .addFormDataPart("lat", currentLat.toString())
+                        .addFormDataPart("lng", currentLng.toString())
+                }
+                val body = bodyBuilder.build()
 
                 val response = httpClient.newCall(
                     Request.Builder().url("$serverUrl/detect").post(body).build()
