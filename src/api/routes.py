@@ -184,8 +184,11 @@ async def detect(
 
     # 공간 기억: 이전 방문과 비교해서 달라진 것 감지
     previous = db.get_snapshot(wifi_ssid)
-    space_changes = _space_changes(objects, previous) if previous else []
-    db.save_snapshot(wifi_ssid, objects)  # 현재 상태를 다음 방문을 위해 저장
+    # 빈 프레임을 이전 공간 스냅샷과 비교하면 앱 시작 직후
+    # "마우스가 사라졌어요" 같은 stale 안내가 나올 수 있다.
+    space_changes = _space_changes(objects, previous) if previous and objects else []
+    if objects:
+        db.save_snapshot(wifi_ssid, objects)  # 현재 상태를 다음 방문을 위해 저장
     if objects:  # 빈 결과로 유효 스냅샷 덮어쓰지 않도록
         db.save_snapshot(session_id, objects)
 
