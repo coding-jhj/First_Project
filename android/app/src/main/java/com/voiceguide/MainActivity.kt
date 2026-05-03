@@ -88,6 +88,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // AtomicBoolean: 여러 스레드가 동시에 접근해도 안전한 boolean
     private val isAnalyzing  = AtomicBoolean(false)
     private val inFlightCount = AtomicInteger(0)  // 동시 서버 요청 수 (최대 MAX_IN_FLIGHT)
+    // 카메라 바인딩 완료 여부 — true면 재시작 시 unbindAll() 없이 startAnalysis()만 호출
+    private var isCameraReady = false
     private var lastSentence = ""
     // TTS 완전 잠금 — compareAndSet으로만 시작 가능, onDone 후 해제
     private val ttsBusy        = AtomicBoolean(false)
@@ -696,7 +698,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             }
             "중지" -> {
                 stopAnalysis()
-                speak("분석을 잠깐 멈출게요.")
+                autoListenEnabled = true  // 중지 후에도 '다시 시작' 음성 명령을 받기 위해 STT 유지
+                speak("분석을 잠깐 멈출게요. 다시 시작하려면 '다시 시작'이라고 말해주세요.")
             }
             "재시작" -> {
                 if (!isAnalyzing.get()) {
@@ -1069,8 +1072,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         val needed = mutableListOf<String>()
         if (!hasPerm(Manifest.permission.CAMERA))       needed.add(Manifest.permission.CAMERA)
         if (!hasPerm(Manifest.permission.RECORD_AUDIO)) needed.add(Manifest.permission.RECORD_AUDIO)
-        if (needed.isEmpty()) startCamera()
-        else ActivityCompat.requestPermissions(this, needed.toTypedArray(), PERM_CODE)
+        if (needed.isEmpty()) {
+            // 카메라가 이미 바인딩된 경우 재바인딩 없이 분석만 재개 → FPS 안정
+            if (isCameraReady) startAnalysis() else startCamera()
+        } else ActivityCompat.requestPermissions(this, needed.toTypedArray(), PERM_CODE)
     }
 
     /** GPS 기능(하차알림) 사용 시에만 위치 권한 요청 */
@@ -1125,6 +1130,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     imageCapture,
                     imageAnalysis
                 )
+                isCameraReady = true  // 바인딩 성공 — 다음 재시작부터 rebind 생략
                 startAnalysis()
             } catch (e: Exception) {
                 tvStatus.text = "카메라 오류: ${e.message}"
@@ -1137,11 +1143,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         isAnalyzing.set(true)
         autoListenEnabled = true
         SentenceBuilder.clearStableClocks()
-        detectionHistory.clear()  // 재시작 시 이전 투표 버퍼 초기화
+        detectionHistory.clear()
         lastSentence = ""
         consecutiveFails.set(0)
         lastGpsSentTime = 0L
         lastSuccessTime = System.currentTimeMillis()
+        lastStreamFrameTime = 0L   // 재시작 시 첫 프레임 즉시 처리 (700ms 초기 지연 방지)
+        inFlightCount.set(0)       // stuck in-flight 요청 초기화 (카메라 재바인딩 없는 재시작 대비)
         btnToggle.text = "■ 분석 중지"
         btnToggle.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFDC2626.toInt())
         tvStatus.text  = "분석 중..."
@@ -1753,7 +1761,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             when (effectiveMode) {
                 "critical" -> {
                     val now = System.currentTimeMillis()
-                    if (sentence != lastSentence || now - lastCriticalTime > 5000L) {
+                    if (sentence != lastSentence || now - lastCriticalTime > 8000L) {
                         val isVehicleDanger = ALWAYS_PASS.any { sentence.contains(it) }
                         // 차량·계단 긴급이 아닌 경우 TTS 재생 중이면 끊지 않음
                         if (!isVehicleDanger && isSpeaking()) return@runOnUiThread
@@ -1944,7 +1952,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     private fun promptAutoStart() {
         awaitingStartConfirm = true
-        speakBuiltIn("음성 안내를 시작할까요? 네 또는 아니오로 말씀해주세요.")
+        speakBuiltIn(
+            "보이스가이드예요. " +
+            "시작 버튼을 누르거나 '네'라고 말하면 장애물 안내를 시작해요. " +
+            "'찾기', '확인', '질문' 같은 음성 명령도 사용할 수 있어요."
+        )
         handler.post(object : Runnable {
             override fun run() {
                 if (tts.isSpeaking) {
