@@ -18,7 +18,7 @@ val COCO_KO = mapOf(
    48 to "샌드위치", 49 to "오렌지", 50 to "브로콜리", 51 to "당근",
    52 to "핫도그",   53 to "피자",   54 to "도넛",    55 to "케이크",
    56 to "의자",     57 to "소파",   58 to "화분",    59 to "침대",
-   60 to "테이블",   61 to "변기",   62 to "TV",
+   60 to "테이블",   61 to "변기",   62 to "티비",
    64 to "마우스",   65 to "리모컨", 66 to "키보드",  67 to "휴대폰",
    68 to "전자레인지", 69 to "오븐", 70 to "토스터기", 71 to "세면대",
    73 to "책",     74 to "시계",    75 to "꽃병",
@@ -39,7 +39,7 @@ val CLOCK_TO_DIRECTION = mapOf(
     "9시"  to "왼쪽",
     "10시" to "왼쪽 앞",
     "11시" to "왼쪽 앞",
-    "12시" to "바로",        // 정면 — 가장 위험 (Python templates.py CLOCK_TO_DIRECTION["12시"]와 동일)
+    "12시" to "바로",     // 정면 — 가장 위험 (Python templates.py CLOCK_TO_DIRECTION["12시"]와 동일)
     "1시"  to "오른쪽 앞",
     "2시"  to "오른쪽 앞",
     "3시"  to "오른쪽",

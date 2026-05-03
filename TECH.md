@@ -48,8 +48,8 @@
 #### 구현 사양 (2026-05-02 기준)
 
 ```
-캡처 간격: INTERVAL_MS = 100ms (10fps 목표)
-동시 요청: MAX_IN_FLIGHT = 2 (서버 왕복 200ms 기준 10fps 달성)
+캡처 간격: INTERVAL_MS = 700ms (발열·배터리 고려, 약 1.4fps)
+동시 요청: MAX_IN_FLIGHT = 2
 최신 응답만 UI 반영: lastAppliedSeq로 구응답 폐기
 
 요청 형식:
@@ -63,7 +63,7 @@
 
 응답 형식:
   {
-    "sentence": "위험! 바로 앞 자동차! 조심!",
+    "sentence": "위험! 바로 앞 약 3미터에 자동차! 조심!",
     "alert_mode": "critical | beep | silent",
     "objects": [...],
     "perf": { "detect_ms": ..., "total_ms": ... }

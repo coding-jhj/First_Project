@@ -252,7 +252,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         private const val DEFAULT_SERVER_URL =
             "https://voiceguide-1063164560758.asia-northeast3.run.app"
         private const val PREF_LOCATIONS   = "saved_locations"  // 저장 장소 JSON 배열 키
-        private const val INTERVAL_MS      = 100L          // 캡처 간격: 0.1초 (10fps 목표)
+        private const val INTERVAL_MS      = 700L          // 캡처 간격: 0.7초 (발열·배터리 고려)
         private const val MAX_IN_FLIGHT    = 2             // 동시 서버 요청 최대 수
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
         private const val FAIL_WARN_COUNT  = 3             // 연속 3회 실패 시 경고
@@ -795,11 +795,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         detectionHistory.clear()  // 재시작 시 이전 투표 버퍼 초기화
         lastSentence = ""
         consecutiveFails.set(0)
+        lastGpsSentTime = 0L
         lastSuccessTime = System.currentTimeMillis()
         btnToggle.text = "■ 분석 중지"
         btnToggle.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFDC2626.toInt())
         tvStatus.text  = "분석 중..."
-        startGpsUpdates()
+        // GPS 시작 — 대시보드 지도에 위치 표시. 하차 알림 문구/target 설정은 하지 않는다.
+        requestLocationPermission { startGpsTracking(enableArrivalAlert = false) }
         scheduleWatchdog()
         scheduleAutoListen()
     }
@@ -1546,15 +1548,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     /** 직전 프레임과의 시간 간격으로 FPS 계산 + 스파크라인 업데이트 */
     private fun calcFps(): String {
         val now = System.currentTimeMillis()
-        val fps = if (lastFrameDoneTime > 0L && now > lastFrameDoneTime) {
+        val instant = if (lastFrameDoneTime > 0L && now > lastFrameDoneTime) {
             1000.0f / (now - lastFrameDoneTime)
         } else 0.0f
         lastFrameDoneTime = now
-        currentFps = fps
+        currentFps = instant
 
-        // 최근 10프레임 FPS 기록
+        // 최근 10프레임 이동평균 — 동시 요청으로 인한 순간 spike 완화
         if (fpsHistory.size >= 10) fpsHistory.removeFirst()
-        fpsHistory.addLast(fps)
+        fpsHistory.addLast(instant)
+        val fps = fpsHistory.average().toFloat()
 
         val fpsStr = if (fps >= 10f) "%.0f".format(fps) else "%.1f".format(fps)
         return fpsStr

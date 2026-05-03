@@ -31,7 +31,7 @@
 | `src/api/` | 정환주, 임명광 보조 | FastAPI 서버, DB, tracker |
 | `src/vision/` | 신유득 | YOLO 탐지, 색상/신호등 보조 분석 |
 | `src/depth/` | 신유득 | Depth V2, bbox fallback, 바닥 위험 탐지 |
-| `src/ocr/` | 신유득 | 버스 번호 OCR fallback 실험 |
+| `legacy/ocr_src/` | — | OCR 실험 코드 (비활성화, 참고 전용) |
 | `src/nlg/` | 임명광 | 한국어 안내 문장, alert mode |
 | `src/voice/` | 문수찬 | STT/TTS 서버 보조 모듈 |
 | `tools/` | 각 담당 | 배포, benchmark, 검증 스크립트 |

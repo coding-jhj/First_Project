@@ -88,7 +88,7 @@ object SentenceBuilder {
             val action  = DIRECTION_ACTION[clock] ?: "즉시 멈추세요"
             val distStr = formatDist(nearVehicle.w, nearVehicle.h)
             val ig      = josaIGa(nearVehicle.classKo)
-            return "위험! ${dir} 앞 ${nearVehicle.classKo}! 조심!"
+            return "위험! ${dir} ${nearVehicle.classKo}! 조심!"
         }
 
         // 2순위: 일반 장애물 — 최대 2개까지 문장 생성
@@ -238,9 +238,9 @@ object SentenceBuilder {
         return if (distM < 3.0f) {
             val r = kotlin.math.round(distM * 2) / 2.0f
             val str = if (r % 1.0f == 0.0f) r.toInt().toString() else "%.1f".format(r)
-            "약 ${str}미터 앞"
+            "약 ${str}미터"
         } else {
-            "약 ${kotlin.math.round(distM)}미터 앞"
+            "약 ${kotlin.math.round(distM)}미터"
         }
     }
 

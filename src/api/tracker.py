@@ -111,8 +111,9 @@ class SessionTracker:
             if cls not in current_keys:
                 age = now - tr["last_seen"]  # 마지막으로 봤을 때로부터 경과 시간(초)
                 if age > _MAX_AGE_S:
-                    # 가까웠던 물체가 사라진 경우만 안내 (멀리 있던 건 안내 불필요)
-                    if tr["distance_m"] < 3.0:
+                    # 3회 이상 안정적으로 탐지된 가까운 물체가 사라진 경우만 안내
+                    # (오탐 1~2회짜리는 "사라졌어요" 생략)
+                    if tr["distance_m"] < 3.0 and tr.get("seen_count", 0) >= 3:
                         name = tr["class_ko"]
                         changes.append(f"{name}{_i_ga(name)} 사라졌어요")
                     del self._tracks[cls]  # 트랙 삭제
@@ -153,6 +154,7 @@ class SessionTracker:
 
                 tr["distance_m"] = smooth_d
                 tr["last_seen"]  = now
+                tr["seen_count"] = tr.get("seen_count", 0) + 1
                 tr["direction"]  = obj.get("direction", tr.get("direction", "12시"))
             else:
                 # 새로 나타난 물체 → 트랙 생성
@@ -162,6 +164,7 @@ class SessionTracker:
                     "class_ko":     obj["class_ko"],
                     "direction":    obj.get("direction", "12시"),
                     "last_seen":    now,
+                    "seen_count":   1,           # 연속 탐지 횟수 — 3회 미만이면 "사라졌어요" 생략
                     "alerted":      False,       # 일반 접근 경고 발생 여부
                     "alerted_fast": False,       # 빠른 접근 경고 발생 여부
                 }
