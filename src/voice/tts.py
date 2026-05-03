@@ -1,7 +1,6 @@
 import os
 import hashlib
 import html
-import azure.cognitiveservices.speech as speechsdk
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -9,13 +8,13 @@ load_dotenv()
 _CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "__tts_cache__")
 os.makedirs(_CACHE_DIR, exist_ok=True)
 
-_api_key = os.getenv("AZURE_SPEECH_KEY")
-_region = os.getenv("AZURE_SPEECH_REGION", "koreacentral")
+_api_key  = os.getenv("AZURE_SPEECH_KEY")
+_region   = os.getenv("AZURE_SPEECH_REGION", "koreacentral")
 _hf_token = os.getenv("HF_TOKEN", "")
 
 
 def _cache_path(text: str, mode: str = "normal") -> str:
-    key = hashlib.md5(f"azure_{text}_{mode}".encode("utf-8")).hexdigest()
+    key = hashlib.md5(f"tts_{text}_{mode}".encode("utf-8")).hexdigest()
     return os.path.join(_CACHE_DIR, f"{key}.wav")
 
 
@@ -37,7 +36,7 @@ def _build_ssml(text: str, mode: str) -> str:
 
 
 def _generate_azure(text: str, path: str, mode: str = "normal") -> bool:
-    """Azure TTS로 wav 파일 생성."""
+    """Azure TTS로 wav 파일 생성. azure-cognitiveservices-speech 미설치 시 건너뜀."""
     if not _api_key:
         return False
     if not text or not text.strip():
@@ -45,6 +44,8 @@ def _generate_azure(text: str, path: str, mode: str = "normal") -> bool:
     if os.path.exists(path):
         return True
     try:
+        # 최상단 import 대신 lazy import — 패키지 없는 환경(Cloud Run 기본)에서 서버 구동 유지
+        import azure.cognitiveservices.speech as speechsdk  # noqa: PLC0415
         speech_config = speechsdk.SpeechConfig(subscription=_api_key, region=_region)
         speech_config.speech_synthesis_voice_name = "ko-KR-SoonBokNeural"
         speech_config.set_speech_synthesis_output_format(
@@ -54,9 +55,11 @@ def _generate_azure(text: str, path: str, mode: str = "normal") -> bool:
         synthesizer = speechsdk.SpeechSynthesizer(
             speech_config=speech_config, audio_config=audio_config
         )
-        ssml = _build_ssml(text, mode)
-        result = synthesizer.speak_ssml_async(ssml).get()
+        result = synthesizer.speak_ssml_async(_build_ssml(text, mode)).get()
         return result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted
+    except ImportError:
+        print("[TTS] azure-cognitiveservices-speech 미설치 — Azure TTS 건너뜀")
+        return False
     except Exception as e:
         print(f"[TTS] Azure 에러: {e}")
         return False
@@ -65,13 +68,10 @@ def _generate_azure(text: str, path: str, mode: str = "normal") -> bool:
 def _generate_qwen3(text: str, path: str) -> bool:
     """Qwen3-TTS via HuggingFace Inference API.
 
-    주의: 평균 응답 시간 3~8초 — 실시간 장애물 안내용이 아닌
-    비실시간(환영 메시지, 설정 안내 등) 용도에 적합.
+    평균 응답 3~8초 — 실시간 장애물 안내 X, 비실시간 용도 권장.
     HF_TOKEN 환경변수 필요. 무료 티어 1000req/day.
     """
-    if not _hf_token:
-        return False
-    if not text or not text.strip():
+    if not _hf_token or not text or not text.strip():
         return False
     try:
         import requests
@@ -93,10 +93,9 @@ def _generate_qwen3(text: str, path: str) -> bool:
 
 
 def _generate(text: str, path: str, mode: str = "normal") -> bool:
-    """TTS 생성. Qwen3(HF_TOKEN 있을 때) → Azure 순으로 시도."""
+    """TTS 생성. Qwen3(HF_TOKEN 있을 때, critical 제외) → Azure → 실패 순."""
     if os.path.exists(path):
         return True
-    # Qwen3-TTS: 자연스러운 한국어 음성, 단 latency 높아 실시간 안내엔 Azure 선호
     if _hf_token and mode != "critical" and _generate_qwen3(text, path):
         return True
     return _generate_azure(text, path, mode)
