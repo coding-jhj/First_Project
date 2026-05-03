@@ -15,7 +15,6 @@ routes.py에서 호출되는 공개 함수:
   build_sentence()         — 장애물/확인 모드
   build_hazard_sentence()  — 계단·낙차 최우선 안내
   build_find_sentence()    — 찾기 모드
-  build_navigation_sentence() — 개인 네비게이팅
 """
 
 from src.nlg.templates import (
@@ -115,11 +114,6 @@ def _i_ga(word: str) -> str:
     return _josa(word, "이", "가")
 
 
-def _eul_reul(word: str) -> str:
-    """목적어 조사: "의자를", "책을" """
-    return _josa(word, "을", "를")
-
-
 def _un_neun(word: str) -> str:
     """보조사: "의자는", "책은" """
     return _josa(word, "은", "는")
@@ -177,9 +171,9 @@ def _primary(obj: dict, abs_clock: str) -> str:
     )
 
     if is_critical:
-        return f"위험! {direction} 앞 {name}! 조심!"
+        return f"위험! {direction} {dist_str}에 {name}{ig} 있어요! {action}!"
 
-    return f"{direction} {dist_str}에 {name}{ig} 있어요."
+    return f"{direction} {dist_str}에 {name}{ig} 있어요. {action}."
 
 
 # ── 보조 물체 문장 생성 (위험도 2순위) ────────────────────────────────────────
@@ -367,40 +361,3 @@ def build_question_sentence(
     return " ".join(parts)
 
 
-def build_navigation_sentence(
-    label: str,
-    action: str,
-    locations: list[dict] | None = None,
-    wifi_ssid: str = "",
-) -> str:
-    """
-    개인 네비게이팅 모드의 안내 문장.
-
-    action 종류:
-      "save"       → "편의점을 저장했어요."
-      "found_here" → "편의점이 저장된 위치예요! 도착했어요."
-      "not_found"  → "편의점은 저장된 장소에 없어요."
-      "deleted"    → "편의점을 삭제했어요."
-      "list"       → "저장된 장소는 편의점, 화장실이에요."
-
-    locations: DB에서 조회한 장소 목록 (list 액션에서만 사용)
-    최대 5개만 읽어줌 — TTS가 너무 길어지는 것 방지
-    """
-    if action == "save":
-        label_str = label or "이 장소"
-        return f"{label_str}{_eul_reul(label_str)} 저장했어요."
-    if action == "found_here":
-        return f"{label}{_i_ga(label)} 저장된 위치예요! 도착했어요."
-    if action == "not_found":
-        return f"{label}{_un_neun(label)} 저장된 장소에 없어요. 먼저 그 곳에서 저장해 주세요."
-    if action == "deleted":
-        return f"{label}{_eul_reul(label)} 삭제했어요."
-    if action == "list":
-        if not locations:
-            return "저장된 장소가 없어요. 가고 싶은 곳에서 '여기 저장해줘'라고 말해보세요."
-        names  = [loc["label"] for loc in locations[:5]]  # 최대 5개
-        joined = ", ".join(names)
-        # 5개 초과이면 "외 N곳" 추가
-        suffix = f" 외 {len(locations) - 5}곳" if len(locations) > 5 else ""
-        return f"저장된 장소는 {joined}{suffix}이에요."
-    return "안내를 처리하지 못했어요."
