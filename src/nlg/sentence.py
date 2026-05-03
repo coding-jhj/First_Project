@@ -175,9 +175,9 @@ def _primary(obj: dict, abs_clock: str) -> str:
     )
 
     if is_critical:
-        return f"위험! {direction} {name}! 조심!"
+        return f"위험! {direction} {dist_str}에 {name}! 조심!"
 
-    return f"{direction} {dist_str}에 {name}{ig} 있어요. {action}."
+    return f"{direction} {dist_str}에 {name}{ig} 있어요."
 
 
 # ── 보조 물체 문장 생성 (위험도 2순위) ────────────────────────────────────────
