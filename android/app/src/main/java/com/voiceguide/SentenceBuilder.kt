@@ -21,7 +21,14 @@ object SentenceBuilder {
     // 고양이 추가: Python _ANIMAL_KO = {"개", "말", "고양이"} 와 동기화
     private val ANIMAL_CLASSES  = setOf("개", "말", "고양이")
 
-    // 생활 물체: bbox가 화면을 꽉 채워도 "위험!" 금지
+    // 주의(노란 bbox) 물체 — Python sentence.py의 _CAUTION_KO와 동일 목록
+    // 이 목록에 포함된 물체만 안내 문장에 회피 액션(action)을 추가함
+    private val CAUTION_CLASSES = setOf(
+        "칼", "가위", "유리잔", "야구 방망이",
+        "배낭", "핸드백", "여행가방", "공"
+    )
+
+    // 생활 물체: bbox가 화면을 꽉 채워도 "위험!" 금지, 액션도 제외
     // 이유: "위험! 바로 앞에 키보드가 있어요!"는 자동차·계단 경고와 혼동돼 신뢰도를 낮춤
     // Python sentence.py의 _EVERYDAY_KO와 동일 목록 — 양쪽 파일을 항상 함께 수정할 것
     private val EVERYDAY_CLASSES = setOf(
@@ -88,41 +95,41 @@ object SentenceBuilder {
             val action  = DIRECTION_ACTION[clock] ?: "즉시 멈추세요"
             val distStr = formatDist(nearVehicle.w, nearVehicle.h)
             val ig      = josaIGa(nearVehicle.classKo)
-            return "위험! ${dir} ${distStr}에 ${nearVehicle.classKo}! 조심!"
+            return "위험! ${dir} ${nearVehicle.classKo}! 조심!"
         }
 
         // 2순위: 일반 장애물 — 최대 2개까지 문장 생성
-        // 수정 전: take(3) — Python objects[:2]와 불일치, 3문장은 TTS가 길어 중간 정보를 놓침
         val parts = detections.take(2).mapIndexed { idx, det ->
             val clock     = getStableClock(det.classKo, det.cx)
             val dir       = CLOCK_TO_DIRECTION[clock] ?: clock
             val distStr   = formatDist(det.w, det.h)
+            // "바로 앞" + "코앞" 중복 방지: "바로 앞 코앞에" → "바로 코앞에"
+            val locStr    = if (distStr == "코앞" && dir == "바로 앞") "바로 코앞" else "$dir $distStr"
             val ig        = josaIGa(det.classKo)
             val action    = DIRECTION_ACTION[clock] ?: ""
-            val areaRatio = det.w * det.h  // bbox 면적 비율 (거리 판단 기준)
+            val areaRatio = det.w * det.h
             val isAnimal  = det.classKo in ANIMAL_CLASSES
+            val isCaution = det.classKo in CAUTION_CLASSES
 
             val base = when {
-                // 차량: 멀어도 "접근 중" 경고
+                // 차량: 접근 경고 + 회피 액션
                 det.classKo in VEHICLE_CLASSES ->
-                    "조심! ${dir} ${distStr}에 ${det.classKo}${ig} 접근 중이에요. $action."
-                // 동물: "천천히" 어조
+                    "조심! ${locStr}에 ${det.classKo}${ig} 접근 중이에요. $action."
+                // 동물: 주의 어조 + 회피 액션
                 isAnimal ->
-                    "조심! ${dir} ${distStr}에 ${det.classKo}${ig} 있어요. 천천히 $action."
-                // 면적 25% 이상 + 생활 물체 아님 → "위험!" 긴박
-                // 수정 전: 생활 물체(키보드·TV 등)도 "위험!" 붙는 버그
-                // 수정 후: EVERYDAY_CLASSES는 아무리 커도 일반 안내로 처리
-                areaRatio > 0.25f && det.classKo !in EVERYDAY_CLASSES ->
-                    "위험! ${dir} ${distStr}에 ${det.classKo}${ig} 있어요. $action."
-                // 면적 25% 이상이지만 생활 물체 — 긴급 표현 없이 안내
-                areaRatio > 0.25f ->
-                    "${dir} ${distStr}에 ${det.classKo}${ig} 있어요. $action."
-                // 면적 12% 이상 = 가까이 → 방향 + 거리 + 행동
+                    "조심! ${locStr}에 ${det.classKo}${ig} 있어요. 천천히 $action."
+                // 생활 물체: 크기·거리 무관, 액션 없이 위치만 안내
+                det.classKo in EVERYDAY_CLASSES ->
+                    "${locStr}에 ${det.classKo}${ig} 있어요."
+                // 주의(노란 bbox) 물체: 위치 + 회피 액션
+                isCaution ->
+                    "${locStr}에 ${det.classKo}${ig} 있어요. $action."
+                // 가까운 일반 물체: 위치 + 액션 ("위험!" 없이)
                 areaRatio > 0.12f ->
-                    "${dir} ${distStr}에 ${det.classKo}${ig} 있어요. $action."
-                // 그 외 = 멀리 → 방향 + 거리만
+                    "${locStr}에 ${det.classKo}${ig} 있어요. $action."
+                // 그 외 멀리: 위치만
                 else ->
-                    "${dir} ${distStr}에 ${det.classKo}${ig} 있어요."
+                    "${locStr}에 ${det.classKo}${ig} 있어요."
             }
 
             // 두 번째 물체는 "~도 있어요" 형태 (첫 번째와 구분)
@@ -150,12 +157,9 @@ object SentenceBuilder {
             val clock   = getStableClock(found.classKo, found.cx)
             val dir     = CLOCK_TO_DIRECTION[clock] ?: clock
             val distStr = formatDist(found.w, found.h)
+            val locStr  = if (distStr == "코앞" && dir == "바로 앞") "바로 코앞" else "$dir $distStr"
             val un      = josaUnNeun(target)
-            // 수정 전: "${target}${un} ${dir}에 있어요. $distStr."
-            //           → "소파는 왼쪽 앞에 있어요. 약 2미터 앞." (거리 분리로 TTS 억양 부자연스러움)
-            // 수정 후: Python build_find_sentence() 포맷과 동일
-            //           → "소파는 왼쪽 앞 약 2미터 앞에 있어요."
-            val base    = "${target}${un} ${dir} ${distStr}에 있어요."
+            val base    = "${target}${un} ${locStr}에 있어요."
 
             // target을 찾았어도 더 가까운 위험 물체가 있으면 경고 추가.
             // 조건: target이 아닌 물체이면서, target보다 면적(=거리) 50% 이상 크고, 12% 이상인 것
@@ -169,8 +173,9 @@ object SentenceBuilder {
                 val hClock   = getStableClock(closerHazard.classKo, closerHazard.cx)
                 val hDir     = CLOCK_TO_DIRECTION[hClock] ?: hClock
                 val hDistStr = formatDist(closerHazard.w, closerHazard.h)
+                val hLocStr  = if (hDistStr == "코앞" && hDir == "바로 앞") "바로 코앞" else "$hDir $hDistStr"
                 val hIg      = josaIGa(closerHazard.classKo)
-                "$base 단, ${hDir} ${hDistStr}에 ${closerHazard.classKo}${hIg} 있으니 주의하세요."
+                "$base 단, ${hLocStr}에 ${closerHazard.classKo}${hIg} 있으니 주의하세요."
             } else {
                 base
             }
