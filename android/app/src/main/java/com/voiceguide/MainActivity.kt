@@ -579,6 +579,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }
 
         when (mode) {
+            "들고있는것" -> {
+                speak("확인할게요.")
+                captureAndProcessAsHeld()
+            }
             // ── 핵심 버그 수정: 질문 모드 즉시 캡처 ──────────────────────────
             // 기존 문제: "지금 뭐 있어?" → else 분기 → "장애물 모드." 말하고 끝
             // 수정: 즉시 이미지 캡처 → 서버에 mode="질문" 전송 → tracker 상태 포함 응답
@@ -1176,6 +1180,25 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     }
 
     /**
+     * 들고있는것 모드 전용 즉시 캡처.
+     * 서버에 mode="들고있는것" 전송 → 가장 가까운 물건 기준 응답을 받음.
+     */
+    private fun captureAndProcessAsHeld() {
+        val file = File.createTempFile("vg_h_", ".jpg", cacheDir)
+        imageCapture?.takePicture(
+            ImageCapture.OutputFileOptions.Builder(file).build(),
+            cameraExecutor,
+            object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                    sendToServerWithMode(file, "들고있는것", nextRequestId())
+                }
+                override fun onError(e: ImageCaptureException) {
+                    speak("사진을 찍지 못했어요.")
+                }
+            })
+    }
+
+    /**
      * 특정 모드로 서버에 전송. 질문 모드 등 currentMode를 바꾸지 않고 1회성 전송 시 사용.
      */
     private fun sendToServerWithMode(imageFile: File, mode: String, requestId: String) {
@@ -1276,12 +1299,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
                 val tInfer = System.currentTimeMillis()
                 val yoloDetections = yoloDetector!!.detect(bmp)
-                val stairsDetection = stairsDetector.detect(bmp)
-                val rawDetections = if (stairsDetection != null) {
-                    yoloDetections + stairsDetection
-                } else {
-                    yoloDetections
-                }
                 val inferMs = System.currentTimeMillis() - tInfer
 
                 val tDedup = System.currentTimeMillis()
