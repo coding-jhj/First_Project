@@ -1,0 +1,72 @@
+{
+  "run_stamp": "20260502_113649",
+  "exported_dir": "C:\\Users\\User\\OneDrive\\Desktop\\vision_ML\\results\\failure_cases\\20260502_113649",
+  "exported_count": 5,
+  "total_fn_events": 1,
+  "total_fp_events": 21,
+  "fp_wrong_class_histogram": {
+    "자동차": 6,
+    "벤치": 1,
+    "버스": 1,
+    "자전거": 2,
+    "화분": 3,
+    "침대": 1,
+    "TV": 3,
+    "책": 1,
+    "사람": 1,
+    "꽃병": 1,
+    "테이블": 1
+  },
+  "pattern_summary_ko": "누락(FN) 이벤트 1건, 다른 클래스 오탐(FP_extra) 21건. 오탐으로 자주 등장한 클래스: ['자동차', '벤치', '버스', '자전거', '화분']",
+  "samples": [
+    {
+      "path": "data\\test_images\\사람\\사람_1777537550_000.jpg",
+      "gt": "사람",
+      "kind": "FN",
+      "predicted": [
+        "자동차"
+      ],
+      "wrong_class": null
+    },
+    {
+      "path": "data\\test_images\\사람\\사람_1777537551_001.jpg",
+      "gt": "사람",
+      "kind": "FP_extra",
+      "predicted": [
+        "사람",
+        "자동차"
+      ],
+      "wrong_class": "자동차"
+    },
+    {
+      "path": "data\\test_images\\사람\\사람_1777537552_002.jpg",
+      "gt": "사람",
+      "kind": "FP_extra",
+      "predicted": [
+        "사람",
+        "자동차"
+      ],
+      "wrong_class": "자동차"
+    },
+    {
+      "path": "data\\test_images\\사람\\사람_1777537555_004.jpg",
+      "gt": "사람",
+      "kind": "FP_extra",
+      "predicted": [
+        "벤치",
+        "사람"
+      ],
+      "wrong_class": "벤치"
+    },
+    {
+      "path": "data\\test_images\\사람\\사람_1777537556_005.jpg",
+      "gt": "사람",
+      "kind": "FP_extra",
+      "predicted": [
+        "버스",
+        "사람"
+      ],
+      "wrong_class": "버스"
+    }
+  ]
+}
