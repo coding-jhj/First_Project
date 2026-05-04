@@ -15,6 +15,7 @@ routes.py에서 호출되는 공개 함수:
   build_sentence()         — 장애물/확인 모드
   build_hazard_sentence()  — 계단·낙차 최우선 안내
   build_find_sentence()    — 찾기 모드
+  build_held_sentence()    — 손에 든 물건 / 바로 앞 물건 인식
 """
 
 from src.nlg.templates import (
@@ -123,6 +124,11 @@ def _un_neun(word: str) -> str:
     return _josa(word, "은", "는")
 
 
+def _i_eyo(word: str) -> str:
+    """술어 어미: '사과예요', '컵이에요'"""
+    return _josa(word, "이에요", "예요")
+
+
 # ── 거리 표현 ─────────────────────────────────────────────────────────────────
 
 def _format_dist(dist_m: float) -> str:
@@ -177,7 +183,7 @@ def _primary(obj: dict, abs_clock: str) -> str:
     )
 
     if is_critical:
-        return f"위험! {loc_str}에 {name}{ig} 있어요! {action}!"
+        return f"위험! {loc_str} {name}! 조심!"
 
     # 생활 물체: 액션 없이 위치만 안내
     if name in _EVERYDAY_KO:
@@ -246,35 +252,6 @@ def build_sentence(
         return f"{changes[0]} {result}".strip()
     return result
 
-
-def build_hazard_sentence(
-    hazard: dict,
-    objects: list[dict],
-    changes: list[str],
-    camera_orientation: str = "front",
-) -> str:
-    """
-    계단·낙차·턱 등 바닥 위험을 최우선으로 안내.
-
-    hazard.risk >= 0.7이면 다른 물체 안내 없이 위험만 말함.
-    이유: 계단 앞에서 "의자도 있어요"까지 들을 시간이 없음.
-
-    Args:
-        hazard: detect_floor_hazards()가 반환한 hazard dict
-        objects: YOLO 탐지 물체 (위험도 보조 참고용)
-    """
-    h_msg  = hazard.get("message", "앞에 위험해요.") # 문장간소화
-    h_risk = hazard.get("risk", 0.5)
-
-    # 고위험(0.7+) 또는 주변 물체 없으면 계단 경고만
-    if h_risk >= 0.7 or not objects:
-        return h_msg
-
-    # 저위험 계단 + 주변 물체 있으면 둘 다 안내
-    obj_sentence = build_sentence(objects[:1], [], camera_orientation)
-    return f"{h_msg} 그리고 {obj_sentence}"
-
-
 def build_find_sentence(
     target: str,
     objects: list[dict],
@@ -330,16 +307,11 @@ def build_question_sentence(
     """
     parts = []
 
-    # 1. 계단·낙차 최우선 (낙상 위험)
-    if hazards:
-        top = max(hazards, key=lambda h: h.get("risk", 0))
-        parts.append(top.get("message", "앞에 위험해요.")) # 문장 간소화
-
-    # 2. 위험물 긴급 경고
+    # 1. 위험물 긴급 경고
     if scene.get("danger_warning"):
         parts.append(scene["danger_warning"])
 
-    # 3. 현재 프레임 탐지 물체 (가장 신선한 정보)
+    # 2. 현재 프레임 탐지 물체 (가장 신선한 정보)
     if objects:
         for i, obj in enumerate(objects[:2]):
             abs_clock = get_absolute_clock(obj["direction"], camera_orientation)
@@ -369,5 +341,33 @@ def build_question_sentence(
         return "현재 주변에 장애물이 없어 안전해 보여요."
 
     return " ".join(parts)
+
+
+def build_held_sentence(objects: list[dict]) -> str:
+    """
+    손에 들고 있거나 바로 가까이 있는 물건 안내.
+
+    distance_m 구간 기준:
+      < 0.5m  → "손에 들고 있는 건 ___예요/이에요."
+      < 1.5m  → "바로 앞에 ___이/가 있어요."
+      < 3.0m  → "가까이 약 Xm에 ___이/가 있어요."
+      3.0m 이상 → "손에 든 물건이나 바로 앞에 뭔가 없어 보여요."
+    """
+    if not objects:
+        return "손에 든 물건이나 바로 앞에 뭔가 없어 보여요."
+
+    closest = min(objects, key=lambda o: o.get("distance_m", 99.0))
+    dist_m = closest.get("distance_m", 99.0)
+    name = closest["class_ko"]
+    ig = _i_ga(name)
+    ie = _i_eyo(name)
+
+    if dist_m < 1.0:
+        return f"손에 들고 있는 건 {name}{ie}."
+    if dist_m < 2.0:
+        return f"바로 앞에 {name}{ig} 있어요."
+    if dist_m < 3.0:
+        return f"가까이에 {name}{ig} 있어요."
+    return "손에 든 물건이나 바로 앞에 뭔가 없어 보여요."
 
 

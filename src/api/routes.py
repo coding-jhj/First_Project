@@ -41,7 +41,8 @@ def _verify_api_key(
 from src.depth.depth import detect_and_depth
 from src.nlg.sentence import (
     build_sentence, build_hazard_sentence, build_find_sentence,
-    build_question_sentence, get_alert_mode, _i_ga, _un_neun,
+    build_question_sentence, build_held_sentence,
+    get_alert_mode, _i_ga, _un_neun,
 )
 from src.api import db
 from src.api.tracker import get_tracker
@@ -193,6 +194,20 @@ async def detect(
         db.save_snapshot(session_id, objects)
 
     all_changes = motion_changes + space_changes
+
+    # ── 들고있는것 모드: 손에 든 / 바로 앞 물건 식별 ─────────────────────────
+    if mode == "들고있는것":
+        sentence = build_held_sentence(objects)
+        alert_mode = "critical"
+        return _with_perf({
+            "mode": mode,
+            "sentence":    sentence,
+            "alert_mode":  alert_mode,
+            "objects":     objects,
+            "hazards":     hazards,
+            "changes":     motion_changes,
+            "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
+        }, _t0, request_id, _detect_ms, _tracker_ms)
 
     # ── 질문 모드: 사용자가 직접 "지금 뭐가 있어?" 물었을 때 즉시 응답 ──────
     # 핵심 버그 수정: 기존엔 질문해도 periodic capture를 기다렸음.
