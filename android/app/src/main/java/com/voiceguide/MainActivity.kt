@@ -243,7 +243,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     // ── ONNX 온디바이스 추론 ───────────────────────────────────────────
     private var yoloDetector: YoloDetector? = null
-    private val stairsDetector = StairsDetector()
 
     companion object {
         private const val PERM_CODE          = 100  // 카메라 + 마이크 (앱 시작 시)
@@ -1275,13 +1274,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 val imgH = bmp.height
 
                 val tInfer = System.currentTimeMillis()
-                val yoloDetections = yoloDetector!!.detect(bmp)
-                val stairsDetection = stairsDetector.detect(bmp)
-                val rawDetections = if (stairsDetection != null) {
-                    yoloDetections + stairsDetection
-                } else {
-                    yoloDetections
-                }
+                val rawDetections = yoloDetector!!.detect(bmp)
                 val inferMs = System.currentTimeMillis() - tInfer
 
                 val tDedup = System.currentTimeMillis()
