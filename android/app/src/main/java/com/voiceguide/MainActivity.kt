@@ -102,7 +102,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private val VOTE_WINDOW    = 3
     private val VOTE_MIN_COUNT = 2
     private val ALWAYS_PASS    = setOf("자동차","오토바이","버스","트럭","기차","자전거",
-                                       "칼","가위","개","말","곰","코끼리")
+                                       "칼","가위","개","말","곰","코끼리","계단")
 
     private val classLastSpoken = mutableMapOf<String, Long>()
     private val CLASS_COOLDOWN_MS = 5000L  // 음성 안내 후 같은 사물 재발화 간격
@@ -244,6 +244,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     // ── ONNX 온디바이스 추론 ───────────────────────────────────────────
     private var yoloDetector: YoloDetector? = null
+    private val stairsDetector = StairsDetector()
 
     companion object {
         private const val PERM_CODE          = 100  // 카메라 + 마이크 (앱 시작 시)
@@ -1275,7 +1276,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 val imgH = bmp.height
 
                 val tInfer = System.currentTimeMillis()
-                val rawDetections = yoloDetector!!.detect(bmp)
+                val detector = yoloDetector
+                    ?: throw IllegalStateException("YOLO detector is not initialized")
+                val yoloDetections = detector.detect(bmp)
+                val stairsDetection = stairsDetector.detect(bmp)
+                val rawDetections = stairsDetection?.let { yoloDetections + it } ?: yoloDetections
                 val inferMs = System.currentTimeMillis() - tInfer
 
                 val tDedup = System.currentTimeMillis()
@@ -1307,7 +1312,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                                   "요청ID : ${requestId.takeLast(6)}\n" +
                                   "FPS    : ${fps}\n" +
                                   "디코딩 : ${decodeMs}ms\n" +
-                                  "YOLO   : ${inferMs}ms\n" +
+                                  "추론   : ${inferMs}ms\n" +
                                   "후처리 : ${dedupMs}ms\n" +
                                   "전체   : ${totalMs}ms\n" +
                                   "탐지수 : raw=${rawDetections.size} → ${voted.size}"
@@ -1318,7 +1323,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 // imageFile은 finally에서 삭제 (catch의 서버 fallback이 먼저 파일 필요)
 
                 Log.d("VG_DETECT", "=== 탐지 결과 ===")
-                Log.d("VG_DETECT", "raw: ${rawDetections.size}개 → dedup: ${voted.size}개")
+                Log.d("VG_DETECT", "raw: ${rawDetections.size}개 (yolo=${yoloDetections.size}, stairs=${if (stairsDetection != null) 1 else 0}) → dedup: ${voted.size}개")
                 voted.forEachIndexed { i, d ->
                     Log.d("VG_DETECT", "  [$i] ${d.classKo} | conf=${String.format("%.2f", d.confidence)} | cx=${String.format("%.2f", d.cx)} | w=${String.format("%.2f", d.w)} h=${String.format("%.2f", d.h)} | area=${String.format("%.3f", d.w * d.h)}")
                 }
