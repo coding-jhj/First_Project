@@ -38,7 +38,9 @@ COPY templates/ ./templates/
 
 # YOLO 모델 빌드 시 미리 다운로드 (첫 요청 지연 방지)
 # 없으면 첫 요청 시 ultralytics가 자동 다운로드
-RUN python -c "from ultralytics import YOLO; YOLO('yolo11n.pt')" 2>/dev/null || echo "YOLO model will be downloaded on first request"
+ARG SERVER_YOLO_MODEL=yolo26s.pt
+ENV SERVER_YOLO_MODEL=${SERVER_YOLO_MODEL}
+RUN python -c "import os; from ultralytics import YOLO; YOLO(os.environ.get('SERVER_YOLO_MODEL', 'yolo26s.pt'))" 2>/dev/null || echo "YOLO model will be downloaded on first request"
 
 # Depth 모델은 크기(99MB)로 인해 제외 → bbox fallback 사용
 # 모델이 필요하면 Cloud Run에서 GCS 마운트 또는 COPY 추가

@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 libs = [
     ("torch",              "2.4.1"),
     ("numpy",              "1.26.4"),
-    ("ultralytics",        "8.3.2"),
+    ("ultralytics",        "8.4.33"),
     ("cv2",                "4.10.0"),
     ("gradio",             "4.44.1"),
     ("fastapi",            "0.115.5"),
