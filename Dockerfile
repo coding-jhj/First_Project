@@ -16,10 +16,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrender-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Python 의존성 설치 (서버 전용 — gradio·pygame 등 데모 의존성 제외)
-COPY requirements-docker.txt .
+# Python 의존성 설치
+COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements-docker.txt
+    pip install --no-cache-dir -r requirements.txt
 
 # 소스 코드 복사 (모델 파일·학습 데이터는 .dockerignore로 제외)
 COPY src/ ./src/
