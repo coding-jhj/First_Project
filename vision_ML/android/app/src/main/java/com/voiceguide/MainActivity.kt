@@ -8,6 +8,7 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.media.AudioManager
+import android.media.ToneGenerator
 import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.os.Handler
@@ -22,10 +23,8 @@ import android.widget.EditText
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
-import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -38,7 +37,6 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -69,7 +67,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // ── UI 뷰 참조 ─────────────────────────────────────────────────────
     private lateinit var tts: TextToSpeech
     private lateinit var tvStatus: TextView      // 현재 안내 문장 표시
-    private lateinit var tvDetected: TextView    // 탐지된 물체 목록 표시
     private lateinit var tvMode: TextView        // 현재 모드 + 카메라 방향 표시
     private lateinit var btnToggle: Button       // 분석 시작/중지
     private lateinit var btnStt: Button          // 음성 명령 버튼
@@ -78,23 +75,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     // ── 카메라 & 분석 루프 ─────────────────────────────────────────────
     private var imageCapture: ImageCapture? = null
-    private var imageAnalysis: ImageAnalysis? = null
-    private var lastStreamFrameTime = 0L
-    private var lastStreamSkipLogTime = 0L
     // newSingleThreadExecutor: 카메라 캡처를 UI 스레드와 분리 (UI 멈춤 방지)
     private val cameraExecutor = Executors.newSingleThreadExecutor()
     // Handler: 메인 스레드에서 지연 작업 예약 (1초 간격 루프, Watchdog)
     private val handler = Handler(Looper.getMainLooper())
     // AtomicBoolean: 여러 스레드가 동시에 접근해도 안전한 boolean
-    private val isAnalyzing  = AtomicBoolean(false)
-    private val inFlightCount = AtomicInteger(0)  // 동시 분석/서버 요청 수
-    // 카메라 바인딩 완료 여부 — true면 재시작 시 unbindAll() 없이 startAnalysis()만 호출
-    private var isCameraReady = false
+    private val isAnalyzing = AtomicBoolean(false)
+    private val isSending   = AtomicBoolean(false)
     private var lastSentence = ""
     // TTS 완전 잠금 — compareAndSet으로만 시작 가능, onDone 후 해제
-    private val ttsBusy        = AtomicBoolean(false)
-    private val frameSeq       = AtomicInteger(0)
-    private val lastAppliedSeq = AtomicInteger(0)  // 마지막으로 UI에 반영한 응답 seq
+    private val ttsBusy     = AtomicBoolean(false)
 
     // ── 온디바이스 투표(Voting) 버퍼 ─────────────────────────────────────
     // 최근 5프레임 탐지 결과를 기록해 3회 이상 등장한 사물만 안내
@@ -102,7 +92,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private val detectionHistory = ArrayDeque<Set<String>>()
     private val VOTE_WINDOW    = 3
     private val VOTE_MIN_COUNT = 2
-    private val ALWAYS_PASS    = setOf("자동차","오토바이","버스","트럭","기차","자전거",
+    private val ALWAYS_PASS    = setOf("자동차","오토바이","트럭","기차","자전거",
                                        "칼","가위","개","말","곰","코끼리")
 
     private val classLastSpoken = mutableMapOf<String, Long>()
@@ -213,6 +203,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     // ── 조도 센서 (빛 감지) ────────────────────────────────────────────
     @Volatile private var lastLux = 100f  // 이전 프레임 밝기 (lux 단위)
+    // by lazy: 처음 사용 시에만 생성 (앱 시작 시 오디오 초기화 지연)
+    // ToneGenerator: 짧은 비프음 재생기 (위험도 낮은 알림용)
+    private val toneGen by lazy { ToneGenerator(AudioManager.STREAM_MUSIC, 100) }
+
     // ── 음성 자동 시작 ─────────────────────────────────────────────────
     private var awaitingStartConfirm = false
     @Volatile private var isListening = false      // STT 활성 중 → TTS 차단
@@ -221,46 +215,50 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // ── ElevenLabs MediaPlayer (겹침 방지용 단일 인스턴스) ───────────────
     private var currentMediaPlayer: android.media.MediaPlayer? = null
     @Volatile private var isElevenLabsSpeaking = false
-    @Volatile private var pendingStatusText = ""  // TTS 재생 시작 시점에 tvStatus 동기화
     private val ttsExecutor = Executors.newSingleThreadExecutor()
     // 요청 ID: 네트워크 응답이 왔을 때 최신 요청인지 확인 (stale 재생 방지)
     private val ttsRequestId = java.util.concurrent.atomic.AtomicInteger(0)
 
-    // ── 특정 버스 대기 ──────────────────────────────────────────────────
+    // ── 보호자 SOS ──────────────────────────────────────────────────────
+    private var guardianPhone = ""  // SharedPreferences에 저장된 보호자 번호
 
     // ── 낙상 감지 ────────────────────────────────────────────────────────
     @Volatile private var lastAccelTotal = 9.8f  // 직전 가속도 크기
     private var fallCheckJob: java.util.Timer? = null
 
     // ── 약 복용 알림 ─────────────────────────────────────────────────────
-    // ── GPS 현재 위치 (서버 /detect 전송용) ──────────────────────────────────
+    private var medicationTimer: java.util.Timer? = null
+
+    // ── GPS 하차 알림 + 현재 위치 (대시보드 지도용) ──────────────────────
+    private var locationManager: android.location.LocationManager? = null
+    private var targetBusStop: android.location.Location? = null
     @Volatile private var currentLat = 0.0  // 현재 GPS 위도 (서버 /detect 전송용)
     @Volatile private var currentLng = 0.0  // 현재 GPS 경도
-    @Volatile private var lastGpsSentTime = 0L
-    private var locationManager: android.location.LocationManager? = null
-    private lateinit var fusedLocationClient: com.google.android.gms.location.FusedLocationProviderClient
     private val locationListener = android.location.LocationListener { loc ->
-        updateCurrentLocation(loc, "listener:${loc.provider}")
+        // 현재 위치 항상 업데이트 (대시보드 지도 표시용)
+        currentLat = loc.latitude
+        currentLng = loc.longitude
+        // 하차 알림 처리
+        targetBusStop?.let { target ->
+            if (loc.distanceTo(target) < 200f) {
+                speak("내릴 정류장에 거의 다 왔어요. 준비하세요.")
+                stopGpsTracking()
+            }
+        }
     }
 
     // ── ONNX 온디바이스 추론 ───────────────────────────────────────────
     private var yoloDetector: YoloDetector? = null
-
     companion object {
         private const val PERM_CODE          = 100  // 카메라 + 마이크 (앱 시작 시)
-        private const val PERM_CODE_LOCATION = 101  // GPS — 위치 권한 요청 시
+        private const val PERM_CODE_LOCATION = 101  // GPS — 하차알림 기능 사용 시
+        private const val PERM_CODE_SMS      = 102  // SMS — SOS 설정 시
         private const val PREFS_NAME       = "voiceguide"  // SharedPreferences 이름
         private const val PREF_URL         = "server_url"  // 저장된 서버 URL 키
-        private const val PREF_DEVICE_ID   = "device_id"   // 앱 설치별 대시보드 세션 ID
-        private const val DEFAULT_SERVER_URL =
-            "https://voiceguide-1063164560758.asia-northeast3.run.app"
         private const val PREF_LOCATIONS   = "saved_locations"  // 저장 장소 JSON 배열 키
-        private const val INTERVAL_MS      = 50L           // 캡처 간격: 50ms — isSending 게이트가 실제 fps 제어
-        private const val MAX_ON_DEVICE_IN_FLIGHT = 3      // 온디바이스 동시 추론 최대 수
-        private const val MAX_SERVER_IN_FLIGHT    = 4      // 서버 동시 요청 최대 수
+        private const val INTERVAL_MS      = 800L          // 캡처 간격: 0.8초 (빠른 응답)
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
         private const val FAIL_WARN_COUNT  = 3             // 연속 3회 실패 시 경고
-        private const val GPS_SEND_INTERVAL_MS = 3000L     // 대시보드 위치 갱신 최소 간격
         private const val CSV_LOG_ENABLED  = true          // 성능 CSV 로깅 (항상 활성화)
     }
 
@@ -273,7 +271,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         tts = TextToSpeech(this, this)
 
         tvStatus    = findViewById(R.id.tvStatus)
-        tvDetected  = findViewById(R.id.tvDetected)
         tvMode      = findViewById(R.id.tvMode)
         btnToggle   = findViewById(R.id.btnToggle)
         btnStt      = findViewById(R.id.btnStt)
@@ -297,54 +294,28 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }
 
         sensorManager   = getSystemService(SENSOR_SERVICE) as SensorManager
-        fusedLocationClient = com.google.android.gms.location.LocationServices
-            .getFusedLocationProviderClient(this)
+        locationManager = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
         initSpeechRecognizer()
         tryInitYoloDetector()
+
+        // 보호자 번호 로드
+        guardianPhone = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .getString("guardian_phone", "") ?: ""
 
         // Google Assistant shortcut intent 처리
         when (intent?.action) {
             "com.voiceguide.ACTION_START" -> handler.postDelayed({ requestPermissions() }, 1500)
+            "com.voiceguide.ACTION_SOS"   -> handler.postDelayed({ triggerSOS() }, 1500)
         }
 
         btnToggle.setOnClickListener {
             if (isAnalyzing.get()) stopAnalysis() else requestPermissions()
         }
         btnStt.setOnClickListener { startListening() }
-
-        // Phase 7 — 롱프레스 진동 피드백: 저시력·시각장애인 사용자가 버튼 위치를 촉각으로 학습
-        btnStt.setOnLongClickListener {
-            val vib = getSystemService(VIBRATOR_SERVICE) as android.os.Vibrator
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                // 두 번 짧게 진동 (50ms on, 50ms off, 50ms on) — "여기 음성 명령 버튼"
-                vib.vibrate(android.os.VibrationEffect.createWaveform(
-                    longArrayOf(0, 50, 50, 50), -1
-                ))
-            } else {
-                @Suppress("DEPRECATION")
-                vib.vibrate(longArrayOf(0, 50, 50, 50), -1)
-            }
-            speak("음성 명령 버튼입니다. 짧게 누르면 음성 인식이 시작됩니다.")
-            true
-        }
     }
 
-    private fun getSavedServerUrl(): String {
-        val saved = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_URL, "") ?: ""
-        return saved.ifBlank { DEFAULT_SERVER_URL }
-    }
-
-    private fun getConfiguredServerUrl(): String =
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_URL, "")?.trim() ?: ""
-
-    private fun getDeviceSessionId(): String {
-        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        val saved = prefs.getString(PREF_DEVICE_ID, "") ?: ""
-        if (saved.isNotBlank()) return saved
-        val generated = "android-${java.util.UUID.randomUUID().toString().take(8)}"
-        prefs.edit().putString(PREF_DEVICE_ID, generated).apply()
-        return generated
-    }
+    private fun getSavedServerUrl(): String =
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_URL, "") ?: ""
 
     private fun showSettingsDialog() {
         val ctx = this
@@ -356,7 +327,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         val etUrl = android.widget.EditText(ctx).apply {
             hint = "서버 URL (비우면 온디바이스 모드)"
             inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI
-            setText(getConfiguredServerUrl())
+            setText(getSavedServerUrl())
             setSingleLine(true)
         }
         val tvUrlLabel = android.widget.TextView(ctx).apply { text = "서버 URL" }
@@ -380,9 +351,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 .setPositiveButton("저장") { _, _ ->
                     val url = etUrl.text.toString().trim()
                     getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                        .edit()
-                        .putString(PREF_URL, url)
-                        .apply()
+                        .edit().putString(PREF_URL, url).apply()
                     debugVisible = swDebug.isChecked
                     val tvDebug = findViewById<android.widget.TextView>(R.id.tvDebug)
                     tvDebug.visibility = if (debugVisible) android.view.View.VISIBLE else android.view.View.GONE
@@ -581,10 +550,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }
 
         when (mode) {
-            "들고있는것" -> {
-                speak("확인할게요.")
-                captureAndProcessAsHeld()
-            }
             // ── 핵심 버그 수정: 질문 모드 즉시 캡처 ──────────────────────────
             // 기존 문제: "지금 뭐 있어?" → else 분기 → "장애물 모드." 말하고 끝
             // 수정: 즉시 이미지 캡처 → 서버에 mode="질문" 전송 → tracker 상태 포함 응답
@@ -598,11 +563,52 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 currentMode = mode
                 captureAndProcess()
             }
+            "저장" -> {
+                // 이미지 불필요 — 즉시 위치 저장
+                val label = SentenceBuilder.extractLabel(text)
+                    .ifEmpty { "위치_${System.currentTimeMillis() / 1000 % 10000}" }
+                val ssid  = getWifiSsid()
+                if (ssid.isEmpty()) {
+                    speak("WiFi에 연결되어 있지 않아 저장할 수 없어요.")
+                } else {
+                    saveLocation(label, ssid)
+                    speak(SentenceBuilder.buildNavigation("save", label))
+                }
+                currentMode = "장애물"
+            }
+            "위치목록" -> {
+                // 이미지 불필요 — 즉시 목록 읽어주기
+                val locs = getLocations()
+                speak(SentenceBuilder.buildNavigation("list", "", locs.map { it.first }))
+                currentMode = "장애물"
+            }
             "찾기" -> {
                 findTarget  = SentenceBuilder.extractFindTarget(text)
                 currentMode = "찾기"
                 SentenceBuilder.clearStableClocks()
                 speakBuiltIn("${findTarget.ifEmpty { "물건" }} 찾기 모드.")
+            }
+            "텍스트" -> {
+                speakBuiltIn("텍스트를 인식할게요.")
+                captureForOcr()
+            }
+            "바코드" -> {
+                speakBuiltIn("바코드를 인식할게요.")
+                captureForBarcode()
+            }
+            "색상" -> {
+                speakBuiltIn("색상을 확인할게요.")
+                currentMode = "색상"
+                captureAndProcess()
+            }
+            "밝기" -> {
+                val desc = when {
+                    lastLux < 10  -> "매우 어두워요."
+                    lastLux < 50  -> "조금 어두운 편이에요."
+                    lastLux < 300 -> "적당히 밝아요."
+                    else          -> "매우 밝아요."
+                }
+                speak("현재 밝기는 $desc")
             }
             "신호등" -> {
                 speakBuiltIn("신호등을 확인할게요.")
@@ -627,8 +633,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             }
             "중지" -> {
                 stopAnalysis()
-                autoListenEnabled = true  // 중지 후에도 '다시 시작' 음성 명령을 받기 위해 STT 유지
-                speak("분석을 잠깐 멈출게요. 다시 시작하려면 '다시 시작'이라고 말해주세요.")
+                speak("분석을 잠깐 멈출게요.")
             }
             "재시작" -> {
                 if (!isAnalyzing.get()) {
@@ -636,12 +641,125 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     handler.postDelayed({ requestPermissions() }, 800)
                 } else speak("이미 분석 중이에요.")
             }
+            "긴급" -> requestSmsPermission { triggerSOS() }
+            "식사" -> {
+                currentMode = "식사"
+                speak("식사 도우미 모드예요. 식기와 음식 위치를 알려드릴게요.")
+                captureAndProcess()
+            }
+            "옷매칭" -> {
+                speak("옷 매칭을 확인할게요.")
+                captureForClothingAdvice("matching")
+            }
+            "옷패턴" -> {
+                speak("옷 패턴을 확인할게요.")
+                captureForClothingAdvice("pattern")
+            }
+            "돈" -> {
+                speak("지폐를 확인할게요.")
+                captureForCurrency()
+            }
+            "약알림" -> {
+                // "8시에 약 먹어야 해" → 시간 추출
+                val hour = Regex("(\\d{1,2})시").find(text)?.groupValues?.get(1)?.toIntOrNull()
+                if (hour != null) setMedicationAlarm(hour)
+                else speak("몇 시에 약을 드실 건가요? 예) 8시에 약 먹어야 해.")
+            }
+            "하차알림" -> requestLocationPermission {
+                speak("현재 위치를 기준으로 200미터 이내에 도착하면 알려드릴게요.")
+                startGpsTracking()
+            }
             "unknown" -> speak("다시 말씀해 주세요.")
             else -> {
                 currentMode = mode
                 SentenceBuilder.clearStableClocks()
                 speakBuiltIn("$mode 모드.")
             }
+        }
+    }
+
+    /**
+     * "글자 읽어줘" 명령 처리 — ML Kit OCR로 카메라 이미지의 텍스트 인식.
+     */
+    private fun captureForOcr() {
+        val file = File.createTempFile("vg_ocr_", ".jpg", cacheDir)
+        imageCapture?.takePicture(
+            ImageCapture.OutputFileOptions.Builder(file).build(),
+            cameraExecutor,
+            object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                    Thread {
+                        try {
+                            val bmp = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
+                            val recognizer = com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions.Builder().build()
+                                .let { com.google.mlkit.vision.text.TextRecognition.getClient(it) }
+                            val image = com.google.mlkit.vision.common.InputImage.fromBitmap(bmp, 0)
+                            recognizer.process(image)
+                                .addOnSuccessListener { result ->
+                                    val text = result.text.trim()
+                                    if (text.isEmpty()) speak("텍스트를 찾지 못했어요.")
+                                    else speak(text)
+                                    file.delete()
+                                }
+                                .addOnFailureListener { speak("텍스트 인식에 실패했어요."); file.delete() }
+                        } catch (_: Exception) { speak("텍스트 인식에 실패했어요."); file.delete() }
+                    }.start()
+                }
+                override fun onError(e: ImageCaptureException) { speak("사진을 찍지 못했어요.") }
+            })
+    }
+
+    /**
+     * "바코드" 명령 처리 — ML Kit Barcode Scanning으로 상품 정보 인식.
+     */
+    private fun captureForBarcode() {
+        val file = File.createTempFile("vg_bc_", ".jpg", cacheDir)
+        imageCapture?.takePicture(
+            ImageCapture.OutputFileOptions.Builder(file).build(),
+            cameraExecutor,
+            object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                    Thread {
+                        try {
+                            val bmp = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
+                            val scanner = com.google.mlkit.vision.barcode.BarcodeScanning.getClient()
+                            val image = com.google.mlkit.vision.common.InputImage.fromBitmap(bmp, 0)
+                            scanner.process(image)
+                                .addOnSuccessListener { barcodes ->
+                                    if (barcodes.isEmpty()) speak("바코드를 찾지 못했어요.")
+                                    else speak("${barcodes[0].displayValue ?: "알 수 없는 상품"}이에요.")
+                                    file.delete()
+                                }
+                                .addOnFailureListener { speak("바코드 인식에 실패했어요."); file.delete() }
+                        } catch (_: Exception) { speak("바코드 인식에 실패했어요."); file.delete() }
+                    }.start()
+                }
+                override fun onError(e: ImageCaptureException) { speak("사진을 찍지 못했어요.") }
+            })
+    }
+
+    // ── SOS 긴급 호출 ──────────────────────────────────────────────────
+
+    private fun triggerSOS() {
+        val vibrator = getSystemService(VIBRATOR_SERVICE) as android.os.Vibrator
+        vibrator.vibrate(android.os.VibrationEffect.createWaveform(
+            longArrayOf(0, 500, 200, 500, 200, 500), -1))
+        speak("보호자에게 도움을 요청할게요.")
+        if (guardianPhone.isEmpty()) {
+            speak("보호자 번호가 설정되어 있지 않아요. 설정에서 먼저 등록해 주세요.")
+            return
+        }
+        if (!hasPerm(Manifest.permission.SEND_SMS)) {
+            speak("문자 발송 권한이 없어요. 앱 설정에서 SMS 권한을 허용해 주세요.")
+            return
+        }
+        try {
+            val sms = android.telephony.SmsManager.getDefault()
+            val msg = "[VoiceGuide 긴급] 도움이 필요합니다. 앱에서 자동 발송된 메시지입니다."
+            sms.sendTextMessage(guardianPhone, null, msg, null, null)
+            speak("${guardianPhone}으로 도움 요청 문자를 보냈어요.")
+        } catch (_: Exception) {
+            speak("문자 발송에 실패했어요. 직접 전화해 주세요.")
         }
     }
 
@@ -654,9 +772,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         val timer = java.util.Timer()
         timer.schedule(object : java.util.TimerTask() {
             override fun run() {
-                if (!confirmed.get()) runOnUiThread {
-                    speak("자동 응급 알림이 비활성화되어 있어요. 필요하면 직접 보호자에게 연락하세요.")
-                }
+                if (!confirmed.get()) runOnUiThread { triggerSOS() }
             }
         }, 10_000)
         fallCheckJob = timer
@@ -695,6 +811,132 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         fallRecognizer.startListening(intent)
     }
 
+    // ── 옷 매칭·패턴 (서버 GPT Vision) ───────────────────────────────
+
+    private fun captureForClothingAdvice(type: String) {
+        val serverUrl = getSavedServerUrl().trimEnd('/')
+        if (serverUrl.isEmpty()) {
+            speak("옷 분석은 서버 연결이 필요해요."); return
+        }
+        val file = File.createTempFile("vg_cloth_", ".jpg", cacheDir)
+        imageCapture?.takePicture(
+            ImageCapture.OutputFileOptions.Builder(file).build(), cameraExecutor,
+            object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(o: ImageCapture.OutputFileResults) {
+                    Thread {
+                        try {
+                            val body = okhttp3.MultipartBody.Builder().setType(okhttp3.MultipartBody.FORM)
+                                .addFormDataPart("image", "cloth.jpg",
+                                    file.asRequestBody("image/jpeg".toMediaType()))
+                                .addFormDataPart("type", type)
+                                .build()
+                            val resp = httpClient.newCall(
+                                okhttp3.Request.Builder().url("$serverUrl/vision/clothing").post(body).build()
+                            ).execute()
+                            val sentence = org.json.JSONObject(resp.body?.string() ?: "{}")
+                                .optString("sentence", "분석하지 못했어요.")
+                            runOnUiThread { speak(sentence) }
+                        } catch (_: Exception) { runOnUiThread { speak("옷 분석에 실패했어요.") } }
+                        finally { file.delete() }
+                    }.start()
+                }
+                override fun onError(e: ImageCaptureException) { speak("사진을 찍지 못했어요.") }
+            })
+    }
+
+    // ── 지폐 인식 (색상 기반) ─────────────────────────────────────────
+
+    private fun captureForCurrency() {
+        val file = File.createTempFile("vg_curr_", ".jpg", cacheDir)
+        imageCapture?.takePicture(
+            ImageCapture.OutputFileOptions.Builder(file).build(), cameraExecutor,
+            object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(o: ImageCapture.OutputFileResults) {
+                    Thread {
+                        try {
+                            val bmp = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
+                            val cx = bmp.width / 2; val cy = bmp.height / 2
+                            val size = minOf(bmp.width, bmp.height) / 4
+                            val pixels = IntArray(size * size)
+                            bmp.getPixels(pixels, 0, size, cx - size/2, cy - size/2, size, size)
+                            bmp.recycle()
+                            var rSum = 0f; var gSum = 0f; var bSum = 0f
+                            pixels.forEach { p ->
+                                rSum += ((p shr 16) and 0xFF)
+                                gSum += ((p shr 8)  and 0xFF)
+                                bSum += (p and 0xFF)
+                            }
+                            val n = pixels.size.toFloat()
+                            val r = rSum / n; val g = gSum / n; val b = bSum / n
+                            val sentence = when {
+                                r > 180 && g > 150 && b < 130 -> "50000원권 같아요."
+                                r > g * 1.3f && r > b * 1.5f -> "5000원권 같아요."
+                                g > b && g > r * 0.9f && r < 180 -> "10000원권 같아요."
+                                b > r && b > g -> "1000원권 같아요."
+                                else -> "지폐를 정확히 인식하지 못했어요. 카메라에 지폐를 가득 채워보세요."
+                            }
+                            runOnUiThread { speak(sentence) }
+                        } catch (_: Exception) { runOnUiThread { speak("지폐 인식에 실패했어요.") } }
+                        finally { file.delete() }
+                    }.start()
+                }
+                override fun onError(e: ImageCaptureException) { speak("사진을 찍지 못했어요.") }
+            })
+    }
+
+    // ── 약 복용 알림 ─────────────────────────────────────────────────
+
+    private fun setMedicationAlarm(hour: Int) {
+        medicationTimer?.cancel()
+        val now = java.util.Calendar.getInstance()
+        val target = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.HOUR_OF_DAY, hour)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            if (before(now)) add(java.util.Calendar.DAY_OF_YEAR, 1)
+        }
+        val delayMs = target.timeInMillis - now.timeInMillis
+        speak("매일 ${hour}시에 약 복용 알림을 설정했어요.")
+        medicationTimer = java.util.Timer(true)
+        medicationTimer?.schedule(object : java.util.TimerTask() {
+            override fun run() {
+                runOnUiThread {
+                    speak("약 드실 시간이에요. ${hour}시 약 복용 알림이에요.")
+                    val vibrator = getSystemService(VIBRATOR_SERVICE) as android.os.Vibrator
+                    vibrator.vibrate(android.os.VibrationEffect.createWaveform(
+                        longArrayOf(0, 300, 200, 300), -1))
+                }
+            }
+        }, delayMs, 24 * 60 * 60 * 1000)
+    }
+
+    // ── GPS 하차 알림 ────────────────────────────────────────────────
+
+    @Suppress("MissingPermission")
+    private fun startGpsTracking() {
+        try {
+            locationManager?.requestLocationUpdates(
+                android.location.LocationManager.GPS_PROVIDER,
+                5000L, 50f, locationListener
+            )
+            val lastLoc = locationManager?.getLastKnownLocation(
+                android.location.LocationManager.GPS_PROVIDER)
+            if (lastLoc != null) {
+                targetBusStop = lastLoc
+                speak("현재 위치에서 200미터 이내로 돌아오면 알려드릴게요.")
+            } else {
+                speak("GPS 신호를 찾는 중이에요. 잠시 후 다시 시도해 주세요.")
+            }
+        } catch (_: Exception) {
+            speak("GPS를 사용할 수 없어요.")
+        }
+    }
+
+    private fun stopGpsTracking() {
+        locationManager?.removeUpdates(locationListener)
+        targetBusStop = null
+    }
+
     /**
      * STT 텍스트 → 모드 분류.
      * VoiceGuideConstants.kt의 STT_KEYWORDS 맵에서 순서대로 검색.
@@ -726,169 +968,35 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     // 권한 요청 콜백 저장 (비동기 결과 처리용)
     private var locationPermissionCallback: (() -> Unit)? = null
+    private var smsPermissionCallback: (() -> Unit)? = null
 
     /** 앱 시작 시 필수 권한만 요청: 카메라 + 마이크 */
     private fun requestPermissions() {
         val needed = mutableListOf<String>()
         if (!hasPerm(Manifest.permission.CAMERA))       needed.add(Manifest.permission.CAMERA)
         if (!hasPerm(Manifest.permission.RECORD_AUDIO)) needed.add(Manifest.permission.RECORD_AUDIO)
-        if (needed.isEmpty()) {
-            // 카메라가 이미 바인딩된 경우 재바인딩 없이 분석만 재개 → FPS 안정
-            if (isCameraReady) startAnalysis() else startCamera()
-        } else ActivityCompat.requestPermissions(this, needed.toTypedArray(), PERM_CODE)
+        if (needed.isEmpty()) startCamera()
+        else ActivityCompat.requestPermissions(this, needed.toTypedArray(), PERM_CODE)
     }
 
-    /** 분석 시작 시 GPS 위치 업데이트 시작 */
-    private fun startGpsUpdates() {
-        requestLocationPermission {
-            try {
-                val lm = getSystemService(Context.LOCATION_SERVICE) as android.location.LocationManager
-                locationManager = lm
-                if (!hasLocationPerm()) return@requestLocationPermission
-
-                val providers = listOf(
-                    android.location.LocationManager.GPS_PROVIDER,
-                    android.location.LocationManager.NETWORK_PROVIDER
-                ).filter { provider -> lm.isProviderEnabled(provider) }
-
-                if (providers.isEmpty()) {
-                    Log.w("VG_GPS", "no location provider available; trying fused location")
-                }
-
-                @Suppress("MissingPermission")
-                providers.forEach { provider ->
-                    lm.requestLocationUpdates(provider, 3000L, 0f, locationListener)
-                    Log.d("VG_GPS", "requestLocationUpdates provider=$provider")
-                }
-
-                // 마지막 알려진 위치로 즉시 초기화 (GPS fix 전까지 사용)
-                @Suppress("MissingPermission")
-                val lastKnown = providers
-                    .mapNotNull { provider -> lm.getLastKnownLocation(provider) }
-                    .maxByOrNull { it.time }
-                if (lastKnown != null) {
-                    updateCurrentLocation(lastKnown, "lastKnown:${lastKnown.provider}")
-                } else {
-                    Log.w("VG_GPS", "last known location is null providers=$providers")
-                }
-
-                requestFusedLocation()
-                Log.d("VG_GPS", "GPS updates started providers=$providers")
-            } catch (e: Exception) {
-                Log.e("VG_GPS", "startGpsUpdates failed", e)
-            }
-        }
-    }
-
-    private fun updateCurrentLocation(loc: android.location.Location, source: String) {
-        if (loc.latitude == 0.0 && loc.longitude == 0.0) {
-            Log.w("VG_GPS", "ignore zero location source=$source provider=${loc.provider}")
-            return
-        }
-        currentLat = loc.latitude
-        currentLng = loc.longitude
-        Log.d(
-            "VG_GPS",
-            "source=$source provider=${loc.provider} lat=$currentLat lng=$currentLng accuracy=${loc.accuracy}"
-        )
-        sendGpsHeartbeat(source)
-    }
-
-    private fun requestFusedLocation() {
-        if (!hasLocationPerm()) return
-        @Suppress("MissingPermission")
-        fusedLocationClient.lastLocation
-            .addOnSuccessListener { loc ->
-                if (loc != null) updateCurrentLocation(loc, "fusedLast")
-                else Log.w("VG_GPS", "fused lastLocation is null")
-            }
-            .addOnFailureListener { e -> Log.e("VG_GPS", "fused lastLocation failed", e) }
-
-        val priority = if (hasPerm(Manifest.permission.ACCESS_FINE_LOCATION)) {
-            com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY
-        } else {
-            com.google.android.gms.location.Priority.PRIORITY_BALANCED_POWER_ACCURACY
-        }
-        val tokenSource = com.google.android.gms.tasks.CancellationTokenSource()
-        @Suppress("MissingPermission")
-        fusedLocationClient.getCurrentLocation(priority, tokenSource.token)
-            .addOnSuccessListener { loc ->
-                if (loc != null) updateCurrentLocation(loc, "fusedCurrent")
-                else Log.w("VG_GPS", "fused currentLocation is null")
-            }
-            .addOnFailureListener { e -> Log.e("VG_GPS", "fused currentLocation failed", e) }
-    }
-
-    /** 분석 중지 시 GPS 위치 업데이트 중단 (배터리 절약) */
-    private fun stopGpsUpdates() {
-        try {
-            locationManager?.removeUpdates(locationListener)
-            Log.d("VG_GPS", "GPS updates stopped")
-        } catch (_: Exception) {}
-        locationManager = null
-    }
-
-    private fun sendGpsHeartbeat(source: String) {
-        if (!isAnalyzing.get()) return
-        if (!hasValidLocation()) {
-            Log.d("VG_GPS", "skip heartbeat source=$source empty location lat=$currentLat lng=$currentLng")
-            return
-        }
-
-        val now = System.currentTimeMillis()
-        if (now - lastGpsSentTime < GPS_SEND_INTERVAL_MS) return
-        lastGpsSentTime = now
-
-        val serverUrl = getSavedServerUrl().trimEnd('/')
-        if (serverUrl.isEmpty() || !isNetworkAvailable()) {
-            Log.d("VG_GPS", "skip heartbeat source=$source network=${isNetworkAvailable()} server=$serverUrl")
-            return
-        }
-
-        val lat = currentLat
-        val lng = currentLng
-        val deviceId = getDeviceSessionId()
-        val requestId = "gps-$now"
-        Thread {
-            try {
-                val body = okhttp3.FormBody.Builder()
-                    .add("wifi_ssid", getWifiSsid())
-                    .add("device_id", deviceId)
-                    .add("lat", lat.toString())
-                    .add("lng", lng.toString())
-                    .add("request_id", requestId)
-                    .build()
-                val response = httpClient.newCall(
-                    Request.Builder().url("$serverUrl/gps").post(body).build()
-                ).execute()
-                Log.d(
-                    "VG_GPS",
-                    "heartbeat source=$source session=$deviceId request_id=$requestId status=${response.code} lat=$lat lng=$lng"
-                )
-                response.close()
-            } catch (e: Exception) {
-                Log.e("VG_GPS", "heartbeat failed source=$source request_id=$requestId", e)
-            }
-        }.start()
-    }
-
-    /** GPS 위치 권한 요청 */
+    /** GPS 기능(하차알림) 사용 시에만 위치 권한 요청 */
     private fun requestLocationPermission(onGranted: () -> Unit) {
-        if (hasLocationPerm()) { onGranted(); return }
+        if (hasPerm(Manifest.permission.ACCESS_FINE_LOCATION)) { onGranted(); return }
         locationPermissionCallback = onGranted
         ActivityCompat.requestPermissions(this,
-            arrayOf(
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION
-            ), PERM_CODE_LOCATION)
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), PERM_CODE_LOCATION)
+    }
+
+    /** SOS 보호자 문자 설정 시에만 SMS 권한 요청 */
+    private fun requestSmsPermission(onGranted: () -> Unit) {
+        if (hasPerm(Manifest.permission.SEND_SMS)) { onGranted(); return }
+        smsPermissionCallback = onGranted
+        ActivityCompat.requestPermissions(this,
+            arrayOf(Manifest.permission.SEND_SMS), PERM_CODE_SMS)
     }
 
     private fun hasPerm(p: String) =
         ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
-
-    private fun hasLocationPerm(): Boolean =
-        hasPerm(Manifest.permission.ACCESS_FINE_LOCATION) ||
-            hasPerm(Manifest.permission.ACCESS_COARSE_LOCATION)
 
     private fun startCamera() {
         val future = ProcessCameraProvider.getInstance(this)
@@ -898,25 +1006,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 .also { it.setSurfaceProvider(previewView.surfaceProvider) }
             imageCapture = ImageCapture.Builder()
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build()
-            imageAnalysis = ImageAnalysis.Builder()
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setTargetResolution(android.util.Size(480, 360))
-                .build()
-                .also { analysis ->
-                    analysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                        analyzeStreamFrame(imageProxy)
-                    }
-                }
             try {
                 provider.unbindAll()
-                provider.bindToLifecycle(
-                    this,
-                    CameraSelector.DEFAULT_BACK_CAMERA,
-                    preview,
-                    imageCapture,
-                    imageAnalysis
-                )
-                isCameraReady = true  // 바인딩 성공 — 다음 재시작부터 rebind 생략
+                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageCapture)
                 startAnalysis()
             } catch (e: Exception) {
                 tvStatus.text = "카메라 오류: ${e.message}"
@@ -929,18 +1021,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         isAnalyzing.set(true)
         autoListenEnabled = true
         SentenceBuilder.clearStableClocks()
-        detectionHistory.clear()
+        detectionHistory.clear()  // 재시작 시 이전 투표 버퍼 초기화
         lastSentence = ""
         consecutiveFails.set(0)
-        lastGpsSentTime = 0L
         lastSuccessTime = System.currentTimeMillis()
-        lastStreamFrameTime = 0L   // 재시작 시 첫 프레임 즉시 처리 (초기 지연 방지)
-        inFlightCount.set(0)       // stuck in-flight 요청 초기화 (카메라 재바인딩 없는 재시작 대비)
         btnToggle.text = "■ 분석 중지"
         btnToggle.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFDC2626.toInt())
         tvStatus.text  = "분석 중..."
-        startGpsUpdates()
-        scheduleFallbackCapture()
+        captureAndProcess()
+        scheduleNext()
         scheduleWatchdog()
         scheduleAutoListen()
     }
@@ -949,7 +1038,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         isAnalyzing.set(false)
         autoListenEnabled = false
         handler.removeCallbacksAndMessages(null)
-        stopGpsUpdates()
         btnToggle.text = "▶ 분석 시작"
         btnToggle.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFF2563EB.toInt())
         tvStatus.text  = "분석 중지됨"
@@ -981,19 +1069,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }, INTERVAL_MS)
     }
 
-    private fun scheduleFallbackCapture() {
-        handler.postDelayed({
-            if (!isAnalyzing.get()) return@postDelayed
-            val streamStalled = lastStreamFrameTime == 0L ||
-                System.currentTimeMillis() - lastStreamFrameTime > 1500L
-            if (streamStalled && inFlightCount.get() == 0) {
-                Log.w("VG_FLOW", "stream analyzer stalled; using ImageCapture fallback")
-                captureAndProcess()
-            }
-            scheduleFallbackCapture()
-        }, 1000L)
-    }
-
     private fun scheduleWatchdog() {
         // Watchdog: 6초 동안 성공 응답이 없으면 음성으로 경고
         handler.postDelayed({
@@ -1006,160 +1081,30 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }, SILENCE_WARN_MS)
     }
 
-    private fun analyzeStreamFrame(imageProxy: ImageProxy) {
-        try {
-            if (!isAnalyzing.get()) return
-            checkRevisit()
-
-            val now = System.currentTimeMillis()
-            if (now - lastStreamFrameTime < INTERVAL_MS) return
-            val route = if (shouldUseOnDeviceDetector()) "on_device" else "server"
-            val maxInFlight = if (route == "server") MAX_SERVER_IN_FLIGHT else MAX_ON_DEVICE_IN_FLIGHT
-            if (inFlightCount.getAndIncrement() >= maxInFlight) {
-                inFlightCount.decrementAndGet()
-                if (now - lastStreamSkipLogTime > 1000L) {
-                    lastStreamSkipLogTime = now
-                    Log.d("VG_FLOW", "stream frame skipped: route=$route inFlight=${inFlightCount.get()}/$maxInFlight")
-                }
-                return
-            }
-            lastStreamFrameTime = now
-
-            val requestId = nextRequestId()
-            val file = imageProxyToJpegFile(imageProxy)
-            Log.d("VG_FLOW", "request_id=$requestId route=$route mode=$currentMode stream_file=${file.length()}B")
-            if (route == "on_device") processOnDevice(file, requestId)
-            else sendToServer(file, requestId)
-        } catch (e: Exception) {
-            if (inFlightCount.get() > 0) inFlightCount.decrementAndGet()
-            Log.e("VG_FLOW", "stream analysis failed", e)
-            handleFail()
-        } finally {
-            imageProxy.close()
-        }
-    }
-
-    private fun imageProxyToJpegFile(imageProxy: ImageProxy): File {
-        val nv21 = yuv420ToNv21(imageProxy)
-        val yuvImage = android.graphics.YuvImage(
-            nv21,
-            android.graphics.ImageFormat.NV21,
-            imageProxy.width,
-            imageProxy.height,
-            null
-        )
-        val jpegBytes = ByteArrayOutputStream().use { out ->
-            yuvImage.compressToJpeg(
-                android.graphics.Rect(0, 0, imageProxy.width, imageProxy.height),
-                75,
-                out
-            )
-            out.toByteArray()
-        }
-
-        val rotation = imageProxy.imageInfo.rotationDegrees
-        val outFile = File.createTempFile("vg_stream_", ".jpg", cacheDir)
-        if (rotation == 0) {
-            outFile.writeBytes(jpegBytes)
-            return outFile
-        }
-
-        val raw = android.graphics.BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
-        val matrix = android.graphics.Matrix().apply { postRotate(rotation.toFloat()) }
-        val rotated = android.graphics.Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, matrix, true)
-        outFile.outputStream().use { stream ->
-            rotated.compress(android.graphics.Bitmap.CompressFormat.JPEG, 75, stream)
-        }
-        raw.recycle()
-        rotated.recycle()
-        return outFile
-    }
-
-    private fun yuv420ToNv21(imageProxy: ImageProxy): ByteArray {
-        val image = imageProxy.image ?: throw IllegalStateException("ImageProxy has no image")
-        val width = image.width
-        val height = image.height
-        val ySize = width * height
-        val uvSize = width * height / 2
-        val nv21 = ByteArray(ySize + uvSize)
-
-        val yPlane = image.planes[0]
-        val uPlane = image.planes[1]
-        val vPlane = image.planes[2]
-
-        var out = 0
-        val yBuffer = yPlane.buffer
-        for (row in 0 until height) {
-            val rowStart = row * yPlane.rowStride
-            yBuffer.position(rowStart)
-            yBuffer.get(nv21, out, width)
-            out += width
-        }
-
-        val uBuffer = uPlane.buffer
-        val vBuffer = vPlane.buffer
-        val chromaHeight = height / 2
-        val chromaWidth = width / 2
-        for (row in 0 until chromaHeight) {
-            for (col in 0 until chromaWidth) {
-                val vIndex = row * vPlane.rowStride + col * vPlane.pixelStride
-                val uIndex = row * uPlane.rowStride + col * uPlane.pixelStride
-                nv21[out++] = vBuffer.get(vIndex)
-                nv21[out++] = uBuffer.get(uIndex)
-            }
-        }
-        return nv21
-    }
-
     private fun captureAndProcess() {
-        // 일회성 STT 캡처: stream 요청이 진행 중이면 스킵 (중복 방지)
-        if (inFlightCount.get() > 0) {
-            Log.d("VG_FLOW", "capture skipped: inFlight=${inFlightCount.get()}")
-            return
-        }
+        // isSending 체크: 이전 요청이 아직 진행 중이면 새 캡처 스킵 (중복 방지)
+        if (isSending.get()) return
         val file = File.createTempFile("vg_", ".jpg", cacheDir)
         imageCapture?.takePicture(
             ImageCapture.OutputFileOptions.Builder(file).build(),
             cameraExecutor,
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    inFlightCount.incrementAndGet()
-                    val requestId = nextRequestId()
-                    val route = if (shouldUseOnDeviceDetector()) "on_device" else "server"
-                    Log.d("VG_FLOW", "request_id=$requestId route=$route mode=$currentMode file=${file.length()}B")
-                    if (route == "on_device") processOnDevice(file, requestId)
-                    else sendToServer(file, requestId)
+                    isSending.set(true)
+                    if (shouldUseOnDeviceDetector()) processOnDevice(file)
+                    else sendToServer(file)
                 }
                 override fun onError(e: ImageCaptureException) {
-                    inFlightCount.decrementAndGet()
-                    Log.e("VG_FLOW", "capture failed", e)
+                    isSending.set(false)
                     handleFail()
                 }
             })
     }
 
-    private fun nextRequestId(): String =
-        "and-${System.currentTimeMillis()}-${frameSeq.incrementAndGet()}"
-
     private fun shouldUseOnDeviceDetector(): Boolean {
         if (yoloDetector == null) return false
-        if (!isNetworkAvailable()) return currentMode == "장애물" || currentMode == "찾기"
-        if (getConfiguredServerUrl().isNotBlank()) return false
         return currentMode == "장애물" || currentMode == "찾기"
     }
-
-    private fun isNetworkAvailable(): Boolean {
-        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
-        val network = cm.activeNetwork ?: return false
-        val caps = cm.getNetworkCapabilities(network) ?: return false
-        return caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
-    }
-
-    private fun isServerFallbackAvailable(): Boolean =
-        isNetworkAvailable() && getConfiguredServerUrl().isNotBlank()
-
-    private fun hasValidLocation(): Boolean =
-        currentLat != 0.0 || currentLng != 0.0
 
     /**
      * 질문 모드 전용 즉시 캡처.
@@ -1173,26 +1118,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             cameraExecutor,
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    sendToServerWithMode(file, "질문", nextRequestId())
-                }
-                override fun onError(e: ImageCaptureException) {
-                    speak("사진을 찍지 못했어요.")
-                }
-            })
-    }
-
-    /**
-     * 들고있는것 모드 전용 즉시 캡처.
-     * 서버에 mode="들고있는것" 전송 → 가장 가까운 물건 기준 응답을 받음.
-     */
-    private fun captureAndProcessAsHeld() {
-        val file = File.createTempFile("vg_h_", ".jpg", cacheDir)
-        imageCapture?.takePicture(
-            ImageCapture.OutputFileOptions.Builder(file).build(),
-            cameraExecutor,
-            object : ImageCapture.OnImageSavedCallback {
-                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    sendToServerWithMode(file, "들고있는것", nextRequestId())
+                    sendToServerWithMode(file, "질문")
                 }
                 override fun onError(e: ImageCaptureException) {
                     speak("사진을 찍지 못했어요.")
@@ -1203,7 +1129,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     /**
      * 특정 모드로 서버에 전송. 질문 모드 등 currentMode를 바꾸지 않고 1회성 전송 시 사용.
      */
-    private fun sendToServerWithMode(imageFile: File, mode: String, requestId: String) {
+    private fun sendToServerWithMode(imageFile: File, mode: String) {
         val serverUrl = getSavedServerUrl().trimEnd('/')
         if (serverUrl.isEmpty()) {
             imageFile.delete()
@@ -1212,40 +1138,25 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }
         Thread {
             try {
-                val reqStart = System.currentTimeMillis()
-                Log.d("VG_GPS", "send question lat=$currentLat lng=$currentLng")
-                val bodyBuilder = MultipartBody.Builder().setType(MultipartBody.FORM)
+                val body = MultipartBody.Builder().setType(MultipartBody.FORM)
                     .addFormDataPart("image", "frame.jpg",
                         imageFile.asRequestBody("image/jpeg".toMediaType()))
                     .addFormDataPart("camera_orientation", cameraOrientation)
                     .addFormDataPart("wifi_ssid", getWifiSsid())
-                    .addFormDataPart("device_id", getDeviceSessionId())
                     .addFormDataPart("mode", mode)
                     .addFormDataPart("query_text", "")
-                    .addFormDataPart("request_id", requestId)
-                if (hasValidLocation()) {
-                    bodyBuilder
-                        .addFormDataPart("lat", currentLat.toString())
-                        .addFormDataPart("lng", currentLng.toString())
-                }
-                val body = bodyBuilder.build()
+                    .addFormDataPart("lat", currentLat.toString())
+                    .addFormDataPart("lng", currentLng.toString())
+                    .build()
                 val response = httpClient.newCall(
                     Request.Builder().url("$serverUrl/detect").post(body).build()
                 ).execute()
-                val roundTripMs = System.currentTimeMillis() - reqStart
                 val json     = JSONObject(response.body?.string() ?: "{}")
                 val sentence = json.optString("sentence", "확인하지 못했어요.")
-                val processMs = json.optInt("process_ms", -1)
-                val perf = json.optJSONObject("perf")
-                Log.d("VG_LINK",
-                    "request_id=$requestId mode=$mode status=${response.code} total=${roundTripMs}ms " +
-                    "server=${processMs}ms perf=${perf?.toString() ?: "{}"}")
                 // 질문 응답 후 3초간 periodic capture의 TTS 억제
                 suppressPeriodicUntil = System.currentTimeMillis() + 3000L
-                val alertMode = json.optString("alert_mode", "normal")
-                handleSuccess(sentence, alertMode)  // dedup 로직 통합 (직접 speak() 우회 방지)
-            } catch (e: Exception) {
-                Log.e("VG_LINK", "request_id=$requestId mode=$mode server request failed", e)
+                runOnUiThread { tvStatus.text = sentence; speak(sentence) }
+            } catch (_: Exception) {
                 runOnUiThread { speak("서버 연결에 실패했어요.") }
             } finally {
                 imageFile.delete()
@@ -1256,7 +1167,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     /**
      * 서버 전송 전 이미지 최적화 — FPS 개선 핵심
      *
-     * 원본 이미지(예: 4000×3000, JPEG 90%) → 480px 폭, JPEG 65%로 변환
+     * 원본 이미지(예: 4000×3000, JPEG 90%) → 640×480, JPEG 75%로 변환
      * 전송 크기 약 40~60% 감소 → 네트워크 지연 단축 → 체감 FPS 향상
      * YOLO 입력은 어차피 640×640으로 리사이즈되므로 품질 손실 없음
      */
@@ -1265,7 +1176,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             val bmp = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
                 ?: return file
 
-            val maxW = 480
+            val maxW = 640
             val scaled = if (bmp.width > maxW) {
                 val ratio = maxW.toFloat() / bmp.width
                 val newH  = (bmp.height * ratio).toInt()
@@ -1275,7 +1186,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
             val out = File.createTempFile("vg_opt_", ".jpg", cacheDir)
             out.outputStream().use { stream ->
-                scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 65, stream)
+                scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 75, stream)
             }
             scaled.recycle()
             file.delete()
@@ -1287,10 +1198,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     // ── 온디바이스 추론 ─────────────────────────────────────────────────
 
-    private fun processOnDevice(imageFile: File, requestId: String) {
+    private fun processOnDevice(imageFile: File) {
         Thread {
             val t0 = System.currentTimeMillis()
             var bmp: android.graphics.Bitmap? = null
+            var usedServerFallback = false
             try {
                 val tDecode = System.currentTimeMillis()
                 bmp = decodeBitmapUpright(imageFile)
@@ -1312,7 +1224,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
                 // 구조화 성능 로그 — Logcat에서 tag:VG_PERF 로 필터
                 android.util.Log.d("VG_PERF",
-                    "request_id|$requestId|route|on_device|decode|$decodeMs|infer|$inferMs|dedup|$dedupMs|total|$totalMs|objs|${voted.size}")
+                    "decode|$decodeMs|infer|$inferMs|dedup|$dedupMs|total|$totalMs|objs|${voted.size}")
 
                 // FPS < 10 이면 경고 로그
                 val estimatedFps = if (totalMs > 0) 1000f / totalMs else 0f
@@ -1328,9 +1240,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     tvMode.text = "[$currentMode] $lastFpsText"
                     if (debugVisible) {
                         val tv = findViewById<android.widget.TextView>(R.id.tvDebug)
-                        tv.text = "경로   : ONNX\n" +
-                                  "요청ID : ${requestId.takeLast(6)}\n" +
-                                  "FPS    : ${fps}\n" +
+                        tv.text = "FPS    : ${fps}\n" +
                                   "디코딩 : ${decodeMs}ms\n" +
                                   "YOLO   : ${inferMs}ms\n" +
                                   "후처리 : ${dedupMs}ms\n" +
@@ -1362,7 +1272,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
                 if (voted.isEmpty()) {
                     Log.d("VG_DETECT", "→ 장애물 없음")
-                    imageFile.delete()
                     handleSuccess("주변에 장애물이 없어요.")
                     return@Thread
                 }
@@ -1399,12 +1308,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         handleSuccess("주변에 장애물이 없어요.")
                     }
                 }
-                imageFile.delete()
             } catch (e: Exception) {
-                Log.e("VG_DETECT", "request_id=$requestId On-device detection failed", e)
+                Log.e("VG_DETECT", "On-device detection failed", e)
                 bmp?.recycle()
-                if (isServerFallbackAvailable()) {
-                    sendToServer(imageFile, requestId)  // 온디바이스 실패 → 서버 시도 (서버도 실패시 handleFail)
+                if (getSavedServerUrl().isNotEmpty()) {
+                    sendToServer(imageFile)  // 온디바이스 실패 → 서버 시도 (서버도 실패시 handleFail)
                 } else {
                     imageFile.delete()
                     handleFail()
@@ -1435,15 +1343,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     // ── 서버 전송 (선택 — URL 입력 시 Depth V2 정확도 향상) ──────────────
 
-    private fun sendToServer(imageFile: File, requestId: String) {
+    private fun sendToServer(imageFile: File) {
         val serverUrl = getSavedServerUrl().trimEnd('/')
         if (serverUrl.isEmpty()) {
             imageFile.delete()
             handleFail()
             return
         }
-        // 이 요청의 seq — 응답이 오래된 것이면 UI 반영 생략
-        val mySeq = requestId.substringAfterLast('-').toIntOrNull() ?: Int.MAX_VALUE
 
         Thread {
             try {
@@ -1451,29 +1357,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 lastRequestTime = reqStart
 
                 val optimized = optimizeImageForUpload(imageFile)
-                val uploadBytes = optimized.length()
-                // 업로드 이미지 크기 — 서버 bbox 좌표 스케일링에 사용
-                val dimOpts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                android.graphics.BitmapFactory.decodeFile(optimized.absolutePath, dimOpts)
-                val uploadImgW = if (dimOpts.outWidth > 0) dimOpts.outWidth else 640
-                val uploadImgH = if (dimOpts.outHeight > 0) dimOpts.outHeight else 480
-                Log.d("VG_GPS", "send detect lat=$currentLat lng=$currentLng")
 
-                val bodyBuilder = MultipartBody.Builder().setType(MultipartBody.FORM)
+                val body = MultipartBody.Builder().setType(MultipartBody.FORM)
                     .addFormDataPart("image", "frame.jpg",
                         optimized.asRequestBody("image/jpeg".toMediaType()))
                     .addFormDataPart("camera_orientation", cameraOrientation)
                     .addFormDataPart("wifi_ssid", getWifiSsid())
-                    .addFormDataPart("device_id", getDeviceSessionId())
                     .addFormDataPart("mode", currentMode)
                     .addFormDataPart("query_text", findTarget)
-                    .addFormDataPart("request_id", requestId)
-                if (hasValidLocation()) {
-                    bodyBuilder
-                        .addFormDataPart("lat", currentLat.toString())
-                        .addFormDataPart("lng", currentLng.toString())
-                }
-                val body = bodyBuilder.build()
+                    .addFormDataPart("lat", currentLat.toString())
+                    .addFormDataPart("lng", currentLng.toString())
+                    .build()
 
                 val response = httpClient.newCall(
                     Request.Builder().url("$serverUrl/detect").post(body).build()
@@ -1481,79 +1375,22 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
                 // 전체 왕복 시간 = 네트워크 + 서버 처리
                 val roundTripMs = System.currentTimeMillis() - reqStart
-                sendGpsHeartbeat("detect")
                 val json        = JSONObject(response.body?.string() ?: "{}")
                 val sentence    = json.optString("sentence", "주변에 장애물이 없어요.")
                 val alertMode   = json.optString("alert_mode", "critical")
                 val processMs   = json.optInt("process_ms", -1)  // 서버 내부 처리 시간
-                val responseRequestId = json.optString("request_id", requestId)
-                val perf = json.optJSONObject("perf")
                 lastProcessMs   = processMs
 
                 // FPS + 처리시간 UI 업데이트
                 val netMs = if (processMs > 0) roundTripMs - processMs else roundTripMs
-                val objectCount = json.optJSONArray("objects")?.length() ?: 0
-                val perfText = perf?.toString() ?: "{}"
-                Log.d("VG_LINK",
-                    "request_id=$requestId response_id=$responseRequestId mode=$currentMode " +
-                    "status=${response.code} upload=${uploadBytes}B total=${roundTripMs}ms " +
-                    "server=${processMs}ms net=${netMs}ms objects=$objectCount perf=$perfText")
-                Log.d("VG_PERF",
-                    "request_id|$requestId|route|server|server_ms|$processMs|net_ms|$netMs|total|$roundTripMs|bytes|$uploadBytes")
                 runOnUiThread {
                     val fps = calcFps()
                     lastFpsText = "${fps}fps | 서버:${processMs}ms 네트:${netMs}ms"
                     tvMode.text = "[$currentMode] $lastFpsText"
-                    if (debugVisible) {
-                        val tv = findViewById<android.widget.TextView>(R.id.tvDebug)
-                        tv.text = "경로   : SERVER\n" +
-                                  "요청ID : ${requestId.takeLast(6)}\n" +
-                                  "FPS    : ${fps}\n" +
-                                  "서버   : ${processMs}ms\n" +
-                                  "네트워크: ${netMs}ms\n" +
-                                  "왕복   : ${roundTripMs}ms\n" +
-                                  "업로드 : ${uploadBytes / 1024}KB"
-                    }
                 }
 
-                // 서버 응답 bbox로 바운딩 박스 오버레이 업데이트
-                val serverDetections = mutableListOf<Detection>()
-                val objArray = json.optJSONArray("objects")
-                if (objArray != null) {
-                    for (i in 0 until objArray.length()) {
-                        val obj = objArray.optJSONObject(i) ?: continue
-                        val normXywh = obj.optJSONArray("bbox_norm_xywh") ?: continue
-                        if (normXywh.length() < 4) continue
-                        val x1n = normXywh.optDouble(0).toFloat()
-                        val y1n = normXywh.optDouble(1).toFloat()
-                        val wn  = normXywh.optDouble(2).toFloat()
-                        val hn  = normXywh.optDouble(3).toFloat()
-                        val classKo = obj.optString("class_ko", "")
-                        if (classKo.isEmpty() || wn <= 0f || hn <= 0f) continue
-                        serverDetections.add(Detection(
-                            classKo    = classKo,
-                            confidence = obj.optDouble("confidence", 0.9).toFloat(),
-                            cx         = x1n + wn / 2f,
-                            cy         = y1n + hn / 2f,
-                            w          = wn,
-                            h          = hn
-                        ))
-                    }
-                }
-                // 더 최신 응답이 이미 반영됐으면 이 응답은 UI 갱신 생략
-                val isLatest = lastAppliedSeq.accumulateAndGet(mySeq) { cur, new -> if (new > cur) new else cur } == mySeq
-                if (isLatest) {
-                    runOnUiThread {
-                        if (serverDetections.isEmpty()) boundingBoxOverlay.clearDetections()
-                        else boundingBoxOverlay.setDetections(serverDetections, uploadImgW, uploadImgH)
-                    }
-                    handleSuccess(sentence, alertMode)
-                } else {
-                    Log.d("VG_FLOW", "stale response seq=$mySeq < applied=${lastAppliedSeq.get()}, skip UI")
-                    inFlightCount.decrementAndGet()
-                }
-            } catch (e: Exception) {
-                Log.e("VG_LINK", "request_id=$requestId server request failed", e)
+                handleSuccess(sentence, alertMode)
+            } catch (_: Exception) {
                 handleFail()
             } finally {
                 imageFile.delete()
@@ -1566,7 +1403,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private fun handleSuccess(sentence: String, alertMode: String = "critical") {
         consecutiveFails.set(0)
         lastSuccessTime = System.currentTimeMillis()
-        inFlightCount.decrementAndGet()
+        isSending.set(false)
         if (!isAnalyzing.get()) return  // 분석 중지 후 in-flight 요청 결과 무시
 
         // 질문 응답 직후 periodic TTS 억제 — critical은 항상 통과
@@ -1574,9 +1411,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             System.currentTimeMillis() < suppressPeriodicUntil) "silent" else alertMode
 
         runOnUiThread {
-            tvDetected.text = detectedText
             if (sentence == "주변에 장애물이 없어요.") {
-                if (!isSpeaking()) tvStatus.text = "장애물 없음"
+                // 마지막 탐지 후 6초 지난 경우에만 "장애물 없음"으로 교체
+                // (투표 버퍼 재확정 시간 + 여유 고려)
+                if (System.currentTimeMillis() - lastDetectionTime > 6000) {
+                    tvStatus.text = "장애물 없음"
+                }
                 return@runOnUiThread
             }
             lastDetectionTime = System.currentTimeMillis()
@@ -1584,13 +1424,14 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             when (effectiveMode) {
                 "critical" -> {
                     val now = System.currentTimeMillis()
-                    if (sentence != lastSentence || now - lastCriticalTime > 8000L) {
+                    if (sentence != lastSentence || now - lastCriticalTime > 5000L) {
                         val isVehicleDanger = ALWAYS_PASS.any { sentence.contains(it) }
+                        // 차량 긴급이 아닌 경우 TTS 재생 중이면 끊지 않음
                         if (!isVehicleDanger && isSpeaking()) return@runOnUiThread
                         lastSentence     = sentence
                         lastCriticalTime = now
-                        pendingStatusText = sentence  // onStart/ElevenLabs play 시점에 UI 업데이트
-                        tts.setSpeechRate(1.0f)
+                        tvStatus.text    = sentence
+                        tts.setSpeechRate(1.25f)
                         if (isVehicleDanger) {
                             speakBuiltIn(sentence, immediate = true)
                         } else {
@@ -1599,9 +1440,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     }
                 }
                 "beep" -> {
+                    // 사용자 인터뷰 Q11: "비프음보다 말로 설명하는 것이 편함"
+                    // → 비프음 대신 거리 정보 포함 음성으로 전달 (lastSentence dedup 적용)
                     if (sentence != lastSentence && !isSpeaking()) {
-                        lastSentence      = sentence
-                        pendingStatusText = sentence
+                        lastSentence  = sentence
+                        tvStatus.text = sentence
                         tts.setSpeechRate(1.0f)
                         speak(sentence)
                     }
@@ -1609,8 +1452,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 "silent" -> { /* 무음 — 텍스트도 유지 */ }
                 else -> {
                     if (sentence != lastSentence && !isSpeaking()) {
-                        lastSentence      = sentence
-                        pendingStatusText = sentence
+                        lastSentence  = sentence
+                        tvStatus.text = sentence
                         tts.setSpeechRate(1.1f)
                         speak(sentence)
                     }
@@ -1620,11 +1463,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     }
 
     private fun handleFail() {
-        inFlightCount.decrementAndGet()
+        isSending.set(false)
         val fails = consecutiveFails.incrementAndGet()
         if (fails == FAIL_WARN_COUNT) {
             runOnUiThread {
-                tvDetected.text = "인식: 실패"
                 tvStatus.text = "⚠ 분석 실패 — 주의하세요"
                 if (!isSpeaking()) speak("분석에 문제가 생겼어요. 주의해서 이동하세요.")
             }
@@ -1712,8 +1554,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     handler.post { scheduleAutoListen() }
                 }
                 currentMediaPlayer = mp
-                val pending = pendingStatusText
-                if (pending.isNotEmpty()) { pendingStatusText = ""; runOnUiThread { tvStatus.text = pending } }
                 mp.start()
             } catch (_: Exception) {
                 isElevenLabsSpeaking = false
@@ -1727,16 +1567,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     /** 직전 프레임과의 시간 간격으로 FPS 계산 + 스파크라인 업데이트 */
     private fun calcFps(): String {
         val now = System.currentTimeMillis()
-        val instant = if (lastFrameDoneTime > 0L && now > lastFrameDoneTime) {
+        val fps = if (lastFrameDoneTime > 0L && now > lastFrameDoneTime) {
             1000.0f / (now - lastFrameDoneTime)
         } else 0.0f
         lastFrameDoneTime = now
-        currentFps = instant
+        currentFps = fps
 
-        // 최근 10프레임 이동평균 — 동시 요청으로 인한 순간 spike 완화
+        // 최근 10프레임 FPS 기록
         if (fpsHistory.size >= 10) fpsHistory.removeFirst()
-        fpsHistory.addLast(instant)
-        val fps = fpsHistory.average().toFloat()
+        fpsHistory.addLast(fps)
 
         val fpsStr = if (fps >= 10f) "%.0f".format(fps) else "%.1f".format(fps)
         return fpsStr
@@ -1758,33 +1597,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             tts.setSpeechRate(1.1f)
             // TTS 종료 후 700ms 침묵 — 말 끝나자마자 다음 말 시작 방지
             tts.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
-                override fun onStart(uid: String?) {
-                    val text = pendingStatusText
-                    if (text.isNotEmpty()) {
-                        pendingStatusText = ""
-                        runOnUiThread { tvStatus.text = text }
-                    }
-                }
+                override fun onStart(uid: String?) {}
                 override fun onDone(uid: String?) {
                     speakCooldownUntil = System.currentTimeMillis() + 700L
                     handler.postDelayed({
                         ttsBusy.set(false)
-                        if (awaitingStartConfirm) {
-                            handler.postDelayed({
-                                if (awaitingStartConfirm && !isListening) startListening()
-                            }, 600L)
-                        } else {
-                            scheduleAutoListen()
-                        }
+                        scheduleAutoListen()
                     }, 700)
                 }
                 @Deprecated("Deprecated in Java")
-                override fun onError(uid: String?) {
-                    ttsBusy.set(false)
-                    if (awaitingStartConfirm && !isListening) {
-                        handler.postDelayed({ startListening() }, 600L)
-                    }
-                }
+                override fun onError(uid: String?) {}
             })
             handler.postDelayed({ promptAutoStart() }, 1000)
         }
@@ -1792,11 +1614,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     private fun promptAutoStart() {
         awaitingStartConfirm = true
-        speakBuiltIn(
-            "보이스가이드예요. " +
-            "시작 버튼을 누르거나 '네'라고 말하면 장애물 안내를 시작해요. " +
-            "'찾기', '확인', '질문' 같은 음성 명령도 사용할 수 있어요."
-        )
+        speakBuiltIn("음성 안내를 시작할까요? 네 또는 아니오로 말씀해주세요.")
+        handler.post(object : Runnable {
+            override fun run() {
+                if (tts.isSpeaking) {
+                    handler.postDelayed(this, 200)
+                } else {
+                    handler.postDelayed({ if (awaitingStartConfirm) startListening() }, 600)
+                }
+            }
+        })
     }
 
     override fun onRequestPermissionsResult(
@@ -1806,14 +1633,20 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         when (requestCode) {
             PERM_CODE -> if (grantResults.all { it == PackageManager.PERMISSION_GRANTED }) startCamera()
             PERM_CODE_LOCATION -> {
-                if (hasLocationPerm()) {
-                    Log.d("VG_GPS", "location permission granted fine=${hasPerm(Manifest.permission.ACCESS_FINE_LOCATION)} coarse=${hasPerm(Manifest.permission.ACCESS_COARSE_LOCATION)}")
+                if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
                     locationPermissionCallback?.invoke()
                 } else {
-                    Log.w("VG_GPS", "location permission denied")
                     speak("위치 권한이 없어요. 설정에서 허용해 주세요.")
                 }
                 locationPermissionCallback = null
+            }
+            PERM_CODE_SMS -> {
+                if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+                    smsPermissionCallback?.invoke()
+                } else {
+                    speak("SMS 권한이 없어요. SOS 기능이 제한됩니다.")
+                }
+                smsPermissionCallback = null
             }
         }
     }
