@@ -2,6 +2,32 @@
 
 ---
 
+## 2026-05-04 (들고있는것 모드 — 손에 든 물건 / 바로 앞 물건 인식)
+
+### 신규 기능 — "손에 든 게 뭐야?" 즉시 응답
+
+- `sentence.py`: `build_held_sentence()` 추가
+  - `distance_m < 1.0` → "손에 들고 있는 건 ___예요/이에요." (bbox 12% 이상 = SentenceBuilder 기준과 일치)
+  - `1.0 ≤ distance_m < 2.0` → "바로 앞에 ___이/가 있어요."
+  - `2.0 ≤ distance_m < 3.0` → "가까이에 ___이/가 있어요." (미터 수치 제거 — bbox 기반 추정 오차로 부정확)
+  - `3.0m 이상` → "손에 든 물건이나 바로 앞에 뭔가 없어 보여요."
+  - 내부 헬퍼 `_i_eyo()` 추가 — "___예요/이에요" 어미 자동 선택
+
+- `routes.py`: `mode == "들고있는것"` 분기 추가 (`if mode == "질문":` 앞에 삽입)
+  - `build_held_sentence` import 추가
+  - `alert_mode = "critical"` (사용자 명시 요청 → 항상 즉각 안내)
+
+- `VoiceGuideConstants.kt`: `STT_KEYWORDS`에 `"들고있는것"` 항목 추가
+  - 트리거 키워드: "손에 든 게 뭐야", "들고 있는 거 뭐야", "바로 앞에 뭐 있어" 등
+  - "이거 뭐야", "이게 뭐야"를 `"확인"` 항목에서 `"들고있는것"`으로 이동
+
+- `MainActivity.kt`:
+  - `when(mode)` 블록에 `"들고있는것"` 케이스 추가
+  - `captureAndProcessAsHeld()` 함수 추가 (`captureAndProcessAsQuestion()` 동일 패턴)
+  - `sendToServerWithMode()` 재사용 — 수정 없음
+
+---
+
 ## 2026-05-02 (FPS 10+ 달성 — 서버 경량화 + Android 파이프라인 개선)
 
 ### 서버 모델 경량화 (DEPTH_OFF + max_det=8)

@@ -41,6 +41,7 @@ class YoloDetector(context: Context) {
 
     private val env = OrtEnvironment.getEnvironment()  // ONNX 실행 환경 (앱당 1개)
     private val session: OrtSession                    // 모델 세션 (추론 단위)
+    private val inputName: String
     private val inputSize   = 640       // YOLO 입력 해상도 (640×640)
     private val confThreshold = 0.25f   // 모바일 카메라 흔들림/어두운 환경에서 놓침을 줄이기 위해 완화
     private val iouThreshold  = 0.45f   // NMS IoU 임계값: 겹치는 박스 제거 기준
@@ -65,6 +66,7 @@ class YoloDetector(context: Context) {
             android.util.Log.d("VG_PERF", "CPU 2스레드 추론 — $modelName")
         }
         session = env.createSession(bytes, opts)
+        inputName = session.inputNames.iterator().next()
     }
 
     fun detect(bitmap: Bitmap): List<Detection> {
@@ -88,29 +90,32 @@ class YoloDetector(context: Context) {
         val inputBuffer = bitmapToNCHW(letterboxed)
         letterboxed.recycle()
 
-        // ONNX 세션에 입력 이름 확인 (YOLO11은 보통 "images")
-        val inputName = session.inputNames.iterator().next()
         // 텐서 shape: [1, 3, 640, 640] = [batch, RGB채널, H, W]
         val tensor = OnnxTensor.createTensor(
             env, inputBuffer, longArrayOf(1, 3, inputSize.toLong(), inputSize.toLong())
         )
 
-        // 추론 실행
-        val output = session.run(mapOf(inputName to tensor))
-        val outputTensor = output[0] as ai.onnxruntime.OnnxTensor
+        try {
+            // 추론 실행
+            val output = session.run(mapOf(inputName to tensor))
+            try {
+                val outputTensor = output[0] as ai.onnxruntime.OnnxTensor
 
-        // YOLO 출력 shape: [1, numFeatures, 8400]
-        // numFeatures = 4(bbox) + 클래스 수
-        // 8400 = 3가지 스케일 × 각 스케일의 격자 수 합 (20×20 + 40×40 + 80×80)
-        val shape       = outputTensor.info.shape
-        val numFeatures = shape[1].toInt()  // 84(COCO80) 또는 85(indoor81)
-        val numDet      = shape[2].toInt()  // 8400
-        val flatBuf     = outputTensor.floatBuffer  // 1D float 배열
+                // YOLO 출력 shape: [1, numFeatures, 8400]
+                // numFeatures = 4(bbox) + 클래스 수
+                // 8400 = 3가지 스케일 × 각 스케일의 격자 수 합 (20×20 + 40×40 + 80×80)
+                val shape       = outputTensor.info.shape
+                val numFeatures = shape[1].toInt()  // 84(COCO80) 또는 85(indoor81)
+                val numDet      = shape[2].toInt()  // 8400
+                val flatBuf     = outputTensor.floatBuffer  // 1D float 배열
 
-        tensor.close()
-        output.close()
-
-        return postProcess(flatBuf, numFeatures, numDet, padX, padY, scaledW, scaledH)
+                return postProcess(flatBuf, numFeatures, numDet, padX, padY, scaledW, scaledH)
+            } finally {
+                output.close()
+            }
+        } finally {
+            tensor.close()
+        }
     }
 
     /**

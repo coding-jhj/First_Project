@@ -69,6 +69,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // ── UI 뷰 참조 ─────────────────────────────────────────────────────
     private lateinit var tts: TextToSpeech
     private lateinit var tvStatus: TextView      // 현재 안내 문장 표시
+    private lateinit var tvDetected: TextView    // 탐지된 물체 목록 표시
     private lateinit var tvMode: TextView        // 현재 모드 + 카메라 방향 표시
     private lateinit var btnToggle: Button       // 분석 시작/중지
     private lateinit var btnStt: Button          // 음성 명령 버튼
@@ -102,7 +103,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private val VOTE_WINDOW    = 3
     private val VOTE_MIN_COUNT = 2
     private val ALWAYS_PASS    = setOf("자동차","오토바이","버스","트럭","기차","자전거",
-                                       "칼","가위","개","말","곰","코끼리")
+                                       "칼","가위","개","말","곰","코끼리","계단")
 
     private val classLastSpoken = mutableMapOf<String, Long>()
     private val CLASS_COOLDOWN_MS = 5000L  // 음성 안내 후 같은 사물 재발화 간격
@@ -220,6 +221,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // ── ElevenLabs MediaPlayer (겹침 방지용 단일 인스턴스) ───────────────
     private var currentMediaPlayer: android.media.MediaPlayer? = null
     @Volatile private var isElevenLabsSpeaking = false
+    @Volatile private var pendingStatusText = ""  // TTS 재생 시작 시점에 tvStatus 동기화
     private val ttsExecutor = Executors.newSingleThreadExecutor()
     // 요청 ID: 네트워크 응답이 왔을 때 최신 요청인지 확인 (stale 재생 방지)
     private val ttsRequestId = java.util.concurrent.atomic.AtomicInteger(0)
@@ -254,7 +256,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         private const val DEFAULT_SERVER_URL =
             "https://voiceguide-1063164560758.asia-northeast3.run.app"
         private const val PREF_LOCATIONS   = "saved_locations"  // 저장 장소 JSON 배열 키
-        private const val INTERVAL_MS      = 100L          // 캡처 간격: 10fps 목표
+        private const val INTERVAL_MS      = 50L           // 캡처 간격: 50ms — isSending 게이트가 실제 fps 제어
         private const val MAX_ON_DEVICE_IN_FLIGHT = 3      // 온디바이스 동시 추론 최대 수
         private const val MAX_SERVER_IN_FLIGHT    = 4      // 서버 동시 요청 최대 수
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
@@ -272,6 +274,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         tts = TextToSpeech(this, this)
 
         tvStatus    = findViewById(R.id.tvStatus)
+        tvDetected  = findViewById(R.id.tvDetected)
         tvMode      = findViewById(R.id.tvMode)
         btnToggle   = findViewById(R.id.btnToggle)
         btnStt      = findViewById(R.id.btnStt)
@@ -579,6 +582,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }
 
         when (mode) {
+            "들고있는것" -> {
+                speak("확인할게요.")
+                captureAndProcessAsHeld()
+            }
             // ── 핵심 버그 수정: 질문 모드 즉시 캡처 ──────────────────────────
             // 기존 문제: "지금 뭐 있어?" → else 분기 → "장애물 모드." 말하고 끝
             // 수정: 즉시 이미지 캡처 → 서버에 mode="질문" 전송 → tracker 상태 포함 응답
@@ -1176,6 +1183,25 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     }
 
     /**
+     * 들고있는것 모드 전용 즉시 캡처.
+     * 서버에 mode="들고있는것" 전송 → 가장 가까운 물건 기준 응답을 받음.
+     */
+    private fun captureAndProcessAsHeld() {
+        val file = File.createTempFile("vg_h_", ".jpg", cacheDir)
+        imageCapture?.takePicture(
+            ImageCapture.OutputFileOptions.Builder(file).build(),
+            cameraExecutor,
+            object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                    sendToServerWithMode(file, "들고있는것", nextRequestId())
+                }
+                override fun onError(e: ImageCaptureException) {
+                    speak("사진을 찍지 못했어요.")
+                }
+            })
+    }
+
+    /**
      * 특정 모드로 서버에 전송. 질문 모드 등 currentMode를 바꾸지 않고 1회성 전송 시 사용.
      */
     private fun sendToServerWithMode(imageFile: File, mode: String, requestId: String) {
@@ -1275,13 +1301,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 val imgH = bmp.height
 
                 val tInfer = System.currentTimeMillis()
-                val yoloDetections = yoloDetector!!.detect(bmp)
+                val detector = yoloDetector
+                    ?: throw IllegalStateException("YOLO detector is not initialized")
+                val yoloDetections = detector.detect(bmp)
                 val stairsDetection = stairsDetector.detect(bmp)
-                val rawDetections = if (stairsDetection != null) {
-                    yoloDetections + stairsDetection
-                } else {
-                    yoloDetections
-                }
+                val rawDetections = stairsDetection?.let { yoloDetections + it } ?: yoloDetections
                 val inferMs = System.currentTimeMillis() - tInfer
 
                 val tDedup = System.currentTimeMillis()
@@ -1313,7 +1337,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                                   "요청ID : ${requestId.takeLast(6)}\n" +
                                   "FPS    : ${fps}\n" +
                                   "디코딩 : ${decodeMs}ms\n" +
-                                  "YOLO   : ${inferMs}ms\n" +
+                                  "추론   : ${inferMs}ms\n" +
                                   "후처리 : ${dedupMs}ms\n" +
                                   "전체   : ${totalMs}ms\n" +
                                   "탐지수 : raw=${rawDetections.size} → ${voted.size}"
@@ -1324,7 +1348,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 // imageFile은 finally에서 삭제 (catch의 서버 fallback이 먼저 파일 필요)
 
                 Log.d("VG_DETECT", "=== 탐지 결과 ===")
-                Log.d("VG_DETECT", "raw: ${rawDetections.size}개 → dedup: ${voted.size}개")
+                Log.d("VG_DETECT", "raw: ${rawDetections.size}개 (yolo=${yoloDetections.size}, stairs=${if (stairsDetection != null) 1 else 0}) → dedup: ${voted.size}개")
                 voted.forEachIndexed { i, d ->
                     Log.d("VG_DETECT", "  [$i] ${d.classKo} | conf=${String.format("%.2f", d.confidence)} | cx=${String.format("%.2f", d.cx)} | w=${String.format("%.2f", d.w)} h=${String.format("%.2f", d.h)} | area=${String.format("%.3f", d.w * d.h)}")
                 }
@@ -1555,8 +1579,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             System.currentTimeMillis() < suppressPeriodicUntil) "silent" else alertMode
 
         runOnUiThread {
+            tvDetected.text = detectedText
             if (sentence == "주변에 장애물이 없어요.") {
-                tvStatus.text = "장애물 없음"
+                if (!isSpeaking()) tvStatus.text = "장애물 없음"
                 return@runOnUiThread
             }
             lastDetectionTime = System.currentTimeMillis()
@@ -1566,11 +1591,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     val now = System.currentTimeMillis()
                     if (sentence != lastSentence || now - lastCriticalTime > 8000L) {
                         val isVehicleDanger = ALWAYS_PASS.any { sentence.contains(it) }
-                        // 차량·계단 긴급이 아닌 경우 TTS 재생 중이면 끊지 않음
                         if (!isVehicleDanger && isSpeaking()) return@runOnUiThread
                         lastSentence     = sentence
                         lastCriticalTime = now
-                        tvStatus.text    = sentence
+                        pendingStatusText = sentence  // onStart/ElevenLabs play 시점에 UI 업데이트
                         tts.setSpeechRate(1.0f)
                         if (isVehicleDanger) {
                             speakBuiltIn(sentence, immediate = true)
@@ -1580,11 +1604,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     }
                 }
                 "beep" -> {
-                    // 사용자 인터뷰 Q11: "비프음보다 말로 설명하는 것이 편함"
-                    // → 비프음 대신 거리 정보 포함 음성으로 전달 (lastSentence dedup 적용)
                     if (sentence != lastSentence && !isSpeaking()) {
-                        lastSentence  = sentence
-                        tvStatus.text = sentence
+                        lastSentence      = sentence
+                        pendingStatusText = sentence
                         tts.setSpeechRate(1.0f)
                         speak(sentence)
                     }
@@ -1592,8 +1614,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 "silent" -> { /* 무음 — 텍스트도 유지 */ }
                 else -> {
                     if (sentence != lastSentence && !isSpeaking()) {
-                        lastSentence  = sentence
-                        tvStatus.text = sentence
+                        lastSentence      = sentence
+                        pendingStatusText = sentence
                         tts.setSpeechRate(1.1f)
                         speak(sentence)
                     }
@@ -1607,6 +1629,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         val fails = consecutiveFails.incrementAndGet()
         if (fails == FAIL_WARN_COUNT) {
             runOnUiThread {
+                tvDetected.text = "인식: 실패"
                 tvStatus.text = "⚠ 분석 실패 — 주의하세요"
                 if (!isSpeaking()) speak("분석에 문제가 생겼어요. 주의해서 이동하세요.")
             }
@@ -1694,6 +1717,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     handler.post { scheduleAutoListen() }
                 }
                 currentMediaPlayer = mp
+                val pending = pendingStatusText
+                if (pending.isNotEmpty()) { pendingStatusText = ""; runOnUiThread { tvStatus.text = pending } }
                 mp.start()
             } catch (_: Exception) {
                 isElevenLabsSpeaking = false
@@ -1738,7 +1763,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             tts.setSpeechRate(1.1f)
             // TTS 종료 후 700ms 침묵 — 말 끝나자마자 다음 말 시작 방지
             tts.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
-                override fun onStart(uid: String?) {}
+                override fun onStart(uid: String?) {
+                    val text = pendingStatusText
+                    if (text.isNotEmpty()) {
+                        pendingStatusText = ""
+                        runOnUiThread { tvStatus.text = text }
+                    }
+                }
                 override fun onDone(uid: String?) {
                     speakCooldownUntil = System.currentTimeMillis() + 700L
                     handler.postDelayed({

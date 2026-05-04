@@ -112,25 +112,20 @@ object SentenceBuilder {
             val isAnimal  = det.classKo in ANIMAL_CLASSES
             val isCaution = det.classKo in CAUTION_CLASSES
 
+            // 위치 뒤 쉼표 → TTS 엔진이 방향+거리 읽은 뒤 짧게 쉬고 물체명 읽음
             val base = when {
-                // 차량: 접근 경고 + 회피 액션
                 det.classKo in VEHICLE_CLASSES ->
-                    "조심! ${locStr}에 ${det.classKo}${ig} 접근 중이에요. $action."
-                // 동물: 주의 어조 + 회피 액션
+                    "조심! ${locStr}에, ${det.classKo}${ig} 접근 중이에요. $action."
                 isAnimal ->
-                    "조심! ${locStr}에 ${det.classKo}${ig} 있어요. 천천히 $action."
-                // 생활 물체: 크기·거리 무관, 액션 없이 위치만 안내
+                    "조심! ${locStr}에, ${det.classKo}${ig} 있어요. 천천히 $action."
                 det.classKo in EVERYDAY_CLASSES ->
-                    "${locStr}에 ${det.classKo}${ig} 있어요."
-                // 주의(노란 bbox) 물체: 위치 + 회피 액션
+                    "${locStr}에, ${det.classKo}${ig} 있어요."
                 isCaution ->
-                    "${locStr}에 ${det.classKo}${ig} 있어요. $action."
-                // 가까운 일반 물체: 위치 + 액션 ("위험!" 없이)
+                    "${locStr}에, ${det.classKo}${ig} 있어요. $action."
                 areaRatio > 0.12f ->
-                    "${locStr}에 ${det.classKo}${ig} 있어요. $action."
-                // 그 외 멀리: 위치만
+                    "${locStr}에, ${det.classKo}${ig} 있어요. $action."
                 else ->
-                    "${locStr}에 ${det.classKo}${ig} 있어요."
+                    "${locStr}에, ${det.classKo}${ig} 있어요."
             }
 
             // 두 번째 물체는 "~도 있어요" 형태 (첫 번째와 구분)
@@ -189,6 +184,35 @@ object SentenceBuilder {
             "${target}${ig} 없어요. 다른 곳을 보여주세요. $scene"
         } else {
             "${target}${ig} 없어요. 다른 곳을 보여주세요."
+        }
+    }
+
+    // ── 들고있는것 모드: 손에 든 / 바로 앞 물건 식별 ─────────────────────────
+
+    /**
+     * 가장 가까운 물체를 기준으로 손에 든 물건 또는 바로 앞 물건 안내.
+     * sentence.py의 build_held_sentence()와 동일 정책 — 미터 수치 없이 서술형으로만 안내.
+     *
+     * bbox 면적 기준:
+     *   area > 0.12  (dist < 1.0m) → "손에 들고 있는 건 ___예요/이에요."
+     *   area > 0.03  (dist < 2.0m) → "바로 앞에 ___이/가 있어요."
+     *   area > 0.013 (dist < 3.0m) → "가까이에 ___이/가 있어요."
+     *   그 외             → "손에 든 물건이나 바로 앞에 뭔가 없어 보여요."
+     */
+    fun buildHeld(detections: List<Detection>): String {
+        if (detections.isEmpty()) return "손에 든 물건이나 바로 앞에 뭔가 없어 보여요."
+
+        val closest = detections.maxByOrNull { it.w * it.h } ?: return "손에 든 물건이나 바로 앞에 뭔가 없어 보여요."
+        val area = closest.w * closest.h
+        val name = closest.classKo
+        val ig   = josaIGa(name)
+        val ie   = josaIEyo(name)
+
+        return when {
+            area > 0.12f  -> "손에 들고 있는 건 ${name}${ie}."
+            area > 0.03f  -> "바로 앞에 ${name}${ig} 있어요."
+            area > 0.013f -> "가까이에 ${name}${ig} 있어요."
+            else          -> "손에 든 물건이나 바로 앞에 뭔가 없어 보여요."
         }
     }
 
@@ -269,6 +293,13 @@ object SentenceBuilder {
         if (word.isEmpty()) return "은"
         val last = word.last()
         return if (last in '가'..'힣' && (last.code - 0xAC00) % 28 != 0) "은" else "는"
+    }
+
+    /** 술어 어미: "사과예요", "컵이에요" — sentence.py의 _i_eyo()와 동일 */
+    fun josaIEyo(word: String): String {
+        if (word.isEmpty()) return "이에요"
+        val last = word.last()
+        return if (last in '가'..'힣' && (last.code - 0xAC00) % 28 != 0) "이에요" else "예요"
     }
 
     /** 을/를 조사: "의자를", "책을" */
