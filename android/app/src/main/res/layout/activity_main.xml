@@ -90,7 +90,7 @@
                 android:lineSpacingMultiplier="1.4"
                 android:paddingBottom="10dp"
                 android:importantForAccessibility="yes"
-                android:accessibilityLiveRegion="polite" />
+                android:accessibilityLiveRegion="assertive" />
 
             <!-- 텍스트 하단 페이드아웃 오버레이 -->
             <View

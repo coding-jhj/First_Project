@@ -220,6 +220,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // ── ElevenLabs MediaPlayer (겹침 방지용 단일 인스턴스) ───────────────
     private var currentMediaPlayer: android.media.MediaPlayer? = null
     @Volatile private var isElevenLabsSpeaking = false
+    @Volatile private var pendingStatusText = ""  // TTS 재생 시작 시점에 tvStatus 동기화
     private val ttsExecutor = Executors.newSingleThreadExecutor()
     // 요청 ID: 네트워크 응답이 왔을 때 최신 요청인지 확인 (stale 재생 방지)
     private val ttsRequestId = java.util.concurrent.atomic.AtomicInteger(0)
@@ -254,7 +255,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         private const val DEFAULT_SERVER_URL =
             "https://voiceguide-1063164560758.asia-northeast3.run.app"
         private const val PREF_LOCATIONS   = "saved_locations"  // 저장 장소 JSON 배열 키
-        private const val INTERVAL_MS      = 100L          // 캡처 간격: 10fps 목표
+        private const val INTERVAL_MS      = 50L           // 캡처 간격: 50ms — isSending 게이트가 실제 fps 제어
         private const val MAX_ON_DEVICE_IN_FLIGHT = 3      // 온디바이스 동시 추론 최대 수
         private const val MAX_SERVER_IN_FLIGHT    = 4      // 서버 동시 요청 최대 수
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
@@ -1566,11 +1567,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     val now = System.currentTimeMillis()
                     if (sentence != lastSentence || now - lastCriticalTime > 8000L) {
                         val isVehicleDanger = ALWAYS_PASS.any { sentence.contains(it) }
-                        // 차량·계단 긴급이 아닌 경우 TTS 재생 중이면 끊지 않음
                         if (!isVehicleDanger && isSpeaking()) return@runOnUiThread
                         lastSentence     = sentence
                         lastCriticalTime = now
-                        tvStatus.text    = sentence
+                        pendingStatusText = sentence  // onStart/ElevenLabs play 시점에 UI 업데이트
                         tts.setSpeechRate(1.0f)
                         if (isVehicleDanger) {
                             speakBuiltIn(sentence, immediate = true)
@@ -1580,11 +1580,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     }
                 }
                 "beep" -> {
-                    // 사용자 인터뷰 Q11: "비프음보다 말로 설명하는 것이 편함"
-                    // → 비프음 대신 거리 정보 포함 음성으로 전달 (lastSentence dedup 적용)
                     if (sentence != lastSentence && !isSpeaking()) {
-                        lastSentence  = sentence
-                        tvStatus.text = sentence
+                        lastSentence      = sentence
+                        pendingStatusText = sentence
                         tts.setSpeechRate(1.0f)
                         speak(sentence)
                     }
@@ -1592,8 +1590,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 "silent" -> { /* 무음 — 텍스트도 유지 */ }
                 else -> {
                     if (sentence != lastSentence && !isSpeaking()) {
-                        lastSentence  = sentence
-                        tvStatus.text = sentence
+                        lastSentence      = sentence
+                        pendingStatusText = sentence
                         tts.setSpeechRate(1.1f)
                         speak(sentence)
                     }
@@ -1694,6 +1692,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     handler.post { scheduleAutoListen() }
                 }
                 currentMediaPlayer = mp
+                val pending = pendingStatusText
+                if (pending.isNotEmpty()) { pendingStatusText = ""; runOnUiThread { tvStatus.text = pending } }
                 mp.start()
             } catch (_: Exception) {
                 isElevenLabsSpeaking = false
@@ -1738,7 +1738,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             tts.setSpeechRate(1.1f)
             // TTS 종료 후 700ms 침묵 — 말 끝나자마자 다음 말 시작 방지
             tts.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
-                override fun onStart(uid: String?) {}
+                override fun onStart(uid: String?) {
+                    val text = pendingStatusText
+                    if (text.isNotEmpty()) {
+                        pendingStatusText = ""
+                        runOnUiThread { tvStatus.text = text }
+                    }
+                }
                 override fun onDone(uid: String?) {
                     speakCooldownUntil = System.currentTimeMillis() + 700L
                     handler.postDelayed({
