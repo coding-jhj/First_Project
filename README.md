@@ -1,126 +1,315 @@
-﻿# VoiceGuide
+# VoiceGuide — 시각장애인 보행 보조 앱
 
-VoiceGuide는 시각장애인 보행 보조를 목표로 한 Android 앱입니다. 카메라로 주변 장애물을 탐지하고, 방향과 대략적 거리를 한국어 음성으로 안내합니다.
+> KDT AI Human 3팀 | 프로젝트 기간 2026-04-24 ~ 2026-05-13
 
-이 저장소의 기준은 "기능을 많이 적기"가 아니라 "실제로 실행하고 설명할 수 있는 기능만 문서에 적기"입니다.
+실시간 카메라 영상으로 주변 장애물·위험 요소를 탐지하고 한국어 음성으로 안내하는 Android 앱입니다.  
+온디바이스(폰 단독) 추론과 서버(GCP Cloud Run) 추론 두 가지 경로를 지원하며, 서버 연동 시 Depth Anything V2로 정밀 거리를 추정합니다.
 
-## 현재 MVP
+---
 
-| 상태 | 기능 | 기준 |
+## 목차
+
+1. [아키텍처](#아키텍처)
+2. [기능 목록](#기능-목록)
+3. [기술 스택](#기술-스택)
+4. [서버 실행](#서버-실행)
+5. [Android 앱 실행](#android-앱-실행)
+6. [API 명세](#api-명세)
+7. [모델 설명](#모델-설명)
+8. [테스트 현황](#테스트-현황)
+9. [알려진 이슈 및 개선 계획](#알려진-이슈-및-개선-계획)
+10. [프로젝트 구조](#프로젝트-구조)
+
+---
+
+## 아키텍처
+
+```
+Android 앱 (Kotlin)
+ ├─ 온디바이스 경로 ─────────────────────────────────────────────
+ │    CameraX 캡처 → yolo11n.onnx (ONNX Runtime) → SentenceBuilder.kt → TTS
+ │
+ └─ 서버 경로 (WiFi/LTE) ────────────────────────────────────────
+      이미지 JPEG 업로드 (480px, 65% 압축)
+           ↓
+      FastAPI (GCP Cloud Run)
+       ├─ YOLO26s 탐지 (imgsz=320)           ← 병렬 실행
+       └─ Depth Anything V2 ViT-S 거리 추정  ←
+           ↓
+      NLG (sentence.py) → JSON 응답 → Android TTS 재생
+```
+
+- **온디바이스**: 서버 없이 폰 단독 동작. 배터리·발열 고려해 700ms 간격 추론
+- **서버 연동**: Depth V2로 정밀 거리 추정. 4프레임당 1회 Depth 실행 후 캐시 재사용
+- **정책 SSOT**: `policy.json` 1개로 Android·서버 NLG 규칙 동기화 (`GET /api/policy`)
+
+---
+
+## 기능 목록
+
+### 동작 확인된 기능
+
+| 기능 | 모드 키워드 | 설명 |
 |---|---|---|
-| 핵심 MVP 1 | 장애물 안내 | 주변 장애물을 탐지하고 방향, 대략 거리, 회피 안내를 말한다 |
-| 핵심 MVP 2 | 물건찾기 | "가방 찾아줘"처럼 요청한 물체가 보이면 방향과 대략 거리를 말한다 |
-| 핵심 MVP 3 | 물건 확인 | "이거 뭐야?"처럼 카메라가 향한 물체가 무엇인지 말한다 |
-| 공통 기반 | Android ONNX + TTS | 서버가 없어도 기본 3개 기능은 온디바이스로 유지한다 |
-| 서버 보조 | GCP 서버 연동 | `/health`, `/status`, `/dashboard` 연결 상태를 확인한다 |
-| 실험 기능 | OCR, 옷 매칭, SOS, 하차 알림, 신호등, 공간 기억, GPS 대시보드 | 발표에서는 확장/실험 기능으로만 설명 |
+| 장애물 안내 | 장애물 | 위험도 상위 3개 물체를 방향·거리와 함께 안내 |
+| 물건 찾기 | 찾기 | "가방 찾아줘" → 탐지된 물체 중 해당 물체 위치 안내 |
+| 물건 확인 | 확인/질문 | "이거 뭐야?" → 앞에 있는 물체 설명 |
+| 들고 있는 것 확인 | 들고있는것 | 손 앞 가까운 물체 안내 |
+| 차량 경고 | 자동 | 자동차·오토바이·트럭 탐지 시 즉각 경보 |
+| 군중 경고 | 자동 | 사람 5명 이상 탐지 시 혼잡 안내 |
+| 신호등 색 감지 | 자동 | 빨간불/초록불 HSV 색공간 분류 |
+| 안전 경로 제안 | 자동 | 정면 위험 높을 때 좌/우 안전 방향 안내 |
+| 공간 기억 | 자동 | 이전 프레임과 비교해 새로 나타난 물체 안내 |
+| 어두운 환경 감지 | 자동 | 조도 센서로 어두움 감지 후 주의 안내 |
+| 장소 저장/검색 | 저장/위치목록 | GPS 기반 장소 이름 저장 및 목록 조회 |
 
-안전 관련 표현은 과장하지 않습니다. "정확한 거리 측정" 대신 "대략적 거리 추정", "안전 보장" 대신 "보행 보조 정보 제공"이라고 설명합니다.
+### 실험 기능 (동작하나 정확도 개선 중)
 
-## 실행 진입점
+- 계단 감지 (`StairsDetector.kt` 전용 ONNX 모델)
+- 거리 수치 안내 ("약 2미터" 형식)
+- 점자 블록 경로 위 장애물 감지
+- 바닥 위험 감지 (Depth 맵 기반 좁은 통로·울퉁불퉁한 바닥)
 
-| 목적 | 진입점 | 담당 |
-|---|---|---|
-| Android 앱 | `android/` | 김재현 |
-| 서버 API | `src.api.main:app` | 정환주, 임명광 보조 |
-| 서버 라우터 | `src/api/routes.py` | 정환주 |
-| DB/tracker | `src/api/db.py`, `src/api/tracker.py` | 정환주, 임명광 보조 |
-| 프론트엔드/대시보드 | `templates/dashboard.html`, README 첫 화면 | 정환주 |
-| Vision/ML | `src/vision/`, `src/depth/`, `train/`, `tools/benchmark.py` | 신유득 |
-| NLG | `src/nlg/` | 임명광 |
-| Voice/Q&A | `src/voice/`, `docs/06_PRESENTATION_AND_QA.md` | 문수찬 |
+### 예정 기능
 
-중복 서버였던 `server_db/`, `server_db_modified/`은 현재 본 서버가 아닙니다. 참고 코드는 `legacy/` 아래에 보관하며, Android와 GCP 배포는 `src/api/main.py`만 사용합니다.
+옷 색상 매칭, 낙상 감지, 약 알림, 버스 OCR, 하차 알림, 바코드 인식
 
-## 실행 방법
+---
 
-### 서버 (GCP Cloud Run)
+## 기술 스택
 
-현재 배포 주소: `https://voiceguide-1063164560758.asia-northeast3.run.app`
-
-| 엔드포인트 | 용도 |
+| 영역 | 기술 |
 |---|---|
-| `/health` | 서버, DB, Depth fallback 상태 확인 |
-| `/detect` | Android 이미지 분석 요청 |
-| `/status/{session_id}` | 현재 추적 객체와 GPS 상태 확인 |
-| `/dashboard` | 시연용 대시보드 |
+| Android | Kotlin, CameraX, ONNX Runtime, OkHttp |
+| 서버 | Python 3.10, FastAPI, Uvicorn |
+| 비전 | YOLOv11 (ultralytics 8.4.33), Depth Anything V2 ViT-S |
+| NLG | 커스텀 한국어 문장 생성 (조사 자동화 포함) |
+| TTS | Android 내장 TTS / ElevenLabs (고품질) |
+| STT | Android SpeechRecognizer |
+| DB | SQLite (로컬) / PostgreSQL (Supabase, LTE 환경) |
+| 배포 | GCP Cloud Run (asia-northeast3) |
 
-로컬 실행:
+---
 
-```bat
-cd /d C:\VoiceGuide\VoiceGuide
+## 서버 실행
+
+### 로컬 실행
+
+```bash
+# 1. 의존성 설치
+pip install -r requirements.txt
+
+# 2. 환경 변수 설정
+cp .env.example .env
+# .env에 DEPTH_ENABLED=1, SERVER_YOLO_MODEL=yolo26s.pt 설정
+
+# 3. 서버 시작
 uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 ```
 
-GCP 배포:
+**필요 모델 파일** (프로젝트 루트에 위치):
+- `yolo26s.pt` — 커스텀 학습 YOLO 모델 (20MB)
+- `depth_anything_v2_vits.pth` — Depth V2 ViT-S 가중치 (99MB, 없으면 bbox fallback)
 
-```bat
-gcloud run deploy voiceguide --source . --region asia-northeast3 --memory 2Gi --cpu 2 --timeout 120 --allow-unauthenticated --port 8080
+### GCP Cloud Run 배포
+
+```bash
+gcloud run deploy voiceguide \
+  --source . \
+  --project [PROJECT_ID] \
+  --region asia-northeast3 \
+  --allow-unauthenticated
 ```
 
-배포 후 동작 확인:
+> `yolo26s.pt`는 `.gcloudignore`에서 명시적으로 허용되어 빌드 컨텍스트에 포함됩니다.
 
-```bat
-python tools\probe_server_link.py --base https://voiceguide-1063164560758.asia-northeast3.run.app
+### 서버 상태 확인
+
+```
+GET /health
+→ {"status":"ok", "depth_v2":"loaded", "device":"cpu", "db":"ok"}
 ```
 
-### Android 앱
+---
 
-자세한 빌드·실행 방법은 [docs/02_RUN_AND_SETUP.md](docs/02_RUN_AND_SETUP.md)를 참고합니다.
+## Android 앱 실행
 
-요약:
-1. Android Studio에서 `android/` 폴더 열기
-2. `android/app/src/main/res/values/strings.xml`의 `server_url`을 현재 GCP 주소로 수정
-3. 기기 연결 후 Run (또는 APK 빌드 후 설치)
+1. Android Studio에서 `android/` 프로젝트 열기
+2. `assets/yolo11n.onnx` 파일 확인 (온디바이스 추론용)
+3. 앱 실행 후 우상단 설정(⚙) → 서버 URL 입력
+   - 비워두면 온디바이스 전용 모드
+   - 서버 URL 입력 시 Depth V2 정밀 거리 추정 활성화
+4. "▶ 분석 시작" 버튼 또는 음성으로 "시작"
 
-## 팀 역할
+**음성 명령 예시:**
 
-| 이름 | 역할 | 책임 코드/문서 |
-|---|---|---|
-| 정환주 | 팀장, 서버, 프론트엔드 | 일정·MVP 결정, README/docs 최종 검수, `src/api/`, `templates/`, GCP 배포 |
-| 신유득 | Vision, ML | `src/vision/`, `src/depth/`, `src/ocr/`, `train/`, 평가 결과 |
-| 김재현 | Android, UX | `android/app/`, UI 안정화, 권한/발열/TTS 겹침 점검 |
-| 임명광 | NLG, 서버 도움 | `src/nlg/`, 서버 응답 문장, API 문서 보조 |
-| 문수찬 | Voice, Q&A 시트 | `src/voice/`, STT/TTS 검증, 발표 Q&A 시트 |
-
-역할별 작업 지침은 [docs/05_TEAM_PROGRESS.md](docs/05_TEAM_PROGRESS.md)를 기준으로 봅니다.
-
-## 코드 흐름
-
-```text
-Android MainActivity
-  -> 온디바이스 우선: YoloDetector.kt -> SentenceBuilder.kt -> Android TTS
-  -> 서버 사용 시: POST /detect
-       -> src/api/routes.py
-       -> src/depth/depth.py: detect_and_depth()
-       -> src/vision/detect.py: detect_objects()
-       -> src/depth/hazard.py: detect_floor_hazards()
-       -> src/api/tracker.py: SessionTracker.update()
-       -> src/api/db.py: snapshot/GPS 저장
-       -> src/nlg/sentence.py: build_sentence()
-       -> Android TTS
-```
-
-전체 흐름 요약은 [docs/01_PROJECT_OVERVIEW.md](docs/01_PROJECT_OVERVIEW.md)와 [docs/04_ANDROID_AND_ON_DEVICE.md](docs/04_ANDROID_AND_ON_DEVICE.md)에 정리했습니다.
-
-## 핵심 문서
-
-| 문서 | 용도 |
+| 말하는 내용 | 동작 |
 |---|---|
-| [docs/INDEX.md](docs/INDEX.md) | 강사님/팀원용 문서 인덱스 |
-| [docs/01_PROJECT_OVERVIEW.md](docs/01_PROJECT_OVERVIEW.md) | 프로젝트 목적, MVP, 구조 |
-| [docs/02_RUN_AND_SETUP.md](docs/02_RUN_AND_SETUP.md) | 로컬 실행, Android 실행, GCP 배포 |
-| [docs/03_SERVER_AND_GCP.md](docs/03_SERVER_AND_GCP.md) | 서버 구조와 Cloud Run 운영 |
-| [docs/04_ANDROID_AND_ON_DEVICE.md](docs/04_ANDROID_AND_ON_DEVICE.md) | Android 앱과 온디바이스 추론 |
-| [docs/05_TEAM_PROGRESS.md](docs/05_TEAM_PROGRESS.md) | 팀 역할과 진행 요약 |
-| [docs/06_PRESENTATION_AND_QA.md](docs/06_PRESENTATION_AND_QA.md) | 발표 흐름과 예상 Q&A |
-| [docs/07_DEBUG_AND_VALIDATION.md](docs/07_DEBUG_AND_VALIDATION.md) | 디버그, 검증, 실패 사례 |
+| "의자 찾아줘" | 찾기 모드 — 의자 탐지 후 위치 안내 |
+| "이거 뭐야?" | 확인 모드 — 앞 물체 설명 |
+| "중지" | 분석 중지 |
+| "다시 시작" | 분석 재개 |
 
-## 개발 원칙
+---
 
-1. 발표 전에는 기능 추가보다 검증을 우선합니다.
-2. README의 "동작 확인" 항목은 APK나 서버에서 바로 시연 가능해야 합니다.
-3. 서버 진입점은 `src.api.main:app` 하나로 고정합니다.
-4. GCP Cloud Run이 배포 기준입니다. 다른 서버 방식은 현재 발표 기준으로 설명하지 않습니다.
-5. 발표 MVP는 장애물 안내, 물건찾기, 물건 확인 3개로 고정합니다.
-6. 안전 앱이므로 거리, 신호등, 계단, 차량, SOS 기능은 검증 범위를 넘어 과장하지 않습니다.
+## API 명세
+
+### POST /detect
+
+이미지를 분석해 장애물·거리·안내 문장을 반환합니다.
+
+**요청 (multipart/form-data):**
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| image | File | JPEG 이미지 |
+| mode | string | 장애물 / 찾기 / 질문 / 들고있는것 |
+| device_id | string | 세션 식별자 |
+| camera_orientation | string | front / back / left / right |
+| query_text | string | 찾기 모드에서 탐색할 물체명 |
+
+**응답:**
+
+```json
+{
+  "sentence": "12시 방향 가까이 자동차가 있어요. 위험해요!",
+  "alert_mode": "critical",
+  "objects": [{"class_ko": "자동차", "direction": "12시", "distance_m": 1.8}],
+  "hazards": [],
+  "changes": ["사람이 생겼어요"],
+  "process_ms": 85,
+  "perf": {"detect_ms": 60, "tracker_ms": 2, "nlg_ms": 3}
+}
+```
+
+**alert_mode 의미:**
+
+| 값 | 동작 |
+|---|---|
+| critical | 즉각 TTS 재생 (재생 중 끼어들기 가능) |
+| beep | 비프음 (경고 피로 방지) |
+| silent | 무음 (중복 억제, 2.5초 이내 동일 문장) |
+
+---
+
+## 모델 설명
+
+### YOLO26s (서버 전용)
+
+- 기반: YOLOv11s 아키텍처, COCO 80클래스
+- 파라미터: 약 1,000만 개, 22.8 GFLOPs
+- 입력 크기: 320×320 (imgsz=320)
+- 로컬 벤치마크: CPU 기준 평균 **29ms (34 FPS)**
+- 신뢰도: 클래스별 개별 임계값 적용 (차량 0.35, 소형물체 0.65~0.75)
+
+### yolo11n.onnx (온디바이스)
+
+- 기반: YOLOv11n, ONNX 변환
+- 폰 단독 실행 (ONNX Runtime Android)
+- 투표(Voting) 필터: 3프레임 중 2회 이상 탐지된 물체만 안내 (오탐 방지)
+
+### Depth Anything V2 ViT-S
+
+- 단안 카메라 상대적 깊이 추정
+- 서버에서 4프레임당 1회 추론, 나머지는 캐시 재사용
+- bbox 중앙·하단 4개 포인트 샘플링 후 하위 30% 값 사용 (안전 우선)
+
+---
+
+## 테스트 현황
+
+> 테스트 기간: 2026-05-05 기준 실기기 테스트 진행 중 (데이터 축적 중)
+
+### 온디바이스 모드
+
+| 항목 | 결과 |
+|---|---|
+| FPS | 안정적 (목표 10fps 이상 충족) |
+| 사물 탐지 정확도 | 양호 — 의자·사람·가방 등 주요 사물 정상 탐지 |
+| 차량 탐지 | 정상 동작 확인 |
+| TTS 안내 | 정상 발화 |
+
+### 서버 연동 모드
+
+| 항목 | 결과 |
+|---|---|
+| 서버 처리 FPS | 6~7 FPS (목표 10fps 미달, 개선 진행 중) |
+| 차량 탐지 | 정상 동작 확인 |
+| Depth 거리 추정 | bbox 대비 정밀도 향상 확인 |
+| TTS·화면 텍스트 동기화 | 불일치 발생 → 2026-05-05 수정 완료 |
+| 화면 텍스트 안정성 | 빠른 깜빡임 현상 — 개선 진행 중 |
+
+### 음성 명령 인식
+
+| 명령 | 결과 |
+|---|---|
+| "중지" / "다시 시작" | 정상 인식 |
+| "찾아줘" 계열 | 조용한 환경에서 양호 |
+| "이거 뭐야" | 조용한 환경에서 양호 |
+
+---
+
+## 알려진 이슈 및 개선 계획
+
+| 이슈 | 상태 |
+|---|---|
+| 서버 FPS 6~7 (목표 10+) | 개선 중 — 이중 디코딩 제거·imgsz 320 축소 적용 |
+| 화면 큰 글씨 "분석중" 고정 | 수정 완료 (2026-05-05) |
+| 다음 장애물 안내 지연 | 수정 완료 — dedup 시간 5초→2.5초 단축 |
+| 화면 텍스트 빠른 깜빡임 | 개선 필요 |
+| TTS 음성과 화면 텍스트 불일치 | 개선 필요 |
+| Cloud Run 배포 시 yolo26s.pt 누락 | 수정 완료 (2026-05-05) |
+
+---
+
+## 프로젝트 구조
+
+```
+VoiceGuide/
+├── src/
+│   ├── api/
+│   │   ├── main.py          # FastAPI 앱 진입점·워밍업
+│   │   ├── routes.py        # /detect /tts /gps 등 엔드포인트
+│   │   ├── db.py            # SQLite/PostgreSQL 세션·GPS 저장
+│   │   └── tracker.py       # 세션별 물체 이동 추적
+│   ├── vision/
+│   │   └── detect.py        # YOLO 탐지, 방향·거리·위험도 계산
+│   ├── depth/
+│   │   ├── depth.py         # Depth V2 추론, YOLO 병렬 실행
+│   │   └── hazard.py        # 바닥 위험 감지
+│   ├── nlg/
+│   │   ├── sentence.py      # 한국어 안내 문장 생성
+│   │   └── templates.py     # 방향·거리 표현 템플릿
+│   ├── voice/
+│   │   ├── tts.py           # gTTS / ElevenLabs TTS
+│   │   └── stt.py           # Google STT (로컬 데모용)
+│   └── config/
+│       ├── policy.json      # Android·서버 공통 정책 (SSOT)
+│       └── policy.py        # 정책 로더
+├── android/
+│   └── app/src/main/java/com/voiceguide/
+│       ├── MainActivity.kt        # 카메라·STT·TTS·서버 연동 총괄
+│       ├── YoloDetector.kt        # ONNX Runtime 온디바이스 추론
+│       ├── SentenceBuilder.kt     # 온디바이스 NLG
+│       ├── VoiceGuideConstants.kt # COCO 클래스 한국어 매핑·상수
+│       ├── VoicePolicy.kt         # 서버 정책 동기화 클라이언트
+│       ├── BoundingBoxOverlay.kt  # 디버그용 bbox 오버레이
+│       └── StairsDetector.kt      # 계단 전용 탐지기
+├── depth_anything_v2/        # Depth Anything V2 모델 코드
+├── templates/
+│   └── dashboard.html        # 실시간 세션 대시보드
+├── tools/                    # 캘리브레이션·벤치마크 스크립트
+├── train/                    # 파인튜닝 스크립트
+├── tests/                    # pytest 단위 테스트
+├── Dockerfile                # GCP Cloud Run 배포용
+├── .gcloudignore             # gcloud 업로드 필터 (yolo26s.pt 명시 허용)
+└── requirements.txt
+```
+
+---
+
+## 팀
+
+KDT AI Human 3팀 (2026-04-24 ~ 2026-05-13)  
+GitHub: https://github.com/coding-jhj/VoiceGuide  
+서버: https://voiceguide-1063164560758.asia-northeast3.run.app
