@@ -79,7 +79,7 @@ async def get_voice_policy(
 # ── 세션별 마지막 문장 캐시 (TTS 중복 방지) ────────────────────────────────────
 import time as _time
 _last_sentence: dict[str, tuple[str, float]] = {}
-_DEDUP_SECS = 5.0
+_DEDUP_SECS = 2.5
 
 def _normalize_session_id(wifi_ssid: str = "", device_id: str = "") -> str:
     """기기별 대시보드 세션 ID 정규화."""

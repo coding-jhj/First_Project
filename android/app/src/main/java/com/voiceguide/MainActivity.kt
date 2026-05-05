@@ -1632,11 +1632,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         runOnUiThread {
             tvDetected.text = "인식: $sentence"
             if (sentence == "주변에 장애물이 없어요.") {
-                if (!isSpeaking()) tvStatus.text = "장애물 없음"
+                tvStatus.text = "장애물 없음"
                 return@runOnUiThread
             }
             lastDetectionTime = System.currentTimeMillis()
-            // tvStatus는 실제 발화/비프 시점에만 업데이트 — 텍스트·목소리 동기화
+            // tvStatus는 항상 최신 탐지 결과로 업데이트 — silent여도 텍스트는 표시
+            tvStatus.text = sentence
             when (effectiveMode) {
                 "critical" -> {
                     val now = System.currentTimeMillis()
@@ -1645,7 +1646,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         if (!isVehicleDanger && isSpeaking()) return@runOnUiThread
                         lastSentence     = sentence
                         lastCriticalTime = now
-                        pendingStatusText = sentence  // onStart/ElevenLabs play 시점에 UI 업데이트
+                        pendingStatusText = sentence
                         tts.setSpeechRate(1.0f)
                         if (isVehicleDanger) {
                             speakBuiltIn(sentence, immediate = true)
@@ -1662,7 +1663,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         speak(sentence)
                     }
                 }
-                "silent" -> { /* 무음 — 텍스트도 유지 */ }
+                "silent" -> { /* TTS 억제 — tvStatus는 위에서 이미 업데이트됨 */ }
                 else -> {
                     if (sentence != lastSentence && !isSpeaking()) {
                         lastSentence      = sentence
