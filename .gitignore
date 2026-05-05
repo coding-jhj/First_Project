@@ -5,6 +5,7 @@
 *.env
 
 # AI 모델 가중치 (용량 큼 — 별도 공유)
+models/
 *.pth
 *.pt
 *.onnx
@@ -17,6 +18,9 @@ __pycache__/
 *.pyo
 .pytest_cache/
 .ultralytics/
+.cursor/
+.idea/
+.vscode/
 *.egg-info/
 dist/
 build/
