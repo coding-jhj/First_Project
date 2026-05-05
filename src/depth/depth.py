@@ -26,7 +26,7 @@ _DEPTH_DISABLED_VALUES = {"0", "false", "no", "off"}
 # 매 프레임 실행 시 서버 응답 700ms+ → 3프레임에 1번만 실행해서 300ms 이내 목표
 _depth_frame_counter: int = 0
 _last_depth_map: "np.ndarray | None" = None
-_DEPTH_RUN_EVERY: int = 3
+_DEPTH_RUN_EVERY: int = 4
 
 # ── 캘리브레이션 파라미터 ────────────────────────────────────────────────────
 # Depth V2의 출력은 "상대적 깊이"라 직접 미터가 아님
@@ -201,7 +201,7 @@ def detect_and_depth(image_bytes: bytes) -> tuple[list[dict], list[dict], dict]:
     from src.vision.detect import detect_objects
 
     nparr    = np.frombuffer(image_bytes, np.uint8)
-    image_np = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    image_np = cv2.imdecode(nparr, cv2.IMREAD_COLOR)  # 단 1회 디코딩 — 이후 image_np 재사용
 
     global _depth_frame_counter, _last_depth_map
 
@@ -214,11 +214,20 @@ def detect_and_depth(image_bytes: bytes) -> tuple[list[dict], list[dict], dict]:
         run_depth = (_depth_frame_counter % _DEPTH_RUN_EVERY == 1 or _last_depth_map is None)
 
     if depth_enabled and run_depth:
-        # YOLO + Depth V2 병렬 실행 (둘 다 이미지만 입력, 상호 의존 없음)
+        # Depth 입력용 이미지 축소 (480→320px) — ViT 패치 수 감소로 추론 속도 향상
+        depth_input = image_np
+        max_side = max(image_np.shape[:2])
+        if max_side > 320:
+            scale = 320 / max_side
+            dh = int(image_np.shape[0] * scale)
+            dw = int(image_np.shape[1] * scale)
+            depth_input = cv2.resize(image_np, (dw, dh), interpolation=cv2.INTER_AREA)
+
+        # YOLO + Depth V2 병렬 실행 — image_np 재사용으로 이중 디코딩 제거
         _t_start = _time.monotonic()
         with ThreadPoolExecutor(max_workers=2) as ex:
-            yolo_f  = ex.submit(detect_objects, image_bytes)
-            depth_f = ex.submit(_infer_depth_map, image_np)
+            yolo_f  = ex.submit(detect_objects, image_np)
+            depth_f = ex.submit(_infer_depth_map, depth_input)
             objects, scene = yolo_f.result()
             fresh = depth_f.result()
         _elapsed = int((_time.monotonic() - _t_start) * 1000)
@@ -226,9 +235,9 @@ def detect_and_depth(image_bytes: bytes) -> tuple[list[dict], list[dict], dict]:
         if fresh is not None:
             _last_depth_map = fresh
     else:
-        # 캐시 사용 프레임 또는 Depth 비활성화: YOLO만 실행
+        # 캐시 사용 프레임 또는 Depth 비활성화: YOLO만 실행 (image_np 재사용)
         _t_yolo = _time.monotonic()
-        objects, scene = detect_objects(image_bytes)
+        objects, scene = detect_objects(image_np)
         print(f"[PERF] YOLO={int((_time.monotonic() - _t_yolo) * 1000)}ms (depth cache)")
 
     depth_map = _last_depth_map if depth_enabled else None

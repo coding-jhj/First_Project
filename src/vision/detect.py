@@ -378,12 +378,15 @@ def _detect_traffic_light_color(img, x1: int, y1: int, x2: int, y2: int) -> str:
     return "unknown"
 
 
-def detect_objects(image_bytes: bytes) -> tuple[list[dict], dict]:
+def detect_objects(image_input) -> tuple[list[dict], dict]:
     """
     YOLO로 물체를 탐지하고 방향·거리·위험도·색상·신호등 상태를 계산합니다.
 
+    image_input: bytes 또는 np.ndarray(BGR) 모두 허용.
+    detect_and_depth에서 이미 디코딩한 numpy 배열을 재사용해 이중 디코딩을 방지합니다.
+
     처리 순서:
-      1. 이미지 디코딩 + 좌우 flip (mirror 보정)
+      1. 이미지 디코딩(bytes인 경우) + 좌우 flip (mirror 보정)
       2. YOLO 추론 → 모든 bbox 추출
       3. 각 bbox마다: 방향 구역, 면적 기반 거리, 위험도 점수, 경고 레벨 계산
       4. 신호등이면 색상 감지, 모든 물체에 색상 감지 실행
@@ -398,9 +401,11 @@ def detect_objects(image_bytes: bytes) -> tuple[list[dict], dict]:
     import numpy as np
     import cv2
 
-    # 이미지 바이트 → numpy 배열 → OpenCV 이미지
-    nparr = np.frombuffer(image_bytes, np.uint8)
-    img   = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if isinstance(image_input, bytes):
+        nparr = np.frombuffer(image_input, np.uint8)
+        img   = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    else:
+        img = image_input  # 이미 디코딩된 numpy 배열 — 복사 없이 재사용
     h, w  = img.shape[:2]      # 이미지 높이, 너비
 
     def _sanitize_bbox(x1: int, y1: int, x2: int, y2: int) -> tuple[int, int, int, int] | None:

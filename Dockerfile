@@ -32,24 +32,27 @@ RUN pip install --no-cache-dir --upgrade pip && \
         requirements.txt > /tmp/requirements-prod.txt && \
     pip install --no-cache-dir -r /tmp/requirements-prod.txt
 
-# 소스 코드 복사 (모델 파일·학습 데이터는 .dockerignore로 제외)
+# 소스 코드 복사
 COPY src/ ./src/
 COPY templates/ ./templates/
+COPY depth_anything_v2/ ./depth_anything_v2/
 
-# YOLO 모델 빌드 시 미리 다운로드 (첫 요청 지연 방지)
-# 없으면 첫 요청 시 ultralytics가 자동 다운로드
+# YOLO 커스텀 모델 복사 (yolo26s.pt — ultralytics hub에 없어 자동 다운로드 불가)
+COPY yolo26s.pt ./yolo26s.pt
+
+# Depth 모델(99MB)은 git에 없음 → 로컬 실행 시 .env의 DEPTH_ENABLED=1로 자동 사용
+# Cloud Run에 포함하려면: docker build 전에 프로젝트 루트에 파일 위치 후
+#   docker build --build-arg INCLUDE_DEPTH=1 ... 방식 대신
+#   직접 COPY 라인 추가: COPY depth_anything_v2_vits.pth ./
+# 파일 없으면 DEPTH_ENABLED=1이어도 bbox fallback으로 자동 전환 (에러 없음)
+
 ARG SERVER_YOLO_MODEL=yolo26s.pt
 ENV SERVER_YOLO_MODEL=${SERVER_YOLO_MODEL}
-RUN python -c "import os; from ultralytics import YOLO; YOLO(os.environ.get('SERVER_YOLO_MODEL', 'yolo26s.pt'))" 2>/dev/null || echo "YOLO model will be downloaded on first request"
-
-# Depth 모델은 크기(99MB)로 인해 제외 → bbox fallback 사용
-# 모델이 필요하면 Cloud Run에서 GCS 마운트 또는 COPY 추가
 
 # Cloud Run은 PORT 환경변수를 자동 주입 (기본 8080)
-# 로그가 버퍼 없이 즉시 Cloud Logging에 출력됨
 ENV PORT=8080
 ENV PYTHONUNBUFFERED=1
-ENV DEPTH_ENABLED=0
+ENV DEPTH_ENABLED=1
 
 # 단일 워커: Cloud Run은 인스턴스 수평 확장으로 동시성 처리
 CMD uvicorn src.api.main:app --host 0.0.0.0 --port ${PORT}
