@@ -10,6 +10,7 @@ Depth Anything V2를 사용해 이미지 한 장으로 거리를 추정합니다
 
 import os
 import time as _time
+from concurrent.futures import ThreadPoolExecutor
 import torch
 import numpy as np
 
@@ -204,33 +205,41 @@ def detect_and_depth(image_bytes: bytes) -> tuple[list[dict], list[dict], dict]:
 
     global _depth_frame_counter, _last_depth_map
 
-    _t_yolo = _time.monotonic()
-    objects, scene = detect_objects(image_bytes)
-    _yolo_ms = int((_time.monotonic() - _t_yolo) * 1000)
     hazards: list[dict] = []
+    depth_enabled = is_depth_enabled() and _check_model()
+    run_depth = False
 
-    if is_depth_enabled() and _check_model():
+    if depth_enabled:
         _depth_frame_counter += 1
-        # 3프레임마다 1번만 Depth V2 실행 — 나머지는 직전 결과 재사용
-        if _depth_frame_counter % _DEPTH_RUN_EVERY == 1 or _last_depth_map is None:
-            _t_depth = _time.monotonic()
-            fresh = _infer_depth_map(image_np)
-            _depth_ms = int((_time.monotonic() - _t_depth) * 1000)
-            print(f"[PERF] YOLO={_yolo_ms}ms | Depth={_depth_ms}ms (frame#{_depth_frame_counter})")
-            if fresh is not None:
-                _last_depth_map = fresh
-        depth_map = _last_depth_map
-        if depth_map is not None:
-            for obj in objects:
-                x1, y1, x2, y2 = obj["bbox"]
-                dm = _bbox_dist_m(depth_map, x1, y1, x2, y2)
-                obj["distance_m"]   = dm
-                obj["distance"]     = _label(dm)
-                obj["depth_source"] = "v2"
-            hazards = detect_floor_hazards(depth_map)
-        else:
-            for obj in objects:
-                obj["depth_source"] = "bbox"
+        run_depth = (_depth_frame_counter % _DEPTH_RUN_EVERY == 1 or _last_depth_map is None)
+
+    if depth_enabled and run_depth:
+        # YOLO + Depth V2 병렬 실행 (둘 다 이미지만 입력, 상호 의존 없음)
+        _t_start = _time.monotonic()
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            yolo_f  = ex.submit(detect_objects, image_bytes)
+            depth_f = ex.submit(_infer_depth_map, image_np)
+            objects, scene = yolo_f.result()
+            fresh = depth_f.result()
+        _elapsed = int((_time.monotonic() - _t_start) * 1000)
+        print(f"[PERF] YOLO+Depth 병렬={_elapsed}ms (frame#{_depth_frame_counter})")
+        if fresh is not None:
+            _last_depth_map = fresh
+    else:
+        # 캐시 사용 프레임 또는 Depth 비활성화: YOLO만 실행
+        _t_yolo = _time.monotonic()
+        objects, scene = detect_objects(image_bytes)
+        print(f"[PERF] YOLO={int((_time.monotonic() - _t_yolo) * 1000)}ms (depth cache)")
+
+    depth_map = _last_depth_map if depth_enabled else None
+    if depth_map is not None:
+        for obj in objects:
+            x1, y1, x2, y2 = obj["bbox"]
+            dm = _bbox_dist_m(depth_map, x1, y1, x2, y2)
+            obj["distance_m"]   = dm
+            obj["distance"]     = _label(dm)
+            obj["depth_source"] = "v2"
+        hazards = detect_floor_hazards(depth_map)
     else:
         for obj in objects:
             obj["depth_source"] = "bbox"
