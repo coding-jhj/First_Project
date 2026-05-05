@@ -356,8 +356,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         return saved.ifBlank { DEFAULT_SERVER_URL }
     }
 
-    private fun getConfiguredServerUrl(): String =
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_URL, "")?.trim() ?: ""
+    private fun getConfiguredServerUrl(): String {
+        val saved = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_URL, "")?.trim() ?: ""
+        return saved.ifBlank { DEFAULT_SERVER_URL }
+    }
 
     private fun isForceOnDeviceEnabled(): Boolean =
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_FORCE_ON_DEVICE, false)
