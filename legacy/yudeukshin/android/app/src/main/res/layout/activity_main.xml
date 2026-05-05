@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/vg_bg">
+
+    <!-- ── 카메라 프리뷰 (전체 화면) ── -->
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- ── 바운딩박스 오버레이 ── -->
+    <com.voiceguide.BoundingBoxOverlay
+        android:id="@+id/boundingBoxOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- ── 디버그 오버레이: 추론 속도 / FPS ── -->
+    <TextView
+        android:id="@+id/tvDebug"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="80dp"
+        android:layout_marginEnd="12dp"
+        android:padding="7dp"
+        android:text=""
+        android:textSize="11sp"
+        android:textColor="#FFFFFFFF"
+        android:fontFamily="monospace"
+        android:lineSpacingMultiplier="1.5"
+        android:background="#BB000000"
+        android:visibility="gone" />
+
+    <!-- ── 하단 그라데이션 페이드 ── -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="280dp"
+        android:layout_gravity="bottom"
+        android:background="@drawable/bg_camera_gradient" />
+
+    <!-- ── 우상단 설정 아이콘 ── -->
+    <Button
+        android:id="@+id/btnSettings"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="16dp"
+        android:layout_marginEnd="16dp"
+        android:text="⚙"
+        android:textSize="22sp"
+        android:textColor="#FFFFFF"
+        android:background="@drawable/bg_btn_start"
+        android:stateListAnimator="@null"
+        android:elevation="0dp"
+        android:contentDescription="설정 — 서버 URL 및 디버그 모드" />
+
+    <!-- ── 하단 패널 ── -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:orientation="vertical"
+        android:background="@drawable/bg_bottom_panel"
+        android:paddingTop="20dp"
+        android:paddingBottom="20dp"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp">
+
+        <!-- 안내 문장 — 최대 2줄, 하단 페이드아웃 처리 -->
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="76dp">
+
+            <TextView
+                android:id="@+id/tvStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minHeight="76dp"
+                android:maxLines="2"
+                android:ellipsize="end"
+                android:text="분석 시작 버튼을 눌러주세요"
+                android:textSize="24sp"
+                android:textColor="@color/vg_text"
+                android:fontFamily="sans-serif-medium"
+                android:textStyle="bold"
+                android:gravity="center"
+                android:lineSpacingMultiplier="1.4"
+                android:paddingBottom="10dp"
+                android:importantForAccessibility="yes"
+                android:accessibilityLiveRegion="assertive" />
+
+            <!-- 텍스트 하단 페이드아웃 오버레이 -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="32dp"
+                android:layout_gravity="bottom"
+                android:background="@drawable/bg_text_fade"
+                android:importantForAccessibility="no" />
+
+        </FrameLayout>
+
+        <!-- 모드 / FPS — monospace 유지 (FPS 수치 정렬 목적) -->
+        <TextView
+            android:id="@+id/tvMode"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="[장애물] 준비 중..."
+            android:textSize="12sp"
+            android:textColor="@color/vg_text_sub"
+            android:gravity="center"
+            android:paddingBottom="16dp"
+            android:fontFamily="monospace" />
+
+        <!-- 구분선 -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="@color/vg_divider"
+            android:layout_marginBottom="16dp" />
+
+        <!-- 버튼 행 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="64dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <!-- 음성 명령 버튼 — 주 액션: 화면 폭 60%, 롱프레스 시 진동+위치 안내 -->
+            <Button
+                android:id="@+id/btnStt"
+                android:layout_width="0dp"
+                android:layout_height="64dp"
+                android:layout_weight="3"
+                android:layout_marginEnd="12dp"
+                android:text="🎤 음성 명령"
+                android:textSize="18sp"
+                android:fontFamily="sans-serif-medium"
+                android:textStyle="bold"
+                android:textColor="#FFFFFF"
+                android:background="@drawable/bg_btn_mic"
+                android:stateListAnimator="@null"
+                android:elevation="0dp"
+                android:contentDescription="음성 명령 입력 — 길게 누르면 버튼 위치 진동 안내" />
+
+            <!-- 분석 시작/중지 버튼 — 보조 액션 (음성 명령보다 작게) -->
+            <Button
+                android:id="@+id/btnToggle"
+                android:layout_width="0dp"
+                android:layout_height="64dp"
+                android:layout_weight="2"
+                android:text="분석 시작"
+                android:textSize="15sp"
+                android:fontFamily="sans-serif"
+                android:textColor="#FFFFFF"
+                android:background="@drawable/bg_btn_start"
+                android:stateListAnimator="@null"
+                android:elevation="0dp"
+                android:contentDescription="분석 시작 또는 중지" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+</FrameLayout>
