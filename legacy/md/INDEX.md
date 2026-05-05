@@ -39,6 +39,7 @@
 | `05_planning/` | PRD, MVP, 리서치 |
 | `06_presentation/` | 발표 자료, Q&A |
 | `07_debug/` | 탐지/성능/보정 디버그 |
+| `08_daily_summary/` | 날짜별 MD 정리본 |
 
 ## 정리 기준
 
