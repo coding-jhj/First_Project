@@ -2,27 +2,13 @@
 VoiceGuide 바닥 위험 감지 모듈
 ================================
 Depth Anything V2의 깊이 맵을 분석해서
-YOLO가 탐지하지 못하는 계단·낙차·턱·좁은 통로를 감지합니다.
-
-핵심 원리:
-  카메라가 앞을 향할 때,
-  이미지 하단 = 발 바로 앞 바닥 (가까움 = 낮은 depth 값)
-  이미지 상단 = 멀리 있는 바닥 (멀수록 depth 값 큼)
-
-  정상 바닥: 아래→위로 갈수록 depth가 완만하게 증가
-  낙차/계단(하강): 특정 지점에서 depth가 급격히 커짐
-                   → 바닥이 갑자기 멀어짐 = 발 앞이 뚝 떨어짐
-  턱/계단(상승): 특정 지점에서 depth가 급격히 작아짐
-                → 가까운 장애물이 갑자기 등장 = 발 앞에 턱이 있음
+YOLO가 탐지하지 못하는 울퉁불퉁한 길·좁은 통로를 감지합니다.
 """
 
 import numpy as np
 
 _N_BANDS     = 12     # 바닥 영역을 12개 수평 띠로 나눔 (더 세밀할수록 정확하지만 느림)
 _FLOOR_START = 0.40   # 이미지 상단 40%는 분석 제외 (벽·천장·하늘 등 바닥 아닌 영역)
-_DROP_THRESH = 1.2    # 낙차 판별 임계값 (m): 1.2m 이상 갑자기 깊어지면 낙차로 판단
-_STEP_THRESH = 1.0    # 턱 판별 임계값 (m): 1.0m 이상 갑자기 얕아지면 턱으로 판단
-_MAX_WARN_DIST = 4.5  # 경고 최대 거리: 4.5m 이상 먼 곳의 위험은 경고 생략
 
 
 def detect_floor_hazards(depth_map: np.ndarray) -> list[dict]:
@@ -35,7 +21,7 @@ def detect_floor_hazards(depth_map: np.ndarray) -> list[dict]:
 
     Returns:
         list of hazard dict, 각 항목:
-            type       — "drop"(낙차) | "step"(턱) | "narrow"(좁은통로)
+            type       — "uneven"(울퉁불퉁) | "narrow"(좁은통로)
             distance_m — 위험 지점까지 추정 거리(m)
             message    — 한국어 경고 문장 (TTS로 바로 읽을 수 있는 형태)
             risk       — 0.0 ~ 1.0 (높을수록 위험)
@@ -72,11 +58,7 @@ def detect_floor_hazards(depth_map: np.ndarray) -> list[dict]:
 
     hazards: list[dict] = []
 
-    # ── 계단/낙차/턱 감지 제거 (강사님 피드백 — 실내 오탐률 높음) ──────────
-    # 키보드·책상 등 실내 환경에서 Depth 불연속으로 오탐 빈번
-    # → drop/step 감지 완전 제거, uneven/narrow만 유지
-
-    # ── 울퉁불퉁한 길 감지 (낙차·턱 없을 때만) ──────────────────────────
+    # ── 울퉁불퉁한 길 감지 ───────────────────────────────────────────────────
     # 계단처럼 급격한 변화는 없지만 바닥 깊이가 전체적으로 들쭉날쭉한 경우
     # 분산(variance)이 크면 바닥이 고르지 않은 것
     if not hazards and len(band_depths) >= 4:
