@@ -1,50 +1,42 @@
-﻿# VoiceGuide 문서 인덱스
+# VoiceGuide 문서 인덱스
 
-> 기준: 2026-05-02 현재 실행 가능한 MVP, GCP 서버, 새 역할 분담 기준.
+강사님이나 팀원이 빠르게 보기 위한 핵심 문서만 모았습니다.  
+과거 원본 문서는 `legacy/`에 보관하지만, 발표와 점검에 필요한 내용은 아래 문서 안에 통합했습니다.
 
 ## 먼저 볼 문서
 
-| 문서 | 용도 |
-|---|---|
-| [../README.md](../README.md) | 프로젝트 첫 진입, MVP, 실행 명령 |
-| [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) | 폴더 구조와 실행 진입점 |
-| [03_server/README.md](03_server/README.md) | GCP 기준 서버 문서 |
-| [03_server/SERVER_LINK_CHECK_2026-04-30.md](03_server/SERVER_LINK_CHECK_2026-04-30.md) | 임명광 로그 기반 서버/대시보드 확인 결과 |
-| [04_team/TEAM.md](04_team/TEAM.md) | 팀 역할 요약 |
-| [04_team/ROLE_GUIDE.md](04_team/ROLE_GUIDE.md) | 역할별 개발·조사 지침 |
-| [04_team/ANDROID_PERFORMANCE_GUIDE.md](04_team/ANDROID_PERFORMANCE_GUIDE.md) | Android FPS/오탐 개선 지침 |
-| [01_study/FUNCTION_LOGIC_STUDY.md](01_study/FUNCTION_LOGIC_STUDY.md) | 함수별 전체 로직 학습 |
-| [01_study/FUNCTION_DEEP_DIVE.md](01_study/FUNCTION_DEEP_DIVE.md) | 파일별 함수 역할, 입력/출력, 연결 관계 상세 학습 |
-| [06_presentation/QA_SHEET.md](06_presentation/QA_SHEET.md) | 발표 Q&A 시트 |
-
-## 역할별 바로가기
-
-| 담당 | 봐야 할 문서 | 코드 |
+| 순서 | 문서 | 언제 보는가 |
 |---|---|---|
-| 정환주 - 팀장/서버/프론트엔드 | `04_team/SERVER_AND_LEAD_ACTIONS.md`, `03_server/README.md` | `src/api/`, `templates/`, `README.md` |
-| 신유득 - Vision/ML | `01_study/FUNCTION_DEEP_DIVE.md`, `07_debug/DETECTION_DEBUG.md` | `src/vision/`, `src/depth/`, `src/ocr/`, `train/` |
-| 김재현 - Android/UX | `04_team/ANDROID_PERFORMANCE_GUIDE.md`, `01_study/FUNCTION_DEEP_DIVE.md`, `07_debug/PERF_DEBUG.md` | `android/app/` |
-| 임명광 - NLG/서버 도움 | `04_team/ROLE_GUIDE.md`, `01_study/FUNCTION_DEEP_DIVE.md` | `src/nlg/`, `src/api/routes.py` |
-| 문수찬 - Voice/Q&A | `06_presentation/QA_SHEET.md`, `06_presentation/`, `04_team/TEAM_BRIEFING.md` | `src/voice/`, 발표 Q&A 시트 |
+| 1 | `01_PROJECT_OVERVIEW.md` | 프로젝트 목적, MVP, 전체 구조를 설명할 때 |
+| 2 | `02_RUN_AND_SETUP.md` | 서버/Android 실행 방법을 확인할 때 |
+| 3 | `06_PRESENTATION_AND_QA.md` | 발표 전 흐름과 예상 질문을 준비할 때 |
 
-## 문서 폴더
+## 역할별 문서
 
-| 폴더 | 내용 |
+| 담당 | 문서 |
 |---|---|
-| `00_run/` | CMD 실행 절차 |
-| `01_study/` | 코드와 함수 학습 |
-| `02_meetings/` | 회의록, 피드백 |
-| `03_server/` | GCP 서버와 배포 |
-| `04_team/` | 역할, 팀 운영, 체크리스트 |
-| `05_planning/` | PRD, MVP, 리서치 |
-| `06_presentation/` | 발표 자료, Q&A |
-| `07_debug/` | 탐지/성능/보정 디버그 |
+| 팀장/서버 | `03_SERVER_AND_GCP.md`, `05_TEAM_PROGRESS.md` |
+| Android | `04_ANDROID_AND_ON_DEVICE.md` |
+| Vision/ML | `07_DEBUG_AND_VALIDATION.md` |
+| 발표/Q&A | `06_PRESENTATION_AND_QA.md` |
 
-## 정리 기준
+## 현재 문서 구성
 
-- 본 서버는 `src.api.main:app` 하나입니다.
-- 배포 기준은 GCP Cloud Run입니다.
-- 발표 MVP는 장애물 안내, 물건찾기, 물건 확인 3개입니다.
-- `legacy/server_db*`는 참고 코드이며 본 서버가 아닙니다.
-- README의 동작 확인 항목은 실제 시연 가능한 기능만 적습니다.
-- 안전 관련 기능은 검증 범위 밖으로 과장하지 않습니다.
+```text
+docs/
+  INDEX.md
+  01_PROJECT_OVERVIEW.md
+  02_RUN_AND_SETUP.md
+  03_SERVER_AND_GCP.md
+  04_ANDROID_AND_ON_DEVICE.md
+  05_TEAM_PROGRESS.md
+  06_PRESENTATION_AND_QA.md
+  07_DEBUG_AND_VALIDATION.md
+```
+
+## 문서 정리 기준
+
+- `docs/`에는 강사님이 바로 읽을 핵심 문서만 둡니다.
+- 날짜별 기록과 회의록은 `05_TEAM_PROGRESS.md`에 요약합니다.
+- 긴 학습 문서, 실험 로그, 과거 백업은 `legacy/`에 보관합니다.
+- 루트 `README.md`는 GitHub 첫 화면용으로 유지합니다.

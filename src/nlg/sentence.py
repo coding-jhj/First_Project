@@ -14,7 +14,6 @@ VoiceGuide 한국어 문장 생성 모듈
 routes.py에서 호출되는 공개 함수:
   build_sentence()         — 장애물/확인 모드
   build_find_sentence()    — 찾기 모드
-  build_held_sentence()    — 손에 든 물건 / 바로 앞 물건 인식
 """
 
 from src.nlg.templates import (
@@ -100,7 +99,6 @@ def _i_eyo(word: str) -> str:
     """술어 어미: '사과예요', '컵이에요'"""
     return _josa(word, "이에요", "예요")
 
-
 # ── 거리 표현 ─────────────────────────────────────────────────────────────────
 
 def _format_dist(dist_m: float) -> str:
@@ -162,7 +160,7 @@ def _primary(obj: dict, abs_clock: str) -> str:
     )
 
     if is_critical:
-        return f"위험! {loc_str} {name}! 조심!"
+        return f"위험! {direction} 앞 {name}! 조심!"
 
     # 생활 물체: 액션 없이 위치만 안내
     if name in everyday_ko:
@@ -288,7 +286,7 @@ def build_question_sentence(
     """
     parts = []
 
-    # 1. 위험물 긴급 경고
+   # 1. 위험물 긴급 경고
     if scene.get("danger_warning"):
         parts.append(scene["danger_warning"])
 
@@ -310,11 +308,11 @@ def build_question_sentence(
             else:
                 parts.append(f"{direction} {dist_str}에 {name}도 있었어요.")
 
-    # 4. 신호등 정보
+    # 3. 신호등 정보
     if scene.get("traffic_light_msg"):
         parts.append(scene["traffic_light_msg"])
 
-    # 5. 안전 경로
+    # 4. 안전 경로
     if scene.get("safe_direction"):
         parts.append(scene["safe_direction"])
 
@@ -322,7 +320,6 @@ def build_question_sentence(
         return "현재 주변에 장애물이 없어 안전해 보여요."
 
     return " ".join(parts)
-
 
 def build_held_sentence(objects: list[dict]) -> str:
     """손에 들고 있거나 바로 가까이 있는 물건 안내 (held_sentence_m 구간)."""
@@ -347,5 +344,3 @@ def build_held_sentence(objects: list[dict]) -> str:
     if dist_m < h3:
         return f"가까이에 {name}{ig} 있어요."
     return "손에 든 물건이나 바로 앞에 뭔가 없어 보여요."
-
-

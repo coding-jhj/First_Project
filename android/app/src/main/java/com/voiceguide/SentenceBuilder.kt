@@ -62,12 +62,18 @@ object SentenceBuilder {
             val isCaution = det.classKo in VoicePolicy.cautionKo()
 
             val base = when {
-                det.classKo in VoicePolicy.vehicleKo() -> "조심! ${locStr}에, ${det.classKo}${ig} 접근 중이에요. $action."
-                isAnimal -> "조심! ${locStr}에, ${det.classKo}${ig} 있어요. 천천히 $action."
-                det.classKo in VoicePolicy.everydayKo() -> "${locStr}에, ${det.classKo}${ig} 있어요."
-                isCaution -> "${locStr}에, ${det.classKo}${ig} 있어요. $action."
-                areaRatio > VoicePolicy.cautionAreaRatio() -> "${locStr}에, ${det.classKo}${ig} 있어요. $action."
-                else -> "${locStr}에, ${det.classKo}${ig} 있어요."
+                det.classKo in VoicePolicy.vehicleKo() ->
+                    "조심! ${locStr}에, ${det.classKo}${ig} 접근 중이에요. $action."
+                isAnimal ->
+                    "조심! ${locStr}에, ${det.classKo}${ig} 있어요. 천천히 $action."
+                det.classKo in VoicePolicy.everydayKo() ->
+                    "${locStr}에, ${det.classKo}${ig} 있어요."
+                isCaution ->
+                    "${locStr}에, ${det.classKo}${ig} 있어요. $action."
+                areaRatio > VoicePolicy.cautionAreaRatio() ->
+                    "${locStr}에, ${det.classKo}${ig} 있어요. $action."
+                else ->
+                    "${locStr}에, ${det.classKo}${ig} 있어요."
             }
 
             if (originalIdx == 0) base
@@ -82,7 +88,6 @@ object SentenceBuilder {
 
         val sortedByX = detections.sortedBy { it.cx }
         val found = detections.firstOrNull { it.classKo.contains(target) }
-        
         if (found != null) {
             val idx     = sortedByX.indexOf(found)
             val clock   = getStableClock(found.classKo, found.cx, idx)
@@ -98,7 +103,6 @@ object SentenceBuilder {
                 d.w * d.h > targetArea * VoicePolicy.findHazardAreaMultiplier() &&
                 d.w * d.h > VoicePolicy.findHazardAreaRatio()
             }
-            
             return if (closerHazard != null) {
                 val hIdx     = sortedByX.indexOf(closerHazard)
                 val hClock   = getStableClock(closerHazard.classKo, closerHazard.cx, hIdx)
@@ -196,9 +200,18 @@ object SentenceBuilder {
     }
 
     fun extractFindTarget(text: String): String {
-        val remove = listOf("찾아줘", "찾아 줘", "찾아", "어디있어", "어디 있어", "어디야", "어딘지", "어디에 있어", "어디에 있나", "있는지 알려줘", "어디 있나", "어딨어", "어딨나", "위치", "알려줘")
+        val remove = listOf(
+            "찾아줘", "찾아 줘", "찾아", "어디있어", "어디 있어", "어디야",
+            "어딘지", "어디에 있어", "어디에 있나", "있는지 알려줘",
+            "어디 있나", "어딨어", "어딨나", "위치", "알려줘",
+            // 확인 의도 키워드 — 제거 후 target="" 이 됨 → build_sentence() fallback
+            "이건 뭐야", "이게 뭐", "이거 뭐", "뭔지", "뭔데", "뭐지", "뭐야",
+            "이거", "이게", "이건",
+        )
+        // 공백 정규화 후 긴 패턴부터 제거 (부분 겹침 방지)
         var target = text.replace("\\s+".toRegex(), " ").trim()
-        remove.sortedByDescending { it.length }.forEach { target = target.replace(it, "") }
+        remove.sortedByDescending { it.length }
+              .forEach { target = target.replace(it, "") }
         return target.trim()
     }
 }

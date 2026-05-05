@@ -30,7 +30,7 @@ class BoundingBoxOverlay @JvmOverloads constructor(
     private val COLOR_INFO     = Color.parseColor("#43A047")  // 초록 — 정보
     private val COLOR_FOUND    = Color.WHITE                  // 흰색 — 찾기 모드 발견 대상
 
-    // sentence.py _VEHICLE_KO + 계단·낙차 위험 클래스
+    // sentence.py _VEHICLE_KO
     private val CRITICAL_CLASSES = setOf(
         "자동차", "오토바이", "트럭", "기차", "자전거",
         "곰", "코끼리", "계단"
