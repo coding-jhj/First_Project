@@ -61,9 +61,17 @@ def process_image(image, mode: str = "장애물"):
     for i, obj in enumerate(objects):
         x1, y1, x2, y2 = obj["bbox"]
         color = colors[i % len(colors)]
-        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+        obb = obj.get("obb_xyxyxyxy") or obj.get("obb")
+        if obb:
+            pts = np.array(obb, dtype=np.int32).reshape(-1, 2)
+            cv2.polylines(annotated, [pts], isClosed=True, color=color, thickness=2)
+            label_x = int(pts[:, 0].min())
+            label_y = int(pts[:, 1].min())
+        else:
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+            label_x, label_y = x1, y1
         label = f"{obj['class_ko']}  {obj['distance_m']}m  위험도:{obj['risk_score']}"
-        cv2.putText(annotated, label, (x1, max(y1 - 8, 20)),
+        cv2.putText(annotated, label, (label_x, max(label_y - 8, 20)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
 
     # 계단/낙차 위험 시각화 (이미지 하단에 경고 텍스트)
