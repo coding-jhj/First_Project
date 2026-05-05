@@ -3,10 +3,22 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"  # Windows OpenMP 라이브러리 �
 
 from fastapi.testclient import TestClient
 from src.api.main import app
+from src.api import db
 from src.api import routes
+
+db.init_db()
 
 # TestClient: uvicorn 서버 없이 FastAPI 앱을 직접 테스트 (httpx 기반)
 client = TestClient(app)
+
+
+def test_policy_endpoint():
+    r = client.get("/api/policy")
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("version", 0) >= 1
+    assert "classes" in body
+    assert "vehicle_ko" in body["classes"]
 
 
 def test_detect_endpoint_exists():

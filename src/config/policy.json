@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "classes": {
+    "vehicle_ko": ["자동차", "오토바이", "버스", "트럭", "기차", "자전거"],
+    "animal_ko": ["개", "말", "고양이"],
+    "critical_ko": ["자동차", "오토바이", "버스", "트럭", "기차", "자전거", "곰", "코끼리", "계단"],
+    "caution_ko": ["칼", "가위", "유리잔", "야구 방망이", "배낭", "핸드백", "여행가방", "공"],
+    "everyday_ko": [
+      "의자", "소파", "침대", "테이블", "벤치", "화분",
+      "키보드", "마우스", "노트북", "TV", "리모컨",
+      "책", "시계", "꽃병", "인형", "우산", "넥타이",
+      "숟가락", "포크", "그릇", "컵", "병", "유리잔",
+      "바나나", "사과", "샌드위치", "오렌지", "핫도그", "피자", "도넛", "케이크",
+      "전자레인지", "오븐", "토스터기", "세면대", "냉장고", "칫솔", "드라이기"
+    ],
+    "vote_bypass_ko": [
+      "자동차", "오토바이", "버스", "트럭", "기차", "자전거",
+      "칼", "가위", "개", "말", "곰", "코끼리", "계단"
+    ]
+  },
+  "alert_mode": {
+    "vehicle_critical_m": 8.0,
+    "animal_critical_m": 3.0,
+    "generic_critical_m": 2.5,
+    "beep_until_m": 7.0
+  },
+  "distance_format": {
+    "clamp_min_m": 0.1,
+    "clamp_max_m": 15.0,
+    "close_face_m": 0.5,
+    "half_meter_round_until_m": 3.0,
+    "meter_suffix": "미터"
+  },
+  "held_sentence_m": {
+    "in_hand_max_m": 1.0,
+    "immediate_front_max_m": 2.0,
+    "near_max_m": 3.0
+  },
+  "on_device": {
+    "bbox_calib_area": 0.12,
+    "near_vehicle_area_ratio": 0.04,
+    "caution_area_ratio": 0.12,
+    "find_hazard_area_ratio": 0.12,
+    "find_hazard_area_multiplier": 1.5,
+    "held_area_in_hand": 0.12,
+    "held_area_front": 0.03,
+    "held_area_near": 0.013
+  }
+}
