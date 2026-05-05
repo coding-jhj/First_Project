@@ -13,7 +13,6 @@ VoiceGuide 한국어 문장 생성 모듈
 
 routes.py에서 호출되는 공개 함수:
   build_sentence()         — 장애물/확인 모드
-  build_hazard_sentence()  — 계단·낙차 최우선 안내
   build_find_sentence()    — 찾기 모드
   build_held_sentence()    — 손에 든 물건 / 바로 앞 물건 인식
 """

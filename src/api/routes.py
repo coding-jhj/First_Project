@@ -40,7 +40,7 @@ def _verify_api_key(
     raise HTTPException(status_code=401, detail="Invalid or missing API key")
 from src.depth.depth import detect_and_depth
 from src.nlg.sentence import (
-    build_sentence, build_hazard_sentence, build_find_sentence,
+    build_sentence, build_find_sentence,
     build_question_sentence, build_held_sentence,
     get_alert_mode, _i_ga, _un_neun,
 )
@@ -245,16 +245,10 @@ async def detect(
         }, _t0, request_id, _detect_ms, _tracker_ms)
 
     # ── 장애물/확인 모드: 위험도 기반 문장 생성 ──────────────────────────────
-    if hazards:
-        # 계단·낙차·턱이 감지되면 최우선 안내 (YOLO 결과보다 우선)
-        top_hazard = max(hazards, key=lambda h: h.get("risk", 0))
-        sentence   = build_hazard_sentence(top_hazard, objects, all_changes, camera_orientation)
-        alert_mode = get_alert_mode(objects[0], is_hazard=True) if objects else "critical"
-    else:
-        sentence   = build_sentence(objects, all_changes, camera_orientation=camera_orientation)
-        # risk_score 1위 객체 기준으로 알림 모드 결정
-        # "silent"이면 프론트엔드는 TTS 호출 안 함, "beep"이면 비프음만 재생
-        alert_mode = get_alert_mode(objects[0]) if objects else "silent"
+    sentence   = build_sentence(objects, all_changes, camera_orientation=camera_orientation)
+    # risk_score 1위 객체 기준으로 알림 모드 결정
+    # "silent"이면 프론트엔드는 TTS 호출 안 함, "beep"이면 비프음만 재생
+    alert_mode = get_alert_mode(objects[0]) if objects else "silent"
 
     # 부가 경고 추가: 위험 물체·점자블록·군중·신호등·안전경로
     # 메인 문장 뒤에 붙임 (있을 때만)
