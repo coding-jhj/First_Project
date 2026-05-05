@@ -276,6 +276,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         private const val PERM_CODE_LOCATION = 101  // GPS — 위치 권한 요청 시
         private const val PREFS_NAME       = "voiceguide"  // SharedPreferences 이름
         private const val PREF_URL         = "server_url"  // 저장된 서버 URL 키
+        private const val PREF_FORCE_ON_DEVICE = "force_on_device"  // 서버 URL이 있어도 온디바이스 우선
         private const val PREF_DEVICE_ID   = "device_id"   // 앱 설치별 대시보드 세션 ID
         private const val DEFAULT_SERVER_URL =
             "https://voiceguide-1063164560758.asia-northeast3.run.app"
@@ -384,6 +385,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private fun getConfiguredServerUrl(): String =
         getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_URL, "")?.trim() ?: ""
 
+    private fun isForceOnDeviceEnabled(): Boolean =
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_FORCE_ON_DEVICE, false)
+
     private fun getDeviceSessionId(): String {
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         val saved = prefs.getString(PREF_DEVICE_ID, "") ?: ""
@@ -412,6 +416,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             text = "디버그 모드 (FPS / 추론속도)"
             isChecked = debugVisible
         }
+        val swForceOnDevice = android.widget.Switch(ctx).apply {
+            text = "온디바이스 우선 (OBB 테스트)"
+            isChecked = isForceOnDeviceEnabled()
+        }
 
         layout.addView(tvUrlLabel)
         layout.addView(etUrl)
@@ -419,6 +427,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             minimumHeight = 32
         })
         layout.addView(swDebug)
+        layout.addView(swForceOnDevice)
 
         try {
             androidx.appcompat.app.AlertDialog.Builder(ctx)
@@ -429,6 +438,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                         .edit()
                         .putString(PREF_URL, url)
+                        .putBoolean(PREF_FORCE_ON_DEVICE, swForceOnDevice.isChecked)
                         .apply()
                     debugVisible = swDebug.isChecked
                     val tvDebug = findViewById<android.widget.TextView>(R.id.tvDebug)
@@ -769,7 +779,14 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         Thread {
             try {
                 yoloDetector = YoloDetector(this)  // assets에서 ONNX 로드
-                runOnUiThread { tvStatus.text = "온디바이스 준비 완료 — 분석 시작을 누르세요" }
+                val detector = yoloDetector
+                runOnUiThread {
+                    tvStatus.text = if (detector?.usesObbModel == true) {
+                        "온디바이스 OBB 준비 완료 — 분석 시작을 누르세요"
+                    } else {
+                        "온디바이스 준비 완료 — 분석 시작을 누르세요"
+                    }
+                }
             } catch (_: Exception) {
                 // assets에 yolo11n.onnx 없는 경우 → 서버 모드 안내
                 runOnUiThread { tvStatus.text = "ONNX 모델 없음 — 서버 URL을 입력하세요" }
@@ -1197,10 +1214,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         "and-${System.currentTimeMillis()}-${frameSeq.incrementAndGet()}"
 
     private fun shouldUseOnDeviceDetector(): Boolean {
-        if (yoloDetector == null) return false
-        if (!isNetworkAvailable()) return currentMode == "장애물" || currentMode == "찾기"
+        val detector = yoloDetector ?: return false
+        val supportsOnDevice = currentMode == "장애물" || currentMode == "찾기"
+        if (!supportsOnDevice) return false
+        if (isForceOnDeviceEnabled()) {
+            Log.d("VG_FLOW", "on-device forced model=${detector.modelName} obb=${detector.usesObbModel}")
+            return true
+        }
+        if (!isNetworkAvailable()) return true
         if (getConfiguredServerUrl().isNotBlank()) return false
-        return currentMode == "장애물" || currentMode == "찾기"
+        return true
     }
 
     private fun isNetworkAvailable(): Boolean {
@@ -1348,18 +1371,19 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             var bmp: android.graphics.Bitmap? = null
             try {
                 val tDecode = System.currentTimeMillis()
-                bmp = decodeBitmapUpright(imageFile)
+                val frameBitmap = decodeBitmapUpright(imageFile)
+                bmp = frameBitmap
                 val decodeMs = System.currentTimeMillis() - tDecode
 
-                val imgW = bmp.width
-                val imgH = bmp.height
+                val imgW = frameBitmap.width
+                val imgH = frameBitmap.height
 
                 val tInfer = System.currentTimeMillis()
                 val detector = yoloDetector
                     ?: throw IllegalStateException("YOLO detector is not initialized")
                 // YOLO + StairsDetector 병렬 실행 (둘 다 bitmap 읽기만 하므로 thread-safe)
-                val yoloFuture   = java.util.concurrent.CompletableFuture.supplyAsync { detector.detect(bmp) }
-                val stairsFuture = java.util.concurrent.CompletableFuture.supplyAsync { stairsDetector.detect(bmp) }
+                val yoloFuture   = java.util.concurrent.CompletableFuture.supplyAsync { detector.detect(frameBitmap) }
+                val stairsFuture = java.util.concurrent.CompletableFuture.supplyAsync { stairsDetector.detect(frameBitmap) }
                 val yoloDetections  = yoloFuture.get()
                 val stairsDetection = stairsFuture.get()
                 val rawDetections = stairsDetection?.let { yoloDetections + it } ?: yoloDetections
@@ -1371,10 +1395,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 val dedupMs = System.currentTimeMillis() - tDedup
 
                 val totalMs = System.currentTimeMillis() - t0
+                val obbCount = voted.count { it.obbPoints != null }
 
                 // 구조화 성능 로그 — Logcat에서 tag:VG_PERF 로 필터
                 android.util.Log.d("VG_PERF",
-                    "request_id|$requestId|route|on_device|decode|$decodeMs|infer|$inferMs|dedup|$dedupMs|total|$totalMs|objs|${voted.size}")
+                    "request_id|$requestId|route|on_device|model|${detector.modelName}|obb_model|${detector.usesObbModel}|decode|$decodeMs|infer|$inferMs|dedup|$dedupMs|total|$totalMs|objs|${voted.size}|obb_objs|$obbCount")
 
                 // FPS < 10 이면 경고 로그
                 val estimatedFps = if (totalMs > 0) 1000f / totalMs else 0f
@@ -1392,6 +1417,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         val tv = findViewById<android.widget.TextView>(R.id.tvDebug)
                         tv.text = "경로   : ONNX\n" +
                                   "요청ID : ${requestId.takeLast(6)}\n" +
+                                  "모델   : ${detector.modelName}\n" +
+                                  "OBB    : ${if (detector.usesObbModel) "ON" else "OFF"} (${obbCount})\n" +
                                   "FPS    : ${fps}\n" +
                                   "디코딩 : ${decodeMs}ms\n" +
                                   "추론   : ${inferMs}ms\n" +
@@ -1592,8 +1619,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         val hn  = normXywh.optDouble(3).toFloat()
                         val classKo = obj.optString("class_ko", "")
                         if (classKo.isEmpty() || wn <= 0f || hn <= 0f) continue
-                        val obbPoints = parseObbPoints(obj.optJSONArray("obb_norm_xyxyxyxy"))
-                            ?: axisAlignedObbPoints(x1n, y1n, wn, hn)
+                        val isTrueObb = obj.optString("bbox_format", "").startsWith("obb")
+                        val obbPoints = if (isTrueObb) {
+                            parseObbPoints(obj.optJSONArray("obb_norm_xyxyxyxy"))
+                        } else {
+                            null
+                        }
                         serverDetections.add(Detection(
                             classKo    = classKo,
                             confidence = obj.optDouble("confidence", 0.9).toFloat(),

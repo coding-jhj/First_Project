@@ -45,18 +45,23 @@ class YoloDetector(context: Context) {
     private val env = OrtEnvironment.getEnvironment()  // ONNX 실행 환경 (앱당 1개)
     private val session: OrtSession                    // 모델 세션 (추론 단위)
     private val inputName: String
-    private val isObbModel: Boolean
+    val modelName: String
+    val usesObbModel: Boolean
     private val inputSize   = 640       // YOLO 입력 해상도 (640×640)
     private val confThreshold = 0.25f   // 모바일 카메라 흔들림/어두운 환경에서 놓침을 줄이기 위해 완화
     private val iouThreshold  = 0.45f   // NMS IoU 임계값: 겹치는 박스 제거 기준
+    private var outputShapeLogged = false
 
     init {
         // assets 폴더에서 ONNX 모델 로드
         // 실제 배포 모델: yolo11n.onnx (10.7MB, 경량)
         // 고정밀 모델:    yolo11m.onnx (서버/비교용)
         // 발표 시: "앱 내장 모델은 YOLO11n ONNX, 서버는 YOLO11m PyTorch"
-        val modelName = listOf(
+        modelName = listOf(
+            "voiceguide-obb.onnx",
+            "best-obb.onnx",
             "yolo11n-obb.onnx",
+            "yolo11s-obb.onnx",
             "yolo11m-obb.onnx",
             "yolo11n.onnx",
             "yolo11m.onnx"
@@ -68,14 +73,14 @@ class YoloDetector(context: Context) {
                 false
             }
         }
-        isObbModel = modelName.contains("obb", ignoreCase = true)
+        usesObbModel = modelName.contains("obb", ignoreCase = true)
         val bytes = context.assets.open(modelName).readBytes()
         val opts = OrtSession.SessionOptions().apply {
             setIntraOpNumThreads(2)
             setInterOpNumThreads(1)
             // NNAPI는 FP16 연산으로 클래스 신뢰도가 0에 수렴 → 탐지 0개 오류 발생
             // → CPU 추론 유지 (정확도 우선)
-            android.util.Log.d("VG_PERF", "CPU 2스레드 추론 — $modelName")
+            android.util.Log.d("VG_PERF", "CPU 2스레드 추론 — $modelName obb=$usesObbModel")
         }
         session = env.createSession(bytes, opts)
         inputName = session.inputNames.iterator().next()
@@ -120,6 +125,13 @@ class YoloDetector(context: Context) {
                 val numFeatures = shape[1].toInt()  // 84(COCO80) 또는 85(indoor81)
                 val numDet      = shape[2].toInt()  // 8400
                 val flatBuf     = outputTensor.floatBuffer  // 1D float 배열
+                if (!outputShapeLogged) {
+                    outputShapeLogged = true
+                    android.util.Log.d(
+                        "VG_PERF",
+                        "YOLO output model=$modelName obb=$usesObbModel shape=${shape.joinToString(prefix = "[", postfix = "]")}"
+                    )
+                }
 
                 return postProcess(flatBuf, numFeatures, numDet, padX, padY, scaledW, scaledH)
             } finally {
@@ -167,15 +179,24 @@ class YoloDetector(context: Context) {
         numFeatures: Int, numDet: Int,
         padX: Int, padY: Int, scaledW: Int, scaledH: Int
     ): List<Detection> {
-        val boxFeatureCount = if (isObbModel) 5 else 4
-        val numClasses = numFeatures - boxFeatureCount
+        // Ultralytics OBB ONNX layout: [cx, cy, w, h, class scores..., angle].
+        val classStartFeature = 4
+        val angleFeature = if (usesObbModel) numFeatures - 1 else -1
+        val numClasses = if (usesObbModel) numFeatures - 5 else numFeatures - 4
+        if (numClasses <= 0) {
+            android.util.Log.w(
+                "VG_PERF",
+                "Invalid YOLO output shape model=$modelName features=$numFeatures obb=$usesObbModel"
+            )
+            return emptyList()
+        }
         val candidates = mutableListOf<Detection>()
 
         for (i in 0 until numDet) {
             var maxScore = confThreshold
             var maxClass = -1
             for (c in 0 until numClasses) {
-                val s = buf.get((boxFeatureCount + c) * numDet + i)
+                val s = buf.get((classStartFeature + c) * numDet + i)
                 if (s > maxScore) { maxScore = s; maxClass = c }
             }
             if (maxClass < 0) continue
@@ -187,7 +208,7 @@ class YoloDetector(context: Context) {
             val cyPx = buf.get(1 * numDet + i)
             val wPx  = buf.get(2 * numDet + i)
             val hPx  = buf.get(3 * numDet + i)
-            val angleRad = if (isObbModel) buf.get(4 * numDet + i) else 0f
+            val angleRad = if (usesObbModel) buf.get(angleFeature * numDet + i) else null
 
             val cx = (cxPx - padX) / scaledW
             val cy = (cyPx - padY) / scaledH
@@ -201,7 +222,9 @@ class YoloDetector(context: Context) {
                 classKo    = name,
                 confidence = maxScore,
                 cx = cx, cy = cy, w = w, h = h,
-                obbPoints = buildObbPoints(cxPx, cyPx, wPx, hPx, angleRad, padX, padY, scaledW, scaledH)
+                obbPoints = angleRad?.let {
+                    buildObbPoints(cxPx, cyPx, wPx, hPx, it, padX, padY, scaledW, scaledH)
+                }
             ))
         }
 
