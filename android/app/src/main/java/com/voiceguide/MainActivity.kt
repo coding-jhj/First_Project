@@ -177,24 +177,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         x, y + h
     ).map { it.coerceIn(0f, 1f) }
 
-    private fun parseObbPoints(arr: JSONArray?): List<Float>? {
-        if (arr == null) return null
-        val out = ArrayList<Float>(8)
-        if (arr.length() >= 8 && arr.opt(0) is Number) {
-            for (i in 0 until 8) out.add(arr.optDouble(i).toFloat().coerceIn(0f, 1f))
-            return out
-        }
-        if (arr.length() >= 4) {
-            for (i in 0 until 4) {
-                val point = arr.optJSONArray(i) ?: return null
-                if (point.length() < 2) return null
-                out.add(point.optDouble(0).toFloat().coerceIn(0f, 1f))
-                out.add(point.optDouble(1).toFloat().coerceIn(0f, 1f))
-            }
-            return out
-        }
-        return null
-    }
 
     // 질문 응답 직후 periodic TTS 억제 — 겹침 방지 (3초간 periodic silent 처리)
     @Volatile private var suppressPeriodicUntil = 0L
@@ -781,11 +763,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 yoloDetector = YoloDetector(this)  // assets에서 ONNX 로드
                 val detector = yoloDetector
                 runOnUiThread {
-                    tvStatus.text = if (detector?.usesObbModel == true) {
-                        "온디바이스 OBB 준비 완료 — 분석 시작을 누르세요"
-                    } else {
-                        "온디바이스 준비 완료 — 분석 시작을 누르세요"
-                    }
+                    tvStatus.text = "온디바이스 준비 완료 — 분석 시작을 누르세요"
                 }
             } catch (_: Exception) {
                 // assets에 yolo11n.onnx 없는 경우 → 서버 모드 안내
@@ -1218,7 +1196,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         val supportsOnDevice = currentMode == "장애물" || currentMode == "찾기"
         if (!supportsOnDevice) return false
         if (isForceOnDeviceEnabled()) {
-            Log.d("VG_FLOW", "on-device forced model=${detector.modelName} obb=${detector.usesObbModel}")
+            Log.d("VG_FLOW", "on-device forced model=${detector.modelName}")
             return true
         }
         if (!isNetworkAvailable()) return true
@@ -1395,11 +1373,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 val dedupMs = System.currentTimeMillis() - tDedup
 
                 val totalMs = System.currentTimeMillis() - t0
-                val obbCount = voted.count { it.obbPoints != null }
-
                 // 구조화 성능 로그 — Logcat에서 tag:VG_PERF 로 필터
                 android.util.Log.d("VG_PERF",
-                    "request_id|$requestId|route|on_device|model|${detector.modelName}|obb_model|${detector.usesObbModel}|decode|$decodeMs|infer|$inferMs|dedup|$dedupMs|total|$totalMs|objs|${voted.size}|obb_objs|$obbCount")
+                    "request_id|$requestId|route|on_device|model|${detector.modelName}|decode|$decodeMs|infer|$inferMs|dedup|$dedupMs|total|$totalMs|objs|${voted.size}")
 
                 // FPS < 10 이면 경고 로그
                 val estimatedFps = if (totalMs > 0) 1000f / totalMs else 0f
@@ -1418,7 +1394,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         tv.text = "경로   : ONNX\n" +
                                   "요청ID : ${requestId.takeLast(6)}\n" +
                                   "모델   : ${detector.modelName}\n" +
-                                  "OBB    : ${if (detector.usesObbModel) "ON" else "OFF"} (${obbCount})\n" +
                                   "FPS    : ${fps}\n" +
                                   "디코딩 : ${decodeMs}ms\n" +
                                   "추론   : ${inferMs}ms\n" +
@@ -1619,20 +1594,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         val hn  = normXywh.optDouble(3).toFloat()
                         val classKo = obj.optString("class_ko", "")
                         if (classKo.isEmpty() || wn <= 0f || hn <= 0f) continue
-                        val isTrueObb = obj.optString("bbox_format", "").startsWith("obb")
-                        val obbPoints = if (isTrueObb) {
-                            parseObbPoints(obj.optJSONArray("obb_norm_xyxyxyxy"))
-                        } else {
-                            null
-                        }
                         serverDetections.add(Detection(
                             classKo    = classKo,
                             confidence = obj.optDouble("confidence", 0.9).toFloat(),
                             cx         = x1n + wn / 2f,
                             cy         = y1n + hn / 2f,
                             w          = wn,
-                            h          = hn,
-                            obbPoints  = obbPoints
+                            h          = hn
                         ))
                     }
                 }
