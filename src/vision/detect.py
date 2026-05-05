@@ -38,7 +38,7 @@ if _USE_YOLO_WORLD:
     _model.set_classes(_WORLD_CLASSES)
     print(f"[YOLO-World] 모델 로드: yolov8x-worldv2.pt ({len(_WORLD_CLASSES)}클래스)")
 else:
-    _src = os.environ.get("SERVER_YOLO_MODEL", "yolo11n.pt").strip() or "yolo11n.pt"
+    _src = os.environ.get("SERVER_YOLO_MODEL", "yolo26s.pt").strip() or "yolo26s.pt"
     _model = YOLO(_src)
     print(f"[YOLO] 모델 로드: {_src}")
 
