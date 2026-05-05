@@ -170,14 +170,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         val inter = (ix2 - ix1) * (iy2 - iy1)
         return inter / (a.w * a.h + b.w * b.h - inter)
     }
-    private fun axisAlignedObbPoints(x: Float, y: Float, w: Float, h: Float): List<Float> = listOf(
-        x, y,
-        x + w, y,
-        x + w, y + h,
-        x, y + h
-    ).map { it.coerceIn(0f, 1f) }
-
-
     // 질문 응답 직후 periodic TTS 억제 — 겹침 방지 (3초간 periodic silent 처리)
     @Volatile private var suppressPeriodicUntil = 0L
     // FPS 측정 — 마지막 요청 시각과 서버 응답시간(ms) 기록
@@ -399,7 +391,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             isChecked = debugVisible
         }
         val swForceOnDevice = android.widget.Switch(ctx).apply {
-            text = "온디바이스 우선 (OBB 테스트)"
+            text = "온디바이스 우선"
             isChecked = isForceOnDeviceEnabled()
         }
 
