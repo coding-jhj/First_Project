@@ -619,17 +619,24 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 speak("확인할게요.")
                 captureAndProcessAsQuestion()
             }
-            // ── 장애물/확인 모드도 즉시 캡처 ─────────────────────────────────
-            // 사용자가 명시적으로 물어봤을 때 즉각 응답
-            "장애물", "확인" -> {
+            // ── 장애물 모드: 즉시 캡처 ───────────────────────────────────────
+            "장애물" -> {
                 currentMode = mode
                 captureAndProcess()
             }
+            // ── 찾기 모드 (확인 의도 통합) ────────────────────────────────────
+            // target 있음 → "X 찾기 모드." 안내 후 주기적 캡처
+            // target 없음 (이거 뭐야 등) → "확인할게요." 후 즉시 캡처
             "찾기" -> {
                 findTarget  = SentenceBuilder.extractFindTarget(text)
                 currentMode = "찾기"
                 SentenceBuilder.clearStableClocks()
-                speakBuiltIn("${findTarget.ifEmpty { "물건" }} 찾기 모드.")
+                if (findTarget.isEmpty()) {
+                    speak("확인할게요.")
+                    captureAndProcess()
+                } else {
+                    speakBuiltIn("${findTarget} 찾기 모드.")
+                }
             }
             "신호등" -> {
                 speakBuiltIn("신호등을 확인할게요.")
@@ -1329,8 +1336,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 val tInfer = System.currentTimeMillis()
                 val detector = yoloDetector
                     ?: throw IllegalStateException("YOLO detector is not initialized")
-                val yoloDetections = detector.detect(bmp)
-                val stairsDetection = stairsDetector.detect(bmp)
+                // YOLO + StairsDetector 병렬 실행 (둘 다 bitmap 읽기만 하므로 thread-safe)
+                val yoloFuture   = java.util.concurrent.CompletableFuture.supplyAsync { detector.detect(bmp) }
+                val stairsFuture = java.util.concurrent.CompletableFuture.supplyAsync { stairsDetector.detect(bmp) }
+                val yoloDetections  = yoloFuture.get()
+                val stairsDetection = stairsFuture.get()
                 val rawDetections = stairsDetection?.let { yoloDetections + it } ?: yoloDetections
                 val inferMs = System.currentTimeMillis() - tInfer
 

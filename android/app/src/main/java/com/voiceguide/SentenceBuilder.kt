@@ -324,11 +324,14 @@ object SentenceBuilder {
         val remove = listOf(
             "찾아줘", "찾아 줘", "찾아", "어디있어", "어디 있어", "어디야",
             "어딘지", "어디에 있어", "어디에 있나", "있는지 알려줘",
-            "어디 있나", "어딨어", "어딨나", "위치", "알려줘"
+            "어디 있나", "어딨어", "어딨나", "위치", "알려줘",
+            // 확인 의도 키워드 — 제거 후 target="" 이 됨 → build_sentence() fallback
+            "이건 뭐야", "이게 뭐", "이거 뭐", "뭔지", "뭔데", "뭐지", "뭐야",
+            "이거", "이게", "이건",
         )
-        // 공백 정규화 후 키워드 제거
+        // 공백 정규화 후 긴 패턴부터 제거 (부분 겹침 방지)
         var target = text.replace("\\s+".toRegex(), " ").trim()
-        remove.sortedByDescending { it.length }  // 긴 키워드부터 제거 (부분 겹침 방지)
+        remove.sortedByDescending { it.length }
               .forEach { target = target.replace(it, "") }
         return target.trim()
     }
