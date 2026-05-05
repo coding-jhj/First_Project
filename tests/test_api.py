@@ -9,6 +9,15 @@ from src.api import routes
 client = TestClient(app)
 
 
+def test_policy_endpoint():
+    r = client.get("/api/policy")
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("version", 0) >= 1
+    assert "classes" in body
+    assert "vehicle_ko" in body["classes"]
+
+
 def test_detect_endpoint_exists():
     # 이미지 없이도 422(Validation Error) 이상의 응답이 오면 라우트 등록 확인됨
     response = client.post("/detect", data={"wifi_ssid": "test_ssid"})

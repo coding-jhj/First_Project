@@ -102,8 +102,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private val detectionHistory = ArrayDeque<Set<String>>()
     private val VOTE_WINDOW    = 3
     private val VOTE_MIN_COUNT = 2
-    private val ALWAYS_PASS    = setOf("자동차","오토바이","버스","트럭","기차","자전거",
-                                       "칼","가위","개","말","곰","코끼리","계단")
 
     private val classLastSpoken = mutableMapOf<String, Long>()
     private val CLASS_COOLDOWN_MS = 5000L  // 음성 안내 후 같은 사물 재발화 간격
@@ -116,7 +114,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         val counts = mutableMapOf<String, Int>()
         for (frame in detectionHistory) frame.forEach { counts[it] = (counts[it] ?: 0) + 1 }
         return detections.filter { d ->
-            d.classKo in ALWAYS_PASS || (counts[d.classKo] ?: 0) >= VOTE_MIN_COUNT
+            d.classKo in VoicePolicy.voteBypassKo() || (counts[d.classKo] ?: 0) >= VOTE_MIN_COUNT
         }
     }
 
@@ -133,7 +131,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         val voice = mutableListOf<Detection>()
         var shouldBeep = false
         for (d in voted) {
-            val isClose = d.classKo in ALWAYS_PASS || d.w * d.h > BEEP_AREA_THRESH
+            val isClose = d.classKo in VoicePolicy.voteBypassKo() || d.w * d.h > BEEP_AREA_THRESH
             if (isClose) voice.add(d) else shouldBeep = true
         }
         return voice to (shouldBeep && voice.isEmpty())
@@ -297,6 +295,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        VoicePolicy.init(applicationContext)
+
         tts = TextToSpeech(this, this)
 
         tvStatus    = findViewById(R.id.tvStatus)
@@ -328,6 +328,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             .getFusedLocationProviderClient(this)
         initSpeechRecognizer()
         tryInitYoloDetector()
+        refreshPolicyFromServerAsync()
 
         // Google Assistant shortcut intent 처리
         when (intent?.action) {
@@ -353,6 +354,25 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             }
             speak("음성 명령 버튼입니다. 짧게 누르면 음성 인식이 시작됩니다.")
             true
+        }
+    }
+
+    /** GET /api/policy — SSOT 갱신(실패 시 기존 캐시·기본값 유지). */
+    private fun refreshPolicyFromServerAsync() {
+        val base = getSavedServerUrl().trimEnd('/')
+        if (base.isEmpty()) return
+        Executors.newSingleThreadExecutor().execute {
+            try {
+                val req = Request.Builder().url("$base/api/policy").get().build()
+                httpClient.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) return@execute
+                    val body = resp.body?.string() ?: return@execute
+                    VoicePolicy.applyFromServerJson(applicationContext, body)
+                    Log.d("VG_POLICY", "policy.json 동기화 완료")
+                }
+            } catch (e: Exception) {
+                Log.d("VG_POLICY", "policy fetch skip: ${e.message}")
+            }
         }
     }
 
@@ -414,6 +434,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     val tvDebug = findViewById<android.widget.TextView>(R.id.tvDebug)
                     tvDebug.visibility = if (debugVisible) android.view.View.VISIBLE else android.view.View.GONE
                     android.widget.Toast.makeText(ctx, "설정을 저장했어요.", android.widget.Toast.LENGTH_SHORT).show()
+                    refreshPolicyFromServerAsync()
                 }
                 .setNegativeButton("취소", null)
                 .show()
@@ -1415,7 +1436,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         markClassesSpoken(voiceDetections)
                         val mode = when {
                             currentMode == "찾기"                              -> "critical"
-                            voiceDetections.any { it.classKo in ALWAYS_PASS } -> "critical"
+                            voiceDetections.any { it.classKo in VoicePolicy.voteBypassKo() } -> "critical"
                             else                                               -> "normal"
                         }
                         Log.d("VG_DETECT", "→ 음성 출력 (mode=$mode)")
@@ -1619,7 +1640,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 "critical" -> {
                     val now = System.currentTimeMillis()
                     if (sentence != lastSentence || now - lastCriticalTime > 8000L) {
-                        val isVehicleDanger = ALWAYS_PASS.any { sentence.contains(it) }
+                        val isVehicleDanger = VoicePolicy.voteBypassKo().any { sentence.contains(it) }
                         if (!isVehicleDanger && isSpeaking()) return@runOnUiThread
                         lastSentence     = sentence
                         lastCriticalTime = now

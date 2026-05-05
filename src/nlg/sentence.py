@@ -20,40 +20,7 @@ routes.py에서 호출되는 공개 함수:
 from src.nlg.templates import (
     CLOCK_ACTION, CLOCK_TO_DIRECTION, get_absolute_clock
 )
-
-# 이동 차량: 같은 거리라도 정적 의자보다 훨씬 위험 → 8m 이내부터 긴급 경고
-_VEHICLE_KO = {"자동차", "오토바이", "트럭", "기차", "자전거"}
-
-# 동물: 돌발 행동 가능 → 일반 장애물보다 주의 어조
-_ANIMAL_KO  = {"개", "말", "고양이"}
-
-# 긴급(critical) 물체 — 빨간 바운딩박스와 동일 기준
-_CRITICAL_KO = {"자동차", "오토바이", "트럭", "기차", "자전거",
-                "곰", "코끼리", "계단"}
-
-# 주의(caution) 물체 — 노란 바운딩박스와 동일 기준
-_CAUTION_KO = {"칼", "가위", "유리잔", "야구 방망이",
-               "배낭", "핸드백", "여행가방", "공"}
-
-# 생활 물체: 크게 보여도(거리 가까워도) "위험!" 금지
-# 이유: "위험! 바로 앞에 키보드가 있어요!"는 진짜 위험(자동차·계단)과 혼동돼
-#       경고 피로(alert fatigue)를 높이고 신뢰도를 낮춤.
-# SentenceBuilder.kt의 EVERYDAY_CLASSES와 동일 목록을 유지해야
-# 서버↔온디바이스 전환 시 표현 정책이 일관됨.
-_EVERYDAY_KO = {
-    # 가구·침구
-    "의자", "소파", "침대", "테이블", "벤치", "화분",
-    # IT기기·가전
-    "키보드", "마우스", "노트북", "TV", "리모컨",
-    # 소품
-    "책", "시계", "꽃병", "인형", "우산", "넥타이",
-    # 식기
-    "숟가락", "포크", "그릇", "컵", "병", "유리잔",
-    # 음식
-    "바나나", "사과", "샌드위치", "오렌지", "핫도그", "피자", "도넛", "케이크",
-    # 주방·욕실 가전
-    "전자레인지", "오븐", "토스터기", "세면대", "냉장고", "칫솔", "드라이기",
-}
+from src.config import policy as _policy
 
 
 # ── 경고 피로(alert fatigue) 방지 ─────────────────────────────────────────────
@@ -68,19 +35,25 @@ def get_alert_mode(obj: dict, is_hazard: bool = False) -> str:
         "beep"     — 비프음만, 음성 없음
         "silent"   — 무음 (사용자가 명시적으로 물어볼 때만 안내)
     """
+    am = _policy.alert_thresholds()
+    v_m = float(am["vehicle_critical_m"])
+    a_m = float(am["animal_critical_m"])
+    g_m = float(am["generic_critical_m"])
+    b_m = float(am["beep_until_m"])
+
     dist_m     = obj.get("distance_m", 99.0)
     is_vehicle = obj.get("is_vehicle", False)
     is_animal  = obj.get("is_animal",  False)
 
     if is_hazard:                          # 계단·낙차 — 낙상 위험이므로 거리 무관 경고
         return "critical"
-    if is_vehicle and dist_m < 8.0:        # 차량 — 이동 속도 때문에 여유 거리 넉넉히
+    if is_vehicle and dist_m < v_m:
         return "critical"
-    if is_animal and dist_m < 3.0:         # 동물 — 돌발 행동 위험
+    if is_animal and dist_m < a_m:
         return "critical"
-    if dist_m < 2.5:                       # 2.5m 이내 — 음성 안내
+    if dist_m < g_m:
         return "critical"
-    if dist_m < 7.0:                       # 2.5~7m — 비프음만 (존재 인지, 음성 피로 방지)
+    if dist_m < b_m:
         return "beep"
     return "silent"
 
@@ -132,22 +105,24 @@ def _i_eyo(word: str) -> str:
 
 def _format_dist(dist_m: float) -> str:
     """
-    거리(미터)를 "약 Xm 앞" 형식으로 변환 (사용자 인터뷰 Q10 반영).
-
-    인터뷰 피드백: "약 5m 앞에 장애물이 있음 같은 대략적인 설명이 필요함"
-    → Depth V2 추정값(오차 있지만 대략적 정보)을 그대로 활용.
-    0.5m 미만은 즉각 위험이므로 "바로 코앞"으로 유지.
-    3m 미만: 0.5m 단위 반올림 / 3m 이상: 1m 단위 반올림
+    거리(미터)를 "약 Xm" 형식으로 변환 — policy.json distance_format 수치를 따름.
     """
-    dist_m = max(0.1, min(dist_m, 15.0))
-    if dist_m < 0.5:
+    df = _policy.distance_format()
+    lo = float(df["clamp_min_m"])
+    hi = float(df["clamp_max_m"])
+    close_m = float(df["close_face_m"])
+    half_until = float(df["half_meter_round_until_m"])
+    suf = str(df["meter_suffix"])
+
+    dist_m = max(lo, min(dist_m, hi))
+    if dist_m < close_m:
         return "코앞"
-    if dist_m < 3.0:
+    if dist_m < half_until:
         r = round(dist_m * 2) / 2          # 0.5m 단위
         r_str = f"{r:.1f}".rstrip("0").rstrip(".")
-        return f"약 {r_str}미터"
-    r = round(dist_m)                      # 1m 단위
-    return f"약 {r}미터"
+        return f"약 {r_str}{suf}"
+    r = round(dist_m)
+    return f"약 {r}{suf}"
 
 
 # ── 주요 물체 문장 생성 (위험도 1순위) ────────────────────────────────────────
@@ -160,9 +135,14 @@ def _primary(obj: dict, abs_clock: str) -> str:
       노랑(caution) → "방향 거리에 물체가 있어요. 액션"
       초록(info) → "방향 거리에 물체가 있어요."
 
-    생활 물체(_EVERYDAY_KO)는 아무리 가까워도 긴급 표현 금지.
-    SentenceBuilder.kt의 EVERYDAY_CLASSES 예외 처리와 동일 정책.
+    생활 물체(everyday_ko)는 아무리 가까워도 긴급 표현 금지 — policy.json과 동기화.
     """
+    vehicle_ko = _policy.class_set("vehicle_ko")
+    animal_ko = _policy.class_set("animal_ko")
+    critical_ko = _policy.class_set("critical_ko")
+    everyday_ko = _policy.class_set("everyday_ko")
+    animal_m = float(_policy.alert_thresholds()["animal_critical_m"])
+
     dist_m     = obj.get("distance_m", 0.0)
     name       = obj["class_ko"]
     ig         = _i_ga(name)
@@ -170,22 +150,22 @@ def _primary(obj: dict, abs_clock: str) -> str:
     dist_str   = _format_dist(dist_m)
     # "바로 앞" + "코앞" 중복 방지: "바로 앞 코앞에" → "바로 코앞에"
     loc_str    = "바로 코앞" if dist_str == "코앞" and direction == "바로 앞" else f"{direction} {dist_str}"
-    is_vehicle = obj.get("is_vehicle", name in _VEHICLE_KO)
-    is_animal  = obj.get("is_animal",  name in _ANIMAL_KO)
+    is_vehicle = obj.get("is_vehicle", name in vehicle_ko)
+    is_animal  = obj.get("is_animal",  name in animal_ko)
     is_hazard  = obj.get("is_hazard", False)
     action     = CLOCK_ACTION.get(abs_clock, "조심하세요").rstrip(".")
 
     # 생활 물체는 거리·크기 무관하게 긴급 표현 금지 (이중 방어)
     is_critical = (
-        (name in _CRITICAL_KO or is_vehicle or (is_animal and dist_m < 3.0) or is_hazard)
-        and name not in _EVERYDAY_KO
+        (name in critical_ko or is_vehicle or (is_animal and dist_m < animal_m) or is_hazard)
+        and name not in everyday_ko
     )
 
     if is_critical:
         return f"위험! {loc_str} {name}! 조심!"
 
     # 생활 물체: 액션 없이 위치만 안내
-    if name in _EVERYDAY_KO:
+    if name in everyday_ko:
         return f"{loc_str}에 {name}{ig} 있어요."
 
     return f"{loc_str}에 {name}{ig} 있어요. {action}"
@@ -205,9 +185,11 @@ def _secondary(obj: dict, abs_clock: str) -> str:
     direction  = CLOCK_TO_DIRECTION.get(abs_clock, abs_clock)
     dist_str   = _format_dist(dist_m)
     loc_str    = "바로 코앞" if dist_str == "코앞" and direction == "바로 앞" else f"{direction} {dist_str}"
-    is_vehicle = obj.get("is_vehicle", name in _VEHICLE_KO)
+    vehicle_ko = _policy.class_set("vehicle_ko")
+    v_m = float(_policy.alert_thresholds()["vehicle_critical_m"])
+    is_vehicle = obj.get("is_vehicle", name in vehicle_ko)
 
-    if is_vehicle and dist_m < 8.0:
+    if is_vehicle and dist_m < v_m:
         return f"{loc_str}에 {name}도 있어요!"
     return f"{loc_str}에 {name}도 있어요."
 
@@ -343,17 +325,14 @@ def build_question_sentence(
 
 
 def build_held_sentence(objects: list[dict]) -> str:
-    """
-    손에 들고 있거나 바로 가까이 있는 물건 안내.
-
-    distance_m 구간 기준:
-      < 0.5m  → "손에 들고 있는 건 ___예요/이에요."
-      < 1.5m  → "바로 앞에 ___이/가 있어요."
-      < 3.0m  → "가까이 약 Xm에 ___이/가 있어요."
-      3.0m 이상 → "손에 든 물건이나 바로 앞에 뭔가 없어 보여요."
-    """
+    """손에 들고 있거나 바로 가까이 있는 물건 안내 (held_sentence_m 구간)."""
     if not objects:
         return "손에 든 물건이나 바로 앞에 뭔가 없어 보여요."
+
+    hs = _policy.held_thresholds_m()
+    h1 = float(hs["in_hand_max_m"])
+    h2 = float(hs["immediate_front_max_m"])
+    h3 = float(hs["near_max_m"])
 
     closest = min(objects, key=lambda o: o.get("distance_m", 99.0))
     dist_m = closest.get("distance_m", 99.0)
@@ -361,11 +340,11 @@ def build_held_sentence(objects: list[dict]) -> str:
     ig = _i_ga(name)
     ie = _i_eyo(name)
 
-    if dist_m < 1.0:
+    if dist_m < h1:
         return f"손에 들고 있는 건 {name}{ie}."
-    if dist_m < 2.0:
+    if dist_m < h2:
         return f"바로 앞에 {name}{ig} 있어요."
-    if dist_m < 3.0:
+    if dist_m < h3:
         return f"가까이에 {name}{ig} 있어요."
     return "손에 든 물건이나 바로 앞에 뭔가 없어 보여요."
 

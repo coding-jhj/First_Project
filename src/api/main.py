@@ -12,6 +12,9 @@ from src.api import db
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from src.config.policy import init_policy
+    init_policy()
+    print("[main] policy.json 적재 완료")
     # DB 초기화는 동기적으로 (빠름)
     db.init_db()
     # YOLO·Depth·OCR·TTS 워밍업은 모두 백그라운드 — yield 전에 블로킹하지 않아야
