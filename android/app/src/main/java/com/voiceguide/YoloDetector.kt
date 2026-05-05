@@ -6,6 +6,8 @@ import ai.onnxruntime.OrtSession
 import android.content.Context
 import android.graphics.Bitmap
 import java.nio.FloatBuffer
+import kotlin.math.cos
+import kotlin.math.sin
 
 /**
  * YOLO 온디바이스 추론기
@@ -34,6 +36,7 @@ data class Detection(
     val cy: Float,           // 바운딩 박스 중심 Y (이미지 높이 기준 0.0~1.0)
     val w: Float,            // 바운딩 박스 너비 (0.0~1.0)
     val h: Float,            // 바운딩 박스 높이 (0.0~1.0)
+    val obbPoints: List<Float>? = null, // OBB 4점 좌표: x1,y1,...,x4,y4 (정규화)
     val isFound: Boolean = false  // 찾기 모드에서 발견된 대상이면 true (흰색 박스)
 )
 
@@ -42,6 +45,7 @@ class YoloDetector(context: Context) {
     private val env = OrtEnvironment.getEnvironment()  // ONNX 실행 환경 (앱당 1개)
     private val session: OrtSession                    // 모델 세션 (추론 단위)
     private val inputName: String
+    private val isObbModel: Boolean
     private val inputSize   = 640       // YOLO 입력 해상도 (640×640)
     private val confThreshold = 0.25f   // 모바일 카메라 흔들림/어두운 환경에서 놓침을 줄이기 위해 완화
     private val iouThreshold  = 0.45f   // NMS IoU 임계값: 겹치는 박스 제거 기준
@@ -51,12 +55,20 @@ class YoloDetector(context: Context) {
         // 실제 배포 모델: yolo11n.onnx (10.7MB, 경량)
         // 고정밀 모델:    yolo11m.onnx (서버/비교용)
         // 발표 시: "앱 내장 모델은 YOLO11n ONNX, 서버는 YOLO11m PyTorch"
-        val modelName = try {
-            context.assets.open("yolo11n.onnx").close()
-            "yolo11n.onnx"
-        } catch (_: Exception) {
+        val modelName = listOf(
+            "yolo11n-obb.onnx",
+            "yolo11m-obb.onnx",
+            "yolo11n.onnx",
             "yolo11m.onnx"
+        ).first { name ->
+            try {
+                context.assets.open(name).close()
+                true
+            } catch (_: Exception) {
+                false
+            }
         }
+        isObbModel = modelName.contains("obb", ignoreCase = true)
         val bytes = context.assets.open(modelName).readBytes()
         val opts = OrtSession.SessionOptions().apply {
             setIntraOpNumThreads(2)
@@ -155,14 +167,15 @@ class YoloDetector(context: Context) {
         numFeatures: Int, numDet: Int,
         padX: Int, padY: Int, scaledW: Int, scaledH: Int
     ): List<Detection> {
-        val numClasses = numFeatures - 4
+        val boxFeatureCount = if (isObbModel) 5 else 4
+        val numClasses = numFeatures - boxFeatureCount
         val candidates = mutableListOf<Detection>()
 
         for (i in 0 until numDet) {
             var maxScore = confThreshold
             var maxClass = -1
             for (c in 0 until numClasses) {
-                val s = buf.get((4 + c) * numDet + i)
+                val s = buf.get((boxFeatureCount + c) * numDet + i)
                 if (s > maxScore) { maxScore = s; maxClass = c }
             }
             if (maxClass < 0) continue
@@ -174,6 +187,7 @@ class YoloDetector(context: Context) {
             val cyPx = buf.get(1 * numDet + i)
             val wPx  = buf.get(2 * numDet + i)
             val hPx  = buf.get(3 * numDet + i)
+            val angleRad = if (isObbModel) buf.get(4 * numDet + i) else 0f
 
             val cx = (cxPx - padX) / scaledW
             val cy = (cyPx - padY) / scaledH
@@ -186,11 +200,43 @@ class YoloDetector(context: Context) {
             candidates.add(Detection(
                 classKo    = name,
                 confidence = maxScore,
-                cx = cx, cy = cy, w = w, h = h
+                cx = cx, cy = cy, w = w, h = h,
+                obbPoints = buildObbPoints(cxPx, cyPx, wPx, hPx, angleRad, padX, padY, scaledW, scaledH)
             ))
         }
 
         return nms(candidates.sortedByDescending { it.confidence }).take(8)
+    }
+
+    private fun buildObbPoints(
+        cxPx: Float,
+        cyPx: Float,
+        wPx: Float,
+        hPx: Float,
+        angleRad: Float,
+        padX: Int,
+        padY: Int,
+        scaledW: Int,
+        scaledH: Int
+    ): List<Float> {
+        val c = cos(angleRad.toDouble()).toFloat()
+        val s = sin(angleRad.toDouble()).toFloat()
+        val hw = wPx / 2f
+        val hh = hPx / 2f
+        val corners = arrayOf(
+            -hw to -hh,
+             hw to -hh,
+             hw to  hh,
+            -hw to  hh
+        )
+        val points = ArrayList<Float>(8)
+        for ((dx, dy) in corners) {
+            val x = cxPx + dx * c - dy * s
+            val y = cyPx + dx * s + dy * c
+            points.add(((x - padX) / scaledW).coerceIn(0f, 1f))
+            points.add(((y - padY) / scaledH).coerceIn(0f, 1f))
+        }
+        return points
     }
 
     /**

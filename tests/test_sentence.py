@@ -72,7 +72,7 @@ def test_all_clock_directions():
 
 
 def test_ground_level_warning():
-    """바닥 장애물도 방향+거리가 포함된 안내 문장을 반환해야 함.
+    """바닥 장애물도 위치 표현이 포함된 안내 문장을 반환해야 함.
 
     "가방"은 _CRITICAL_KO에 없는 일반 물체이므로 "위험!" 없이 일반 안내.
     바닥 장애물 강조는 routes.py의 slippery_warning / hazard 경로에서 처리됨.
@@ -87,7 +87,7 @@ def test_ground_level_warning():
     }]
     result = build_sentence(obj, [])
     assert "가방" in result,   f"물체명 포함 확인 실패 → {result}"
-    assert "앞" in result,     f"방향/거리 포함 확인 실패 → {result}"
+    assert "바로" in result,   f"근거리 위치 표현 확인 실패 → {result}"
     assert "위험!" not in result, f"일반 물체에 '위험!' 붙으면 안 됨 → {result}"
 
 
@@ -111,11 +111,10 @@ def test_everyday_object_no_critical():
         assert "위험!" not in result, f"{name}: 생활 물체에 '위험!' 붙으면 안 됨 → {result}"
 
 
-def test_vehicle_critical_has_dist_and_action():
-    """자동차 critical 문장에는 거리 표현과 action이 모두 포함돼야 함.
+def test_vehicle_critical_uses_short_warning():
+    """자동차 critical 문장은 서버/Android 공통의 짧은 긴급 경고 형식이어야 함.
 
-    수정 전: "위험, 바로 앞 자동차. 조심" — 거리·action 없고 느낌표 없음.
-    수정 후: "위험! 바로 앞 약 3미터 앞에 자동차가 있어요! 멈추세요!"
+    새 규칙: "위험! 바로 앞 자동차! 조심!"
     """
     obj = [{
         "class_ko": "자동차",
@@ -127,7 +126,9 @@ def test_vehicle_critical_has_dist_and_action():
     }]
     result = build_sentence(obj, [])
     assert "위험!" in result,   f"자동차 critical에 '위험!' 없음 → {result}"
-    assert "미터" in result,    f"자동차 critical에 거리 표현 없음 → {result}"
+    assert "자동차" in result,  f"자동차 critical에 물체명 없음 → {result}"
+    assert "조심!" in result,   f"자동차 critical에 짧은 경고 없음 → {result}"
+    assert "미터" not in result, f"자동차 critical은 거리 수치 없이 짧게 안내해야 함 → {result}"
     assert "!" in result[-3:],  f"자동차 critical 문장이 느낌표로 끝나지 않음 → {result}"
 
 

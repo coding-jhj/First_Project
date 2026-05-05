@@ -38,7 +38,7 @@ if _USE_YOLO_WORLD:
     _model.set_classes(_WORLD_CLASSES)
     print(f"[YOLO-World] 모델 로드: yolov8x-worldv2.pt ({len(_WORLD_CLASSES)}클래스)")
 else:
-    _src = "yolo11n.pt"
+    _src = os.environ.get("SERVER_YOLO_MODEL", "yolo26s.pt").strip() or "yolo26s.pt"
     _model = YOLO(_src)
     print(f"[YOLO] 모델 로드: {_src}")
 
@@ -423,28 +423,75 @@ def detect_objects(image_bytes: bytes) -> tuple[list[dict], dict]:
             return None
         return x1, y1, x2, y2
 
+    def _axis_aligned_obb_points(x1: int, y1: int, x2: int, y2: int) -> list[list[float]]:
+        return [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
+
+    def _sanitize_obb_points(points, x1: int, y1: int, x2: int, y2: int) -> list[list[float]]:
+        if points is None or len(points) < 4:
+            return _axis_aligned_obb_points(x1, y1, x2, y2)
+        clean = []
+        for px, py in points[:4]:
+            clean.append([
+                round(max(0.0, min(float(px), float(w - 1))), 2),
+                round(max(0.0, min(float(py), float(h - 1))), 2),
+            ])
+        return clean
+
+    def _normalize_obb_points(points: list[list[float]]) -> list[list[float]]:
+        return [[round(px / w, 6), round(py / h, 6)] for px, py in points]
+
     # YOLO 추론: conf=CONF_THRESHOLD 미만 박스는 자동 필터링
     results    = model(img, conf=CONF_THRESHOLD, imgsz=416, max_det=8)[0]
     all_detections = []
+    raw_candidates = []
 
-    for box in results.boxes:
-        cls_name = model.names[int(box.cls)]  # 영어 클래스명 (예: "chair")
+    obb = getattr(results, "obb", None)
+    if obb is not None and getattr(obb, "xyxyxyxy", None) is not None:
+        obb_points = obb.xyxyxyxy.cpu().numpy()
+        obb_angles = obb.xywhr.cpu().numpy() if getattr(obb, "xywhr", None) is not None else None
+        for idx in range(len(obb.cls)):
+            pts = [[float(x), float(y)] for x, y in obb_points[idx].reshape(4, 2)]
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            raw_candidates.append({
+                "cls_name": model.names[int(obb.cls[idx].item())],
+                "conf": float(obb.conf[idx].item()),
+                "bbox": (int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys))),
+                "obb_points": pts,
+                "obb_angle_rad": float(obb_angles[idx][4]) if obb_angles is not None else None,
+                "is_obb": True,
+            })
+    else:
+        for box in results.boxes:
+            raw_candidates.append({
+                "cls_name": model.names[int(box.cls)],
+                "conf": float(box.conf[0]),
+                "bbox": tuple(map(int, box.xyxy[0])),
+                "obb_points": None,
+                "obb_angle_rad": None,
+                "is_obb": False,
+            })
+
+    for raw in raw_candidates:
+        cls_name = raw["cls_name"]  # 영어 클래스명 (예: "chair")
 
         # TARGET_CLASSES에 없는 클래스는 무시 (COCO 중 보행 무관한 것들)
         if cls_name not in TARGET_CLASSES:
             continue
 
         # 클래스별 최소 신뢰도 적용 (소형 물체는 높게, 차량은 낮게)
-        conf = float(box.conf[0])
+        conf = raw["conf"]
         if conf < CLASS_MIN_CONF.get(cls_name, CONF_THRESHOLD):
             continue
 
         # bbox 좌표: xyxy 포맷 (왼쪽상단x, 왼쪽상단y, 오른쪽하단x, 오른쪽하단y)
-        x1, y1, x2, y2 = map(int, box.xyxy[0])
+        x1, y1, x2, y2 = raw["bbox"]
         sanitized = _sanitize_bbox(x1, y1, x2, y2)
         if sanitized is None:
             continue
         x1, y1, x2, y2 = sanitized
+        obb_points_px = _sanitize_obb_points(raw.get("obb_points"), x1, y1, x2, y2)
+        obb_points_norm = _normalize_obb_points(obb_points_px)
 
         # 방향 판단: bbox 중심의 x좌표를 이미지 너비로 정규화 (0~1)
         # → ZONE_BOUNDARIES와 비교해서 8시~4시 중 어느 구역인지 결정
@@ -529,12 +576,17 @@ def detect_objects(image_bytes: bytes) -> tuple[list[dict], dict]:
             "bbox_xywh":            bbox_xywh,
             "bbox_norm_xyxy":       bbox_norm_xyxy,
             "bbox_norm_xywh":       bbox_norm_xywh,
-            "bbox_format":          "xyxy_pixels",
+            "obb":                  obb_points_px,
+            "obb_xyxyxyxy":         obb_points_px,
+            "obb_norm_xyxyxyxy":    obb_points_norm,
+            "obb_angle_rad":        raw.get("obb_angle_rad"),
+            "bbox_format":          "obb_xyxyxyxy_pixels" if raw.get("is_obb") else "xyxy_pixels",
             "direction":            direction,
             "distance":             distance,
             "distance_m":           distance_m,
             "risk_score":           risk_score,
             "conf":                 round(conf, 2),
+            "confidence":           round(conf, 2),
             "is_ground_level":      is_ground,
             "is_vehicle":           is_vehicle,
             "is_animal":            is_animal,

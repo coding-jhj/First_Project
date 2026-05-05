@@ -172,6 +172,32 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         val inter = (ix2 - ix1) * (iy2 - iy1)
         return inter / (a.w * a.h + b.w * b.h - inter)
     }
+    private fun axisAlignedObbPoints(x: Float, y: Float, w: Float, h: Float): List<Float> = listOf(
+        x, y,
+        x + w, y,
+        x + w, y + h,
+        x, y + h
+    ).map { it.coerceIn(0f, 1f) }
+
+    private fun parseObbPoints(arr: JSONArray?): List<Float>? {
+        if (arr == null) return null
+        val out = ArrayList<Float>(8)
+        if (arr.length() >= 8 && arr.opt(0) is Number) {
+            for (i in 0 until 8) out.add(arr.optDouble(i).toFloat().coerceIn(0f, 1f))
+            return out
+        }
+        if (arr.length() >= 4) {
+            for (i in 0 until 4) {
+                val point = arr.optJSONArray(i) ?: return null
+                if (point.length() < 2) return null
+                out.add(point.optDouble(0).toFloat().coerceIn(0f, 1f))
+                out.add(point.optDouble(1).toFloat().coerceIn(0f, 1f))
+            }
+            return out
+        }
+        return null
+    }
+
     // 질문 응답 직후 periodic TTS 억제 — 겹침 방지 (3초간 periodic silent 처리)
     @Volatile private var suppressPeriodicUntil = 0L
     // FPS 측정 — 마지막 요청 시각과 서버 응답시간(ms) 기록
@@ -1535,13 +1561,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         val hn  = normXywh.optDouble(3).toFloat()
                         val classKo = obj.optString("class_ko", "")
                         if (classKo.isEmpty() || wn <= 0f || hn <= 0f) continue
+                        val obbPoints = parseObbPoints(obj.optJSONArray("obb_norm_xyxyxyxy"))
+                            ?: axisAlignedObbPoints(x1n, y1n, wn, hn)
                         serverDetections.add(Detection(
                             classKo    = classKo,
                             confidence = obj.optDouble("confidence", 0.9).toFloat(),
                             cx         = x1n + wn / 2f,
                             cy         = y1n + hn / 2f,
                             w          = wn,
-                            h          = hn
+                            h          = hn,
+                            obbPoints  = obbPoints
                         ))
                     }
                 }
@@ -1579,7 +1608,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             System.currentTimeMillis() < suppressPeriodicUntil) "silent" else alertMode
 
         runOnUiThread {
-            tvDetected.text = detectedText
+            tvDetected.text = "인식: $sentence"
             if (sentence == "주변에 장애물이 없어요.") {
                 if (!isSpeaking()) tvStatus.text = "장애물 없음"
                 return@runOnUiThread

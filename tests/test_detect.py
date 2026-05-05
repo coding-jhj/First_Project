@@ -49,6 +49,8 @@ def test_detect_objects_fields(sample_image_bytes):
         assert "class"           in obj  # 영어 클래스명 (COCO 표준)
         assert "class_ko"        in obj  # 한국어 클래스명 (TTS 안내용)
         assert "bbox"            in obj  # [x1,y1,x2,y2] 픽셀 좌표
+        assert "obb_xyxyxyxy"    in obj  # OBB 4점 픽셀 좌표
+        assert "obb_norm_xyxyxyxy" in obj  # Android overlay용 정규화 OBB 4점 좌표
         assert "direction"       in obj  # 시계 방향 (8시~4시)
         assert "distance"        in obj  # 거리 레이블 ("가까이" 등)
         assert "distance_m"      in obj  # 미터 단위 추정 거리
@@ -62,3 +64,6 @@ def test_detect_objects_fields(sample_image_bytes):
         assert 0.0 <= obj["risk_score"] <= 1.0         # 위험도는 0~1 범위
         assert obj["distance_m"] >= 0.1                # 거리는 최소 10cm 이상
         assert isinstance(obj["is_ground_level"], bool)
+        assert len(obj["obb_xyxyxyxy"]) == 4
+        assert len(obj["obb_norm_xyxyxyxy"]) == 4
+        assert all(len(point) == 2 for point in obj["obb_norm_xyxyxyxy"])
