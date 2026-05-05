@@ -1579,7 +1579,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             System.currentTimeMillis() < suppressPeriodicUntil) "silent" else alertMode
 
         runOnUiThread {
-            tvDetected.text = detectedText
+            tvDetected.text = "인식: $sentence"
             if (sentence == "주변에 장애물이 없어요.") {
                 if (!isSpeaking()) tvStatus.text = "장애물 없음"
                 return@runOnUiThread

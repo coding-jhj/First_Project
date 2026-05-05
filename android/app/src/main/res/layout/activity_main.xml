@@ -102,6 +102,19 @@
 
         </FrameLayout>
 
+        <TextView
+            android:id="@+id/tvDetected"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textSize="13sp"
+            android:textColor="@color/vg_text_sub"
+            android:gravity="center"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:paddingBottom="8dp"
+            android:fontFamily="sans-serif" />
+
         <!-- 모드 / FPS — monospace 유지 (FPS 수치 정렬 목적) -->
         <TextView
             android:id="@+id/tvMode"
