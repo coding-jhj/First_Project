@@ -1,35 +1,84 @@
 # Project Overview
 
-## 목적
+## 한 줄 소개
 
-VoiceGuide는 카메라 기반 장애물 인식, 거리/방향 안내, 음성 입출력을 결합해 시각 보조 안내를 제공하는 프로젝트입니다.
+VoiceGuide는 스마트폰 카메라로 주변 장애물을 인식하고, 방향과 대략적인 거리를 한국어 음성으로 안내하는 시각 보조 Android 앱입니다.
 
-## 핵심 기능
+## 문제 정의
 
-- Android 앱에서 카메라 프레임 수집
-- 온디바이스 ONNX YOLO 추론
-- 필요 시 서버/GCP 기반 분석 보조
-- 장애물, 찾기, 확인 모드별 문장 생성
-- STT/TTS 기반 음성 상호작용
-- FPS, GPS, 탐지 결과, 위험 문장 검증
+기존 시각 보조 앱은 "무엇이 있다"는 설명에는 강하지만, 사용자가 바로 행동할 수 있는 안내는 부족합니다.
+
+| 서비스 | 예시 출력 | 한계 |
+|---|---|---|
+| Google Lookout | "의자가 있습니다" | 방향, 거리, 행동 지침 부족 |
+| Seeing AI | "왼쪽에 의자가 있습니다" | 회피 행동 안내 부족 |
+| VoiceGuide | "바로 앞에 의자가 있어요. 멈추세요." | 행동 중심 안내 |
+
+최종 문제 정의는 다음과 같습니다.
+
+> 시각장애인이 이동 중 장애물의 위치와 회피 방향을 즉각적으로 안내받기 어렵기 때문에, 카메라와 음성 명령을 결합한 행동 중심 안내 서비스가 필요하다.
+
+## MVP 범위
+
+발표와 검증의 기준은 기능을 많이 보여주는 것이 아니라, 실제로 설명하고 실행할 수 있는 기능을 안정적으로 보여주는 것입니다.
+
+| 우선순위 | 기능 | 사용자 발화 예시 | 출력 예시 |
+|---|---|---|---|
+| 1 | 장애물 안내 | "앞에 뭐 있어", "주변 알려줘" | "바로 앞에 의자가 있어요. 멈추세요." |
+| 2 | 물건 찾기 | "가방 찾아줘", "휴대폰 어디 있어" | "가방은 오른쪽 앞에 있어요." |
+| 3 | 물건 확인 | "이거 뭐야", "이게 뭐야" | "카메라 앞에 의자가 있어요." |
+
+## 인식 대상
+
+MVP 기준 핵심 대상은 실내 이동과 발표 시연에 필요한 사물입니다.
+
+| 한국어 | YOLO 클래스 |
+|---|---|
+| 사람 | `person` |
+| 의자 | `chair` |
+| 테이블 | `dining table` |
+| 가방 | `backpack`, `suitcase` |
+| 휴대폰 | `cell phone` |
+
+확장 대상으로는 차량, 자전거, 동물, 계단/낙차, 신호등 등이 있습니다. 다만 안전 앱이므로 검증되지 않은 기능은 "보조/실험 기능"으로 설명합니다.
+
+## 전체 처리 흐름
+
+```text
+Android MainActivity
+  -> CameraX 프레임 수집
+  -> 온디바이스 우선 처리
+       YoloDetector.kt
+       SentenceBuilder.kt
+       Android TTS
+  -> 서버 사용 시
+       POST /detect
+       src/api/routes.py
+       src/vision/detect.py
+       src/depth/depth.py
+       src/nlg/sentence.py
+       Android TTS
+```
 
 ## 현재 루트 구조
 
-- `android/`: Android 앱
-- `src/`: 서버와 Python 핵심 로직
-- `tests/`: 자동 테스트
-- `tools/`: 검증/운영 도구
-- `templates/`: 서버 UI 템플릿
-- `train/`: 학습/데이터 준비 스크립트
-- `data/`: 샘플 데이터와 예시 파일
-- `depth_anything_v2/`: 깊이 추정 모듈
-- `legacy/`: 과거 문서, 실험 코드, 산출물 보관
+| 경로 | 역할 |
+|---|---|
+| `android/` | Android 앱, 카메라, ONNX, TTS |
+| `src/api/` | FastAPI 서버, 라우터, DB, tracker |
+| `src/vision/` | YOLO 탐지 |
+| `src/depth/` | 깊이 추정, 바닥 위험 판단 |
+| `src/nlg/` | 한국어 안내 문장 생성 |
+| `src/voice/` | STT/TTS 서버 보조 |
+| `tests/` | 자동 테스트 |
+| `tools/` | 검증, 배포, 진단 도구 |
+| `templates/` | 대시보드 HTML |
+| `legacy/` | 과거 문서, 실험 코드, 산출물 보관 |
 
-## 상세 원본
+## 개발 원칙
 
-- `legacy/md/PRD.md`
-- `legacy/md/PROJECT_STRUCTURE.md`
-- `legacy/md/PROJECT_GUIDE.md`
-- `legacy/md/TECH.md`
-- `legacy/md/mvp_checklist.md`
-
+1. 발표 전에는 기능 추가보다 검증을 우선합니다.
+2. 서버 진입점은 `src.api.main:app` 하나로 고정합니다.
+3. Android는 서버가 없어도 기본 장애물/찾기/확인 흐름을 유지해야 합니다.
+4. 거리 표현은 정확한 측정이 아니라 대략 추정으로 설명합니다.
+5. 안전을 보장한다고 말하지 않고, 보행 보조 정보를 제공한다고 설명합니다.

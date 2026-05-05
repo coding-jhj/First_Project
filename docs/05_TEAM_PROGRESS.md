@@ -1,35 +1,41 @@
 # Team Progress
 
-## 역할 문서
+## 팀 역할
 
-팀 역할과 담당 기준은 아래 원본을 기준으로 합니다.
+| 이름 | 역할 | 주요 책임 |
+|---|---|---|
+| 정환주 | 팀장, 서버, 프론트엔드 | MVP 범위 결정, GCP 서버, API/DB/tracker, 대시보드, 문서 최종 정리 |
+| 신유득 | Vision/ML | YOLO/Depth/OCR 검증, 모델 실험, 실패 사례 분석 |
+| 김재현 | Android/UX | CameraX, ONNX 온디바이스, UI, 권한, TTS, 성능 |
+| 임명광 | NLG, 서버 보조 | 한국어 문장 생성, 서버 응답 문장, 표현 규칙 정리 |
+| 문수찬 | Voice, Q&A | STT/TTS 검증, 발표 Q&A, 음성 fallback 설명 |
 
-- `legacy/md/TEAM.md`
-- `legacy/md/ROLE_GUIDE.md`
-- `legacy/md/ROLE_YOODK.md`
-- `legacy/md/JHWAN_STUDY.md`
-- `legacy/md/SERVER_AND_LEAD_ACTIONS.md`
+## 진행 요약
 
-## 날짜별 진행 기록
+| 날짜 | 핵심 내용 |
+|---|---|
+| 2026-04-27 | 사용자 인터뷰 분석, 문제 정의, 초기 MVP 방향 정리 |
+| 2026-04-28 | 회의 준비와 결과 정리, 기능 범위 조정 |
+| 2026-04-29 | 강사 피드백 반영, 역할별 작업과 발표 방향 정리 |
+| 2026-04-30 | GCP/서버 연결, 회의록, MVP 체크리스트 정리 |
+| 2026-05-02 | Vision/ML 검증, 실패 사례, 성능 이슈 정리 |
+| 2026-05-03 | Android/서버 문장, GPS/FPS, 역할 문서 정리 |
+| 2026-05-04 | OBB 탐지, 서버/Android 통합, 문서 구조 정리 |
 
-날짜별 기록은 개별 파일을 docs에 모두 꺼내지 않고 legacy에 보관합니다.
+## 팀 운영 원칙
 
-- `legacy/md/2026-04-27.md`
-- `legacy/md/2026-04-28.md`
-- `legacy/md/2026-04-29.md`
-- `legacy/md/2026-04-30.md`
-- `legacy/md/2026-05-02.md`
-- `legacy/md/2026-05-03.md`
-- `legacy/md/2026-05-04.md`
+1. 기능을 늘리기보다 발표 가능한 MVP를 안정화합니다.
+2. Android, 서버, NLG 문장 규칙이 서로 다르지 않게 맞춥니다.
+3. 실패 사례는 숨기지 않고 "어떻게 보완했는지"까지 설명합니다.
+4. 안전 앱이므로 검증 범위를 넘는 표현은 피합니다.
 
-## 회의록 원본
+## 강사님께 설명할 포인트
 
-- `legacy/md/MEETING_0427.md`
-- `legacy/md/MEETING_0428.md`
-- `legacy/md/MEETING_0428_RESULT.md`
-- `legacy/md/MEETING_0429_PREP.md`
-- `legacy/md/MEETING_0429_INSTRUCTOR_FEEDBACK.md`
-- `legacy/md/회의록_2026-04-29.md`
-- `legacy/md/MEETING_2026-04-30.md`
-- `legacy/md/MEETING_2026-05-04.md`
+- 팀 역할이 코드 폴더와 연결되어 있습니다.
+- 서버/Android/Vision/NLG/Voice가 각자 나뉘지만, 최종 결과는 "사용자가 듣는 안내 문장"으로 합쳐집니다.
+- 날짜별 기록은 길어서 docs에는 요약만 두고, 필요 시 원본 기록을 확인할 수 있습니다.
 
+## 문서 관리 기준
+
+날짜별 기록과 회의록은 이 문서에서 발표용으로 요약합니다.  
+강사님께 공유할 때는 이 파일 하나로 팀 진행 흐름을 설명하는 것을 기준으로 합니다.
