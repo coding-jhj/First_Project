@@ -90,13 +90,9 @@ object SentenceBuilder {
             it.classKo in VEHICLE_CLASSES && it.w * it.h > 0.04f
         }
         if (nearVehicle != null) {
-            val clock   = getStableClock(nearVehicle.classKo, nearVehicle.cx)
-            val dir     = CLOCK_TO_DIRECTION[clock] ?: clock
-            val action  = DIRECTION_ACTION[clock] ?: "즉시 멈추세요"
-            val distStr = formatDist(nearVehicle.w, nearVehicle.h)
-            val locStr  = if (distStr == "코앞" && dir == "바로 앞") "바로 코앞" else "$dir $distStr"
-            val ig      = josaIGa(nearVehicle.classKo)
-            return "위험! ${locStr}에 ${nearVehicle.classKo}${ig} 있어요! $action!"
+            val clock = getStableClock(nearVehicle.classKo, nearVehicle.cx)
+            val dir   = CLOCK_TO_DIRECTION[clock] ?: clock
+            return "위험! ${dir} 앞 ${nearVehicle.classKo}! 조심!"
         }
 
         // 2순위: 일반 장애물 — 최대 2개까지 문장 생성
@@ -115,7 +111,7 @@ object SentenceBuilder {
             // 위치 뒤 쉼표 → TTS 엔진이 방향+거리 읽은 뒤 짧게 쉬고 물체명 읽음
             val base = when {
                 det.classKo in VEHICLE_CLASSES ->
-                    "조심! ${locStr}에, ${det.classKo}${ig} 접근 중이에요. $action."
+                    "위험! ${dir} 앞 ${det.classKo}! 조심!"
                 isAnimal ->
                     "조심! ${locStr}에, ${det.classKo}${ig} 있어요. 천천히 $action."
                 det.classKo in EVERYDAY_CLASSES ->
