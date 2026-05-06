@@ -1813,8 +1813,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }.start()
     }
 
-    // ── 걸음감지 요약 처리 ────────────────────────────────────────────────
-
     // ── 결과 처리 & Failsafe ────────────────────────────────────────────
 
     private fun handleSuccess(sentence: String, alertMode: String = "critical") {
