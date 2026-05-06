@@ -101,7 +101,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // ── 온디바이스 투표(Voting) 버퍼 ─────────────────────────────────────
     // 최근 VOTE_WINDOW(3)프레임 탐지 결과를 기록해 VOTE_MIN_COUNT(2)회 이상 등장한 사물만 안내
     // → 순간 오탐(인형·노트북 등)이 단발로 잡혀도 TTS 안내 안 됨
-    private val detectionHistory = ArrayDeque<Set<String>>()
+    private val detectionHistory     = ArrayDeque<Set<String>>()
+    private val detectionHistoryLock = Any()   // MAX_ON_DEVICE_IN_FLIGHT=3 → 다중 스레드 보호
     private val VOTE_WINDOW    = 3
     private val VOTE_MIN_COUNT = 2
 
@@ -118,11 +119,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private val BEEP_AREA_THRESH  = 0.08f  // bbox 면적 8% 이상 = 가까이 있음
 
     private fun voteOnly(detections: List<Detection>): List<Detection> {
-        val currentClasses = detections.map { it.classKo }.toSet()
-        detectionHistory.addLast(currentClasses)
-        if (detectionHistory.size > VOTE_WINDOW) detectionHistory.removeFirst()
-        val counts = mutableMapOf<String, Int>()
-        for (frame in detectionHistory) frame.forEach { counts[it] = (counts[it] ?: 0) + 1 }
+        val counts = synchronized(detectionHistoryLock) {
+            // 수집 모드 중에는 히스토리를 갱신하지 않음 — 질문 응답 프레임이 일반 보팅 기록을 오염시키는 것을 방지
+            if (!isCollecting) {
+                val currentClasses = detections.map { it.classKo }.toSet()
+                detectionHistory.addLast(currentClasses)
+                if (detectionHistory.size > VOTE_WINDOW) detectionHistory.removeFirst()
+            }
+            val c = mutableMapOf<String, Int>()
+            for (frame in detectionHistory) frame.forEach { c[it] = (c[it] ?: 0) + 1 }
+            c
+        }
         return detections.filter { d ->
             d.classKo in VoicePolicy.voteBypassKo() || (counts[d.classKo] ?: 0) >= VOTE_MIN_COUNT
         }
@@ -1033,7 +1040,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         isAnalyzing.set(true)
         autoListenEnabled = true
         SentenceBuilder.clearStableClocks()
-        detectionHistory.clear()
+        synchronized(detectionHistoryLock) { detectionHistory.clear() }
         lastSentence = ""
         consecutiveFails.set(0)
         lastGpsSentTime = 0L
