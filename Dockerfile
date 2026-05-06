@@ -11,19 +11,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Python 의존성 설치
-# Cloud Run 서버에서 불필요한 로컬 전용 패키지 제외:
-#   torch/torchvision/ultralytics/opencv/numpy/Pillow - 서버 추론/이미지 분석 미사용
-#   pyaudio      - portaudio 시스템 라이브러리 필요 (서버 미사용)
-#   pygame       - SDL2 시스템 라이브러리 필요 (서버 미사용)
-#   gradio       - 로컬 데모 UI (서버 미사용)
-#   huggingface_hub / websockets - gradio 의존성
-#   SpeechRecognition - 로컬 STT (서버 미사용)
-#   ddgs         - 파인튜닝 데이터 수집 도구 (서버 미사용)
-#   easyocr      - 버스 OCR 실험 기능 (서버 미사용)
-#   onnxscript   - ONNX 내보내기 도구 (서버 미사용)
+# Cloud Run 서버에서 불필요한 모델 준비/학습 도구 제외:
+#   torch/torchvision/ultralytics/opencv/numpy/Pillow - Android ONNX 모델 준비용
+#   ddgs         - 파인튜닝 데이터 수집 도구
+#   onnx/onnxscript - ONNX 내보내기 도구
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
-    grep -vE "^(torch|torchvision|numpy|ultralytics|opencv-python-headless|Pillow|pyaudio|pygame|gradio|huggingface_hub|websockets|SpeechRecognition|ddgs|easyocr|onnx|onnxscript)" \
+    grep -vE "^(torch|torchvision|numpy|ultralytics|opencv-python-headless|Pillow|ddgs|onnx|onnxscript)" \
         requirements.txt > /tmp/requirements-prod.txt && \
     pip install --no-cache-dir -r /tmp/requirements-prod.txt
 

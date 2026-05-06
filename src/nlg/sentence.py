@@ -203,7 +203,7 @@ def build_sentence(
     장애물/확인 모드의 메인 안내 문장 생성.
 
     Args:
-        objects: detect_and_depth()가 반환한 탐지 물체 (위험도 순 정렬됨)
+        objects: Android 온디바이스 YOLO 결과를 서버에서 정규화한 탐지 물체
         changes: tracker가 감지한 변화 메시지 ["가방이 가까워지고 있어요"]
         camera_orientation: 폰 방향 (front/back/left/right)
 

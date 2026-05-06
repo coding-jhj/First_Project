@@ -38,7 +38,7 @@ class Target:
 TARGETS: list[Target] = [
     Target("의자", ["indoor chair photo", "chair in room", "office chair"], 12),
     Target("사람", ["person walking street", "person indoor standing", "pedestrian sidewalk"], 12),
-    # 버스(OCR) / 계단(바닥 위험)은 범위에서 제외: Phase 4 기본 평가에서 빼고 진행
+    # 버스/계단은 Phase 4 기본 평가 범위에서 제외
 ]
 
 
