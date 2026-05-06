@@ -32,8 +32,10 @@ import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
@@ -280,6 +282,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // ── ONNX 온디바이스 추론 ───────────────────────────────────────────
     private var yoloDetector: YoloDetector? = null
     private val stairsDetector = StairsDetector()
+    private val mvpPipeline = MvpPipeline()
 
     companion object {
         private const val PERM_CODE          = 100  // 카메라 + 마이크 (앱 시작 시)
@@ -799,8 +802,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 runOnUiThread {
                     tvStatus.text = "온디바이스 준비 완료 — 분석 시작을 누르세요"
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
                 // assets에 yolo11n.onnx 없는 경우 → 서버 모드 안내
+                Log.e("VG_PERF", "YOLO detector init failed", e)
                 runOnUiThread { tvStatus.text = "ONNX 모델 없음 — 서버 URL을 입력하세요" }
             }
         }.start()
@@ -1240,6 +1244,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         return true
     }
 
+    private fun rejectServerInferenceFallback(imageFile: File, requestId: String) {
+        Log.w("VG_FLOW", "request_id=$requestId server image inference disabled; waiting for on-device detector")
+        imageFile.delete()
+        handleFail()
+    }
+
     private fun isNetworkAvailable(): Boolean {
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
         val network = cm.activeNetwork ?: return false
@@ -1255,8 +1265,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     /**
      * 질문 모드 전용 즉시 캡처.
-     * 온디바이스로 탐지한 뒤 JSON을 서버에 전송 → tracker 누적 상태 포함 포괄 응답을 받음.
-     * isSending 체크를 우회해서 항상 즉시 실행 (사용자 직접 질문이므로).
+     * 온디바이스로 탐지한 뒤 JSON을 서버에 전송하고, 서버가 없으면 로컬 안내를 사용한다.
      */
     private fun captureAndProcessAsQuestion() {
         val file = File.createTempFile("vg_q_", ".jpg", cacheDir)
@@ -1265,9 +1274,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             cameraExecutor,
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                    inFlightCount.incrementAndGet()
                     processOnDevice(file, nextRequestId(), "질문")
                 }
                 override fun onError(e: ImageCaptureException) {
+                    file.delete()
                     speak("사진을 찍지 못했어요.")
                 }
             })
@@ -1284,9 +1295,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             cameraExecutor,
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    processOnDevice(file, nextRequestId(), "들고있는것")
+                    val requestId = nextRequestId()
+                    inFlightCount.incrementAndGet()
+                    processOnDevice(file, requestId, "들고있는것")
                 }
                 override fun onError(e: ImageCaptureException) {
+                    file.delete()
                     speak("사진을 찍지 못했어요.")
                 }
             })
@@ -1360,7 +1374,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
                 val tDedup = System.currentTimeMillis()
                 // 투표 필터 → 같은 클래스 중복 bbox 제거(IoU 기반) 순서로 처리
-                val voted = removeDuplicates(voteOnly(rawDetections))
+                val mvpFrame = mvpPipeline.update(removeDuplicates(voteOnly(rawDetections)))
+                val voted = mvpFrame.detections
                 val dedupMs = System.currentTimeMillis() - tDedup
 
                 val totalMs = System.currentTimeMillis() - t0
@@ -1456,10 +1471,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                             else                                               -> "normal"
                         }
                         Log.d("VG_DETECT", "→ 음성 출력 (mode=$mode)")
+                        performVibrationFeedback(mvpFrame.vibrationPattern)
                         sendDetectionJsonToServer(voted, effectiveMode, requestId, imgW, imgH, decodeMs, inferMs, dedupMs, totalMs, sentence, mode)
                     }
                     shouldBeep -> {
                         Log.d("VG_DETECT", "→ 비프음")
+                        performVibrationFeedback(mvpFrame.vibrationPattern)
                         sendDetectionJsonToServer(voted, effectiveMode, requestId, imgW, imgH, decodeMs, inferMs, dedupMs, totalMs, sentence, "beep")
                     }
                     else       -> {
@@ -1467,6 +1484,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         sendDetectionJsonToServer(voted, effectiveMode, requestId, imgW, imgH, decodeMs, inferMs, dedupMs, totalMs, "주변에 장애물이 없어요.", "silent")
                     }
                 }
+
                 imageFile.delete()
             } catch (e: Exception) {
                 Log.e("VG_DETECT", "request_id=$requestId On-device detection failed", e)
@@ -1567,6 +1585,23 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     }
 
     /** JPEG 파일의 EXIF 회전 태그를 읽어 실제 화면 방향으로 비트맵을 회전한다. */
+    private fun performVibrationFeedback(pattern: VibrationPattern) {
+        if (pattern == VibrationPattern.NONE) return
+        val timings = when (pattern) {
+            VibrationPattern.SHORT -> longArrayOf(0, 45)
+            VibrationPattern.DOUBLE -> longArrayOf(0, 55, 65, 55)
+            VibrationPattern.URGENT -> longArrayOf(0, 90, 60, 90, 60, 140)
+            VibrationPattern.NONE -> return
+        }
+        val vibrator = getSystemService(VIBRATOR_SERVICE) as android.os.Vibrator
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            vibrator.vibrate(android.os.VibrationEffect.createWaveform(timings, -1))
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(timings, -1)
+        }
+    }
+
     private fun decodeBitmapUpright(file: File): android.graphics.Bitmap {
         val exif = android.media.ExifInterface(file.absolutePath)
         val degrees = when (exif.getAttributeInt(
@@ -1586,8 +1621,190 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         return rotated
     }
 
-    // 서버는 이미지 분석을 하지 않으므로 이미지 업로드 경로는 두지 않는다.
+    // ── 온디바이스 탐지 결과 JSON 전송 (새 아키텍처) ─────────────────────────
 
+    /**
+     * 온디바이스 추론 결과를 JSON으로 서버에 비동기 전송.
+     * TTS 흐름을 차단하지 않도록 fire & forget 방식으로 실행.
+     * 서버는 이미지 처리 없이 DB 저장 + tracker 업데이트만 수행.
+     */
+    private fun sendDetectionsJson(detections: List<Detection>, requestId: String) {
+        val serverUrl = getConfiguredServerUrl().trimEnd('/').ifBlank { return }
+        Thread {
+            try {
+                val body = org.json.JSONObject().apply {
+                    put("device_id",   getDeviceSessionId())
+                    put("session_id",  getDeviceSessionId())
+                    put("wifi_ssid",   getWifiSsid())
+                    put("request_id",  requestId)
+                    put("mode",        currentMode)
+                    put("camera_orientation", cameraOrientation)
+                    if (hasValidLocation()) {
+                        put("lat", currentLat)
+                        put("lng", currentLng)
+                    }
+                    put("detections", org.json.JSONArray().also { arr ->
+                        detections.forEach { d ->
+                            arr.put(org.json.JSONObject().apply {
+                                put("class_ko",   d.classKo)
+                                put("confidence", d.confidence.toDouble())
+                                put("cx",         d.cx.toDouble())
+                                put("cy",         d.cy.toDouble())
+                                put("w",          d.w.toDouble())
+                                put("h",          d.h.toDouble())
+                                put("zone",       SentenceBuilder.getClock(d.cx))
+                                put("dist_m",     if (d.distanceM > 0f) d.distanceM.toDouble() else VoicePolicy.calcDistBboxM(d.w, d.h))
+                                put("track_id",   d.trackId)
+                                put("risk_score", d.riskScore.toDouble())
+                                put("vibration_pattern", d.vibrationPattern)
+                                put("is_vehicle", d.classKo in VoicePolicy.vehicleKo())
+                                put("is_animal",  d.classKo in VoicePolicy.animalKo())
+                            })
+                        }
+                    })
+                }
+                val reqBody = body.toString()
+                    .toByteArray(Charsets.UTF_8)
+                    .toRequestBody("application/json; charset=utf-8".toMediaType())
+                httpClient.newCall(
+                    Request.Builder()
+                        .url("$serverUrl/detect_json")
+                        .post(reqBody)
+                        .build()
+                ).execute().close()
+            } catch (e: Exception) {
+                Log.d("VG_JSON", "detect_json 전송 실패 (무시): ${e.message}")
+            }
+        }.start()
+    }
+
+    // ── 서버 전송 (선택 — URL 입력 시 Depth V2 정확도 향상) ──────────────
+
+    private fun sendToServer(imageFile: File, requestId: String) {
+        val serverUrl = getSavedServerUrl().trimEnd('/')
+        if (serverUrl.isEmpty()) {
+            imageFile.delete()
+            handleFail()
+            return
+        }
+        // 이 요청의 seq — 응답이 오래된 것이면 UI 반영 생략
+        val mySeq = requestId.substringAfterLast('-').toIntOrNull() ?: Int.MAX_VALUE
+
+        Thread {
+            try {
+                val reqStart = System.currentTimeMillis()
+                lastRequestTime = reqStart
+
+                val optimized = optimizeImageForUpload(imageFile)
+                val uploadBytes = optimized.length()
+                // 업로드 이미지 크기 — 서버 bbox 좌표 스케일링에 사용
+                val dimOpts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeFile(optimized.absolutePath, dimOpts)
+                val uploadImgW = if (dimOpts.outWidth > 0) dimOpts.outWidth else 640
+                val uploadImgH = if (dimOpts.outHeight > 0) dimOpts.outHeight else 480
+                Log.d("VG_GPS", "send detect lat=$currentLat lng=$currentLng")
+
+                val bodyBuilder = MultipartBody.Builder().setType(MultipartBody.FORM)
+                    .addFormDataPart("image", "frame.jpg",
+                        optimized.asRequestBody("image/jpeg".toMediaType()))
+                    .addFormDataPart("camera_orientation", cameraOrientation)
+                    .addFormDataPart("wifi_ssid", getWifiSsid())
+                    .addFormDataPart("device_id", getDeviceSessionId())
+                    .addFormDataPart("mode", currentMode)
+                    .addFormDataPart("query_text", findTarget)
+                    .addFormDataPart("request_id", requestId)
+                if (hasValidLocation()) {
+                    bodyBuilder
+                        .addFormDataPart("lat", currentLat.toString())
+                        .addFormDataPart("lng", currentLng.toString())
+                }
+                val body = bodyBuilder.build()
+
+                val response = httpClient.newCall(
+                    Request.Builder().url("$serverUrl/detect").post(body).build()
+                ).execute()
+
+                // 전체 왕복 시간 = 네트워크 + 서버 처리
+                val roundTripMs = System.currentTimeMillis() - reqStart
+                sendGpsHeartbeat("detect")
+                val json        = JSONObject(response.body?.string() ?: "{}")
+                val sentence    = json.optString("sentence", "주변에 장애물이 없어요.")
+                val alertMode   = json.optString("alert_mode", "critical")
+                val processMs   = json.optInt("process_ms", -1)  // 서버 내부 처리 시간
+                val responseRequestId = json.optString("request_id", requestId)
+                val perf = json.optJSONObject("perf")
+                lastProcessMs   = processMs
+
+                // FPS + 처리시간 UI 업데이트
+                val netMs = if (processMs > 0) roundTripMs - processMs else roundTripMs
+                val objectCount = json.optJSONArray("objects")?.length() ?: 0
+                val perfText = perf?.toString() ?: "{}"
+                Log.d("VG_LINK",
+                    "request_id=$requestId response_id=$responseRequestId mode=$currentMode " +
+                    "status=${response.code} upload=${uploadBytes}B total=${roundTripMs}ms " +
+                    "server=${processMs}ms net=${netMs}ms objects=$objectCount perf=$perfText")
+                Log.d("VG_PERF",
+                    "request_id|$requestId|route|server|server_ms|$processMs|net_ms|$netMs|total|$roundTripMs|bytes|$uploadBytes")
+                runOnUiThread {
+                    val fps = calcFps()
+                    lastFpsText = "${fps}fps | 서버:${processMs}ms 네트:${netMs}ms"
+                    tvMode.text = "[$currentMode] $lastFpsText"
+                    if (debugVisible) {
+                        val tv = findViewById<android.widget.TextView>(R.id.tvDebug)
+                        tv.text = "경로   : SERVER\n" +
+                                  "요청ID : ${requestId.takeLast(6)}\n" +
+                                  "FPS    : ${fps}\n" +
+                                  "서버   : ${processMs}ms\n" +
+                                  "네트워크: ${netMs}ms\n" +
+                                  "왕복   : ${roundTripMs}ms\n" +
+                                  "업로드 : ${uploadBytes / 1024}KB"
+                    }
+                }
+
+                // 서버 응답 bbox로 바운딩 박스 오버레이 업데이트
+                val serverDetections = mutableListOf<Detection>()
+                val objArray = json.optJSONArray("objects")
+                if (objArray != null) {
+                    for (i in 0 until objArray.length()) {
+                        val obj = objArray.optJSONObject(i) ?: continue
+                        val normXywh = obj.optJSONArray("bbox_norm_xywh") ?: continue
+                        if (normXywh.length() < 4) continue
+                        val x1n = normXywh.optDouble(0).toFloat()
+                        val y1n = normXywh.optDouble(1).toFloat()
+                        val wn  = normXywh.optDouble(2).toFloat()
+                        val hn  = normXywh.optDouble(3).toFloat()
+                        val classKo = obj.optString("class_ko", "")
+                        if (classKo.isEmpty() || wn <= 0f || hn <= 0f) continue
+                        serverDetections.add(Detection(
+                            classKo    = classKo,
+                            confidence = obj.optDouble("confidence", 0.9).toFloat(),
+                            cx         = x1n + wn / 2f,
+                            cy         = y1n + hn / 2f,
+                            w          = wn,
+                            h          = hn
+                        ))
+                    }
+                }
+                // 더 최신 응답이 이미 반영됐으면 이 응답은 UI 갱신 생략
+                val isLatest = lastAppliedSeq.accumulateAndGet(mySeq) { cur, new -> if (new > cur) new else cur } == mySeq
+                if (isLatest) {
+                    runOnUiThread {
+                        if (serverDetections.isEmpty()) boundingBoxOverlay.clearDetections()
+                        else boundingBoxOverlay.setDetections(serverDetections, uploadImgW, uploadImgH)
+                    }
+                    handleSuccess(sentence, alertMode)
+                } else {
+                    Log.d("VG_FLOW", "stale response seq=$mySeq < applied=${lastAppliedSeq.get()}, skip UI")
+                    inFlightCount.decrementAndGet()
+                }
+            } catch (e: Exception) {
+                Log.e("VG_LINK", "request_id=$requestId server request failed", e)
+                handleFail()
+            } finally {
+                imageFile.delete()
+            }
+        }.start()
+    }
     // ── 결과 처리 & Failsafe ────────────────────────────────────────────
 
     private fun handleSuccess(sentence: String, alertMode: String = "critical") {

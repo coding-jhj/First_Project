@@ -34,7 +34,11 @@ data class Detection(
     val cy: Float,           // 바운딩 박스 중심 Y (이미지 높이 기준 0.0~1.0)
     val w: Float,            // 바운딩 박스 너비 (0.0~1.0)
     val h: Float,            // 바운딩 박스 높이 (0.0~1.0)
-    val isFound: Boolean = false  // 찾기 모드에서 발견된 대상이면 true (흰색 박스)
+    val isFound: Boolean = false,  // 찾기 모드에서 발견된 대상이면 true (흰색 박스)
+    val trackId: Int = 0,
+    val riskScore: Float = 0f,
+    val vibrationPattern: String = "NONE",
+    val distanceM: Float = 0f
 )
 
 class YoloDetector(context: Context) {
@@ -60,14 +64,24 @@ class YoloDetector(context: Context) {
             }
         }
         val bytes = context.assets.open(modelName).readBytes()
-        val opts = OrtSession.SessionOptions().apply {
+        fun sessionOptions(useNnapi: Boolean) = OrtSession.SessionOptions().apply {
             setIntraOpNumThreads(2)
             setInterOpNumThreads(1)
-            // NNAPI는 FP16 연산으로 클래스 신뢰도가 0에 수렴 → 탐지 0개 오류 발생
-            // → CPU 추론 유지 (정확도 우선)
-            android.util.Log.d("VG_PERF", "CPU 2스레드 추론 — $modelName")
+            if (useNnapi) addNnapi()
         }
-        session = env.createSession(bytes, opts)
+        session = try {
+            env.createSession(bytes, sessionOptions(useNnapi = true)).also {
+                android.util.Log.d("VG_PERF", "NNAPI FP32 추론 — $modelName")
+            }
+        } catch (e: Exception) {
+            android.util.Log.w(
+                "VG_PERF",
+                "NNAPI 세션 실패 → CPU 2스레드 fallback — $modelName: ${e.message}"
+            )
+            env.createSession(bytes, sessionOptions(useNnapi = false)).also {
+                android.util.Log.d("VG_PERF", "CPU 2스레드 추론 — $modelName")
+            }
+        }
         inputName = session.inputNames.iterator().next()
     }
 
