@@ -62,7 +62,7 @@ dependencies {
     implementation "androidx.camera:camera-lifecycle:${camerax_version}"
     implementation "androidx.camera:camera-view:${camerax_version}"
 
-    // OkHttp: 서버 /detect API HTTP 요청 (multipart/form-data 이미지 전송)
+    // OkHttp: 서버 /detect API HTTP 요청 (온디바이스 탐지 JSON 전송)
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 
     // Google Play Services Location: GPS/Network/Fused 위치 획득
