@@ -84,7 +84,6 @@ class SessionTracker:
     def __init__(self):
         # key: COCO 클래스명(영어), value: 추적 정보 dict
         self._tracks: dict[str, dict] = {}
-        self._voting = VotingBuffer()  # 보팅 버퍼 — 경고 피로 방지
 
     def update(self, objects: list[dict]) -> tuple[list[dict], list[str]]:
         """
@@ -101,9 +100,6 @@ class SessionTracker:
         now = time.monotonic()  # 단조 시계: 시스템 시간 변경에 영향 없음
         current_keys = {o["class"] for o in objects}  # 이번 프레임에 탐지된 클래스 집합
         changes: list[str] = []
-
-        # 보팅 버퍼에 현재 프레임 추가 (경고 피로 방지용)
-        self._voting.add_frame(current_keys)
 
         # ── 소멸 감지 ──────────────────────────────────────────────────────
         # 이전에 있었는데 지금 없는 물체 → 일정 시간 지나면 "사라졌어요" 안내
@@ -173,9 +169,8 @@ class SessionTracker:
             obj["distance_m"] = smooth_d
             smoothed.append(obj)
 
-        # 보팅 필터: 오탐 제거 (차량은 즉시 통과)
-        confirmed = self._voting.filter(smoothed)
-        return confirmed, changes
+        # Android에서 이미 보팅 완료된 결과가 오므로 서버는 EMA 평활화만 수행
+        return smoothed, changes
 
     def get_current_state(self, max_age_s: float = 3.0) -> list[dict]:
         """

@@ -97,7 +97,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private val lastAppliedSeq = AtomicInteger(0)  // 마지막으로 UI에 반영한 응답 seq
 
     // ── 온디바이스 투표(Voting) 버퍼 ─────────────────────────────────────
-    // 최근 5프레임 탐지 결과를 기록해 3회 이상 등장한 사물만 안내
+    // 최근 VOTE_WINDOW(3)프레임 탐지 결과를 기록해 VOTE_MIN_COUNT(2)회 이상 등장한 사물만 안내
     // → 순간 오탐(인형·노트북 등)이 단발로 잡혀도 TTS 안내 안 됨
     private val detectionHistory = ArrayDeque<Set<String>>()
     private val VOTE_WINDOW    = 3
@@ -107,6 +107,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private val CLASS_COOLDOWN_MS = 5000L  // 음성 안내 후 같은 사물 재발화 간격
     private val BEEP_AREA_THRESH  = 0.08f  // bbox 면적 8% 이상 = 가까이 있음
 
+    @Synchronized
     private fun voteOnly(detections: List<Detection>): List<Detection> {
         val currentClasses = detections.map { it.classKo }.toSet()
         detectionHistory.addLast(currentClasses)
@@ -629,6 +630,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             // ── 장애물 모드: 즉시 캡처 ───────────────────────────────────────
             "장애물" -> {
                 currentMode = mode
+                synchronized(this) { detectionHistory.clear() }
                 captureAndProcess()
             }
             // ── 찾기 모드 (확인 의도 통합) ────────────────────────────────────
@@ -637,6 +639,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             "찾기" -> {
                 findTarget  = SentenceBuilder.extractFindTarget(text)
                 currentMode = "찾기"
+                synchronized(this) { detectionHistory.clear() }
                 SentenceBuilder.clearStableClocks()
                 if (findTarget.isEmpty()) {
                     speak("확인할게요.")
@@ -648,6 +651,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             "신호등" -> {
                 speakBuiltIn("신호등을 확인할게요.")
                 currentMode = "신호등"
+                synchronized(this) { detectionHistory.clear() }
                 captureAndProcess()
             }
             "다시읽기" -> {
@@ -680,6 +684,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             "unknown" -> speak("다시 말씀해 주세요.")
             else -> {
                 currentMode = mode
+                synchronized(this) { detectionHistory.clear() }
                 SentenceBuilder.clearStableClocks()
                 speakBuiltIn("$mode 모드.")
             }
@@ -1377,8 +1382,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 val inferMs = System.currentTimeMillis() - tInfer
 
                 val tDedup = System.currentTimeMillis()
-                // 투표 필터 → 같은 클래스 중복 bbox 제거(IoU 기반) 순서로 처리
-                val voted = removeDuplicates(voteOnly(rawDetections))
+                // 중복 bbox 제거(IoU 기반) → 투표 필터 순서로 처리 (중복 제거 먼저 해야 카운트가 정확)
+                val voted = voteOnly(removeDuplicates(rawDetections))
                 val dedupMs = System.currentTimeMillis() - tDedup
 
                 val totalMs = System.currentTimeMillis() - t0
