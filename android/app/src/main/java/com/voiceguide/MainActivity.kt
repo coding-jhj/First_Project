@@ -32,8 +32,10 @@ import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
@@ -805,8 +807,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 runOnUiThread {
                     tvStatus.text = "온디바이스 준비 완료 — 분석 시작을 누르세요"
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
                 // assets에 yolo11n.onnx 없는 경우 → 서버 모드 안내
+                Log.e("VG_PERF", "YOLO detector init failed", e)
                 runOnUiThread { tvStatus.text = "ONNX 모델 없음 — 서버 URL을 입력하세요" }
             }
         }.start()
@@ -1267,8 +1270,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     /**
      * 질문 모드 전용 즉시 캡처.
-     * 온디바이스로 탐지한 뒤 JSON을 서버에 전송 → tracker 누적 상태 포함 포괄 응답을 받음.
-     * isSending 체크를 우회해서 항상 즉시 실행 (사용자 직접 질문이므로).
+     * 온디바이스로 탐지한 뒤 JSON을 서버에 전송하고, 서버가 없으면 로컬 안내를 사용한다.
      */
     private fun captureAndProcessAsQuestion() {
         val file = File.createTempFile("vg_q_", ".jpg", cacheDir)
@@ -1277,9 +1279,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             cameraExecutor,
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                    inFlightCount.incrementAndGet()
                     processOnDevice(file, nextRequestId(), "질문")
                 }
                 override fun onError(e: ImageCaptureException) {
+                    file.delete()
                     speak("사진을 찍지 못했어요.")
                 }
             })
@@ -1296,9 +1300,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             cameraExecutor,
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    processOnDevice(file, nextRequestId(), "들고있는것")
+                    val requestId = nextRequestId()
+                    inFlightCount.incrementAndGet()
+                    processOnDevice(file, requestId, "들고있는것")
                 }
                 override fun onError(e: ImageCaptureException) {
+                    file.delete()
                     speak("사진을 찍지 못했어요.")
                 }
             })
@@ -1371,8 +1378,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 val inferMs = System.currentTimeMillis() - tInfer
 
                 val tDedup = System.currentTimeMillis()
-                // 중복 bbox 제거(IoU 기반) → 투표 필터 → MVP 파이프라인 순서로 처리
-                val mvpFrame = mvpPipeline.update(voteOnly(removeDuplicates(rawDetections)))
+                // 투표 필터 → 같은 클래스 중복 bbox 제거(IoU 기반) 순서로 처리
+                val mvpFrame = mvpPipeline.update(removeDuplicates(voteOnly(rawDetections)))
                 val voted = mvpFrame.detections
                 val dedupMs = System.currentTimeMillis() - tDedup
 
@@ -1481,12 +1488,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         Log.d("VG_DETECT", "→ 무음 (거리 멀거나 최근 안내 완료)")
                         sendDetectionJsonToServer(voted, effectiveMode, requestId, imgW, imgH, decodeMs, inferMs, dedupMs, totalMs, "주변에 장애물이 없어요.", "silent")
                     }
-                }
-
-                // 새 아키텍처: 탐지 결과 JSON을 서버에 비동기 전송 (fire & forget)
-                // 서버는 이미지 처리 없이 DB 저장 + tracker 업데이트만 수행
-                if (getConfiguredServerUrl().isNotBlank()) {
-                    sendDetectionsJson(voted, requestId)
                 }
 
                 imageFile.delete()
@@ -1626,8 +1627,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     }
 
     // ── 온디바이스 탐지 결과 JSON 전송 (새 아키텍처) ─────────────────────────
-    // 서버는 이미지 분석을 하지 않으므로 이미지 업로드 경로는 두지 않는다.
 
+    /**
+     * 온디바이스 추론 결과를 JSON으로 서버에 비동기 전송.
+     * TTS 흐름을 차단하지 않도록 fire & forget 방식으로 실행.
+     * 서버는 이미지 처리 없이 DB 저장 + tracker 업데이트만 수행.
+     */
     private fun sendDetectionsJson(detections: List<Detection>, requestId: String) {
         val serverUrl = getConfiguredServerUrl().trimEnd('/').ifBlank { return }
         Thread {
@@ -1785,7 +1790,26 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         ))
                     }
                 }
-
+                // 더 최신 응답이 이미 반영됐으면 이 응답은 UI 갱신 생략
+                val isLatest = lastAppliedSeq.accumulateAndGet(mySeq) { cur, new -> if (new > cur) new else cur } == mySeq
+                if (isLatest) {
+                    runOnUiThread {
+                        if (serverDetections.isEmpty()) boundingBoxOverlay.clearDetections()
+                        else boundingBoxOverlay.setDetections(serverDetections, uploadImgW, uploadImgH)
+                    }
+                    handleSuccess(sentence, alertMode)
+                } else {
+                    Log.d("VG_FLOW", "stale response seq=$mySeq < applied=${lastAppliedSeq.get()}, skip UI")
+                    inFlightCount.decrementAndGet()
+                }
+            } catch (e: Exception) {
+                Log.e("VG_LINK", "request_id=$requestId server request failed", e)
+                handleFail()
+            } finally {
+                imageFile.delete()
+            }
+        }.start()
+    }
     // ── 결과 처리 & Failsafe ────────────────────────────────────────────
 
     private fun handleSuccess(sentence: String, alertMode: String = "critical") {
