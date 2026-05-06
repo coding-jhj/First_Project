@@ -40,7 +40,6 @@ def _verify_api_key(
         return
     raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
-from src.depth.depth import detect_and_depth
 from src.nlg.sentence import (
     build_sentence, build_find_sentence,
     build_question_sentence, build_held_sentence,
@@ -141,10 +140,26 @@ async def detect(
     request_id = request_id or f"srv-{int(_t0 * 1000)}"
     session_id = _normalize_session_id(wifi_ssid, device_id)
 
-    image_bytes = await image.read()
-
     if lat != 0.0 or lng != 0.0:
         db.save_gps(session_id, lat, lng)
+
+    return JSONResponse(
+        {
+            "mode": mode,
+            "sentence": "이미지 추론은 휴대폰에서 실행해 주세요. 서버는 detect_json 결과 확인과 대시보드만 처리합니다.",
+            "alert_mode": "silent",
+            "objects": [],
+            "hazards": [],
+            "changes": [],
+            "scene": {},
+            "depth_source": "disabled",
+            "server_role": "ssot_json_dashboard",
+            "request_id": request_id,
+        },
+        status_code=410,
+    )
+
+    image_bytes = await image.read()
 
     _t_detect = _time.monotonic()
     loop = asyncio.get_event_loop()
@@ -275,6 +290,9 @@ async def detect_from_json(body: dict):
             "class_ko":   d.get("class_ko", ""),
             "confidence": d.get("confidence", 0.0),
             "distance_m": d.get("dist_m", 0.0),
+            "risk_score": float(d.get("risk_score", 0.0)),
+            "track_id": d.get("track_id", 0),
+            "vibration_pattern": d.get("vibration_pattern", "NONE"),
             "direction":  d.get("zone", "12시"),
             "is_vehicle": d.get("is_vehicle", False),
             "is_animal":  d.get("is_animal", False),

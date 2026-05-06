@@ -20,8 +20,6 @@ async def lifespan(app: FastAPI):
     # YOLO·Depth·OCR·TTS 워밍업은 모두 백그라운드 — yield 전에 블로킹하지 않아야
     # Cloud Run이 PORT=8080을 즉시 감지할 수 있음 (동기 로드 시 30초+ 걸려 타임아웃 발생)
     import threading
-    threading.Thread(target=_warmup_yolo, daemon=True).start()
-    threading.Thread(target=_warmup_depth, daemon=True).start()
     threading.Thread(target=_warmup_tts, daemon=True).start()
     yield  # 서버 실행 중 (이 이후는 종료 시 실행)
 
@@ -78,14 +76,14 @@ app.add_middleware(
 @app.get("/health")
 async def health():
     """서버 상태 + Depth V2 모델 로드 여부 + DB 연결 확인."""
-    from src.depth.depth import _check_model, _DEVICE
-    depth_ok = _check_model()
     db_status = _check_db()
     overall = "ok" if db_status == "ok" else "degraded"
     return {
         "status":   overall,
-        "depth_v2": "loaded" if depth_ok else "fallback (bbox)",
-        "device":   _DEVICE,
+        "server_role": "ssot_json_dashboard",
+        "image_inference": "disabled",
+        "depth_v2": "disabled",
+        "device":   "android_on_device",
         "db_mode":  "postgresql" if db._IS_POSTGRES else "sqlite",
         "db":       db_status,
     }
