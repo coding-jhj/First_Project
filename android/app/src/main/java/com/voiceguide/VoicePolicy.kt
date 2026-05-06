@@ -96,13 +96,14 @@ object VoicePolicy {
         return "약 $r${s.meterSuffix}"
     }
 
-    fun formatDistBbox(w: Float, h: Float): String {
+    fun calcDistBboxM(w: Float, h: Float): Double {
         val s = requireSnap()
         val area = w * h
         val calib = s.bboxCalibArea.toDouble()
-        val dist = if (area > 0f) sqrt(calib / area) else 99.0
-        return formatDistMeters(dist)
+        return if (area > 0f) sqrt(calib / area) else 99.0
     }
+
+    fun formatDistBbox(w: Float, h: Float): String = formatDistMeters(calcDistBboxM(w, h))
 
     private fun parsePolicy(raw: String): Snap {
         val root = JSONObject(raw)

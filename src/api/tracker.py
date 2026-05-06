@@ -36,6 +36,27 @@ _VOTE_WINDOW    = 10   # 최근 N프레임을 기억
 _VOTE_THRESHOLD = 0.6  # 이 비율 이상 탐지돼야 확정 (60% = 10프레임 중 6회)
 
 
+def _object_key(obj: dict) -> str:
+    """Prefer mobile ByteTrack-lite IDs, fallback to class name for server-only detections."""
+    tid = obj.get("track_id")
+    if tid not in (None, "", 0, "0"):
+        return f"track:{tid}"
+    cls = obj.get("class") or obj.get("class_ko") or "unknown"
+    return f"class:{cls}"
+
+
+def _risk_pattern(risk: float, obj: dict) -> str:
+    if obj.get("is_vehicle") and risk >= 0.55:
+        return "URGENT"
+    if risk >= 0.75:
+        return "URGENT"
+    if risk >= 0.55:
+        return "DOUBLE"
+    if risk >= 0.35:
+        return "SHORT"
+    return "NONE"
+
+
 class VotingBuffer:
     """
     N프레임 다수결로 경고 피로 방지.
@@ -84,7 +105,6 @@ class SessionTracker:
     def __init__(self):
         # key: COCO 클래스명(영어), value: 추적 정보 dict
         self._tracks: dict[str, dict] = {}
-        self._voting = VotingBuffer()  # 보팅 버퍼 — 경고 피로 방지
 
     def update(self, objects: list[dict]) -> tuple[list[dict], list[str]]:
         """
@@ -101,9 +121,6 @@ class SessionTracker:
         now = time.monotonic()  # 단조 시계: 시스템 시간 변경에 영향 없음
         current_keys = {o["class"] for o in objects}  # 이번 프레임에 탐지된 클래스 집합
         changes: list[str] = []
-
-        # 보팅 버퍼에 현재 프레임 추가 (경고 피로 방지용)
-        self._voting.add_frame(current_keys)
 
         # ── 소멸 감지 ──────────────────────────────────────────────────────
         # 이전에 있었는데 지금 없는 물체 → 일정 시간 지나면 "사라졌어요" 안내
@@ -173,9 +190,8 @@ class SessionTracker:
             obj["distance_m"] = smooth_d
             smoothed.append(obj)
 
-        # 보팅 필터: 오탐 제거 (차량은 즉시 통과)
-        confirmed = self._voting.filter(smoothed)
-        return confirmed, changes
+        # Android에서 이미 보팅 완료된 결과가 오므로 서버는 EMA 평활화만 수행
+        return smoothed, changes
 
     def get_current_state(self, max_age_s: float = 3.0) -> list[dict]:
         """
@@ -207,6 +223,106 @@ class SessionTracker:
 # ── 세션별 추적기 관리 ────────────────────────────────────────────────────────
 # WiFi SSID마다 별도 추적기 인스턴스를 유지
 # 다른 장소(WiFi)로 이동하면 새 추적기가 만들어짐 → 장소별 물체 기억 분리
+def _mvp_update(self: SessionTracker, objects: list[dict]) -> tuple[list[dict], list[str]]:
+    now = time.monotonic()
+    current_keys = {_object_key(o) for o in objects}
+    current_classes = {o.get("class", "") for o in objects}
+    changes: list[str] = []
+
+    self._voting.add_frame(current_classes)
+
+    for key, tr in list(self._tracks.items()):
+        if key not in current_keys and now - tr["last_seen"] > _MAX_AGE_S:
+            del self._tracks[key]
+
+    smoothed: list[dict] = []
+    for raw in objects:
+        obj = dict(raw)
+        key = _object_key(obj)
+        new_d = float(obj.get("distance_m") or 99.0)
+        new_r = float(obj.get("risk_score") or 0.0)
+
+        if key in self._tracks:
+            tr = self._tracks[key]
+            old_d = float(tr.get("distance_m", new_d))
+            old_r = float(tr.get("risk_score", new_r))
+            smooth_d = round(_EMA_ALPHA * new_d + (1 - _EMA_ALPHA) * old_d, 1)
+            smooth_r = round(_EMA_ALPHA * new_r + (1 - _EMA_ALPHA) * old_r, 2)
+            delta = old_d - smooth_d
+
+            if delta >= _APPROACH_TH and smooth_d < 2.5 and not tr.get("alerted"):
+                name = obj.get("class_ko", obj.get("class", "물체"))
+                changes.append(f"{name}{_i_ga(name)} 가까워지고 있어요")
+                tr["alerted"] = True
+            elif delta < 0:
+                tr["alerted"] = False
+
+            if delta >= 0.8 and smooth_d < 3.0 and not tr.get("alerted_fast"):
+                name = obj.get("class_ko", obj.get("class", "물체"))
+                changes.append(f"조심! {name}{_i_ga(name)} 빠르게 다가오고 있어요")
+                tr["alerted_fast"] = True
+            elif delta < 0:
+                tr["alerted_fast"] = False
+
+            tr.update({
+                "distance_m": smooth_d,
+                "risk_score": smooth_r,
+                "last_seen": now,
+                "seen_count": tr.get("seen_count", 0) + 1,
+                "direction": obj.get("direction", tr.get("direction", "12시")),
+                "class": obj.get("class", tr.get("class", "")),
+                "class_ko": obj.get("class_ko", tr.get("class_ko", "")),
+                "track_id": obj.get("track_id", tr.get("track_id", 0)),
+            })
+        else:
+            smooth_d = new_d
+            smooth_r = new_r
+            self._tracks[key] = {
+                "distance_m": smooth_d,
+                "risk_score": smooth_r,
+                "class": obj.get("class", ""),
+                "class_ko": obj.get("class_ko", obj.get("class", "")),
+                "direction": obj.get("direction", "12시"),
+                "last_seen": now,
+                "seen_count": 1,
+                "track_id": obj.get("track_id", 0),
+                "alerted": False,
+                "alerted_fast": False,
+            }
+
+        obj["distance_m"] = smooth_d
+        obj["risk_score"] = max(0.0, min(smooth_r, 1.0))
+        obj["vibration_pattern"] = obj.get("vibration_pattern") or _risk_pattern(obj["risk_score"], obj)
+        obj["track_id"] = obj.get("track_id", self._tracks[key].get("track_id", 0))
+        smoothed.append(obj)
+
+    confirmed = self._voting.filter(smoothed)
+    confirmed.sort(key=lambda o: o.get("risk_score", 0.0), reverse=True)
+    return confirmed, changes
+
+
+def _mvp_get_current_state(self: SessionTracker, max_age_s: float = 3.0) -> list[dict]:
+    now = time.monotonic()
+    result = []
+    for key, tr in self._tracks.items():
+        if now - tr["last_seen"] <= max_age_s:
+            result.append({
+                "class": tr.get("class", key),
+                "class_ko": tr.get("class_ko", tr.get("class", key)),
+                "distance_m": tr.get("distance_m", 99.0),
+                "direction": tr.get("direction", "12시"),
+                "risk_score": tr.get("risk_score", 0.0),
+                "track_id": tr.get("track_id", 0),
+                "vibration_pattern": _risk_pattern(float(tr.get("risk_score", 0.0)), tr),
+                "depth_source": "tracker",
+            })
+    result.sort(key=lambda o: o["distance_m"])
+    return result
+
+
+SessionTracker.update = _mvp_update
+SessionTracker.get_current_state = _mvp_get_current_state
+
 _trackers: dict[str, SessionTracker] = {}
 
 

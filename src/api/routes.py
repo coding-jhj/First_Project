@@ -17,7 +17,6 @@ Android 앱과 Gradio 데모가 호출하는 API 엔드포인트를 정의합니
   - 이미지가 필요 없는 모드(저장/위치목록)는 빠르게 처리하고 반환
 """
 
-import asyncio
 import os
 import uuid
 import hashlib
@@ -40,7 +39,6 @@ def _verify_api_key(
         return
     raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
-from src.depth.depth import detect_and_depth
 from src.nlg.sentence import (
     build_sentence, build_find_sentence,
     build_question_sentence, build_held_sentence,
@@ -141,76 +139,24 @@ async def detect(
     request_id = request_id or f"srv-{int(_t0 * 1000)}"
     session_id = _normalize_session_id(wifi_ssid, device_id)
 
-    image_bytes = await image.read()
-
     if lat != 0.0 or lng != 0.0:
         db.save_gps(session_id, lat, lng)
 
-    _t_detect = _time.monotonic()
-    loop = asyncio.get_event_loop()
-    objects, hazards, scene = await loop.run_in_executor(None, detect_and_depth, image_bytes)
-    _detect_ms = int((_time.monotonic() - _t_detect) * 1000)
-
-    _t_tracker = _time.monotonic()
-    tracker = get_tracker(session_id)
-    objects, motion_changes = tracker.update(objects)
-    _tracker_ms = int((_time.monotonic() - _t_tracker) * 1000)
-
-    previous = db.get_snapshot(wifi_ssid)
-    space_changes = _space_changes(objects, previous) if previous and objects else []
-    if objects:
-        db.save_snapshot(wifi_ssid, objects)
-        db.save_snapshot(session_id, objects)
-
-    all_changes = motion_changes + space_changes
-
-    if mode == "들고있는것":
-        sentence = build_held_sentence(objects)
-        return _with_perf({
-            "mode": mode, "sentence": sentence, "alert_mode": "critical",
-            "objects": objects, "hazards": hazards, "changes": motion_changes,
-            "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
-        }, _t0, request_id, _detect_ms, _tracker_ms)
-
-    if mode == "질문":
-        tracked = tracker.get_current_state(max_age_s=3.0)
-        sentence = build_question_sentence(objects, hazards, scene, tracked, camera_orientation)
-        alert_mode = get_alert_mode(objects[0], is_hazard=bool(hazards)) if objects else ("critical" if hazards else "silent")
-        return _with_perf({
-            "mode": mode, "sentence": sentence, "alert_mode": alert_mode,
-            "objects": objects, "hazards": hazards, "changes": motion_changes,
-            "scene": scene, "tracked": tracked,
-            "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
-        }, _t0, request_id, _detect_ms, _tracker_ms)
-
-    if mode == "찾기":
-        target = _extract_find_target(query_text)
-        sentence = build_find_sentence(target, objects, camera_orientation)
-        return _with_perf({
-            "mode": mode, "sentence": sentence, "alert_mode": "critical",
-            "objects": objects, "hazards": hazards, "changes": all_changes,
-            "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
-        }, _t0, request_id, _detect_ms, _tracker_ms)
-
-    sentence = build_sentence(objects, all_changes, camera_orientation=camera_orientation)
-    alert_mode = get_alert_mode(objects[0]) if objects else "silent"
-
-    extras = [v for v in [
-        scene.get("danger_warning"), scene.get("slippery_warning"),
-        scene.get("tactile_block_warning"), scene.get("crowd_warning"),
-        scene.get("safe_direction"), scene.get("traffic_light_msg"),
-    ] if v]
-    if extras:
-        sentence = sentence + " " + " ".join(extras)
-
-    if _should_suppress(session_id, sentence, alert_mode):
-        alert_mode = "silent"
-
-    return _with_perf({
-        "mode": mode, "sentence": sentence, "alert_mode": alert_mode,
-        "objects": objects, "hazards": hazards, "changes": all_changes, "scene": scene,
-        "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
-    }, _t0, request_id, _detect_ms, _tracker_ms)
+    return JSONResponse(
+        {
+            "mode": mode,
+            "sentence": "이미지 추론은 휴대폰에서 실행해 주세요. 서버는 detect_json 결과 확인과 대시보드만 처리합니다.",
+            "alert_mode": "silent",
+            "objects": [],
+            "hazards": [],
+            "changes": [],
+            "scene": {},
+            "depth_source": "disabled",
+            "server_role": "ssot_json_dashboard",
+            "request_id": request_id,
+        },
+        status_code=410,
+    )
 
 def _extract_find_target(text: str) -> str:
     """
@@ -228,6 +174,146 @@ def _extract_find_target(text: str) -> str:
     for v in sorted(verbs, key=len, reverse=True):  # 긴 패턴부터 제거 (부분 겹침 방지)
         label = label.replace(v, "")
     return label.strip()
+
+@router.post("/detect_json", dependencies=[Depends(_verify_api_key)])
+async def detect_from_json(body: dict):
+    """
+    온디바이스 추론 결과 JSON 수신 엔드포인트 (새 아키텍처).
+
+    폰이 YOLO 추론 후 탐지 결과를 JSON으로 전송 → 서버는 이미지 처리 없이
+    tracker 업데이트 + DB 저장 + NLG 문장 생성만 수행.
+
+    요청 형식:
+    {
+        "device_id": "abc123",
+        "session_id": "abc123",
+        "wifi_ssid": "MyWifi",
+        "request_id": "and-...",
+        "mode": "장애물",
+        "camera_orientation": "front",
+        "lat": 0.0, "lng": 0.0,
+        "detections": [
+            {"class_ko":"의자","confidence":0.9,"cx":0.5,"cy":0.6,
+             "w":0.15,"h":0.20,"zone":"12시","dist_m":1.47,
+             "is_vehicle":false,"is_animal":false}
+        ]
+    }
+    """
+    _t0 = _time.monotonic()
+    device_id  = body.get("device_id", "")
+    wifi_ssid  = body.get("wifi_ssid", "")
+    request_id = body.get("request_id", f"srv-{int(_t0*1000)}")
+    mode       = body.get("mode", "장애물")
+    lat        = float(body.get("lat", 0.0))
+    lng        = float(body.get("lng", 0.0))
+    camera_orientation = body.get("camera_orientation", "front")
+    raw_detections: list[dict] = body.get("detections", [])
+
+    session_id = _normalize_session_id(wifi_ssid, device_id)
+
+    if lat != 0.0 or lng != 0.0:
+        db.save_gps(session_id, lat, lng)
+
+    # 폰 포맷 → 서버 내부 포맷으로 변환
+    objects = [
+        {
+            "class":      d.get("class_ko", ""),
+            "class_ko":   d.get("class_ko", ""),
+            "confidence": d.get("confidence", 0.0),
+            "distance_m": d.get("dist_m", 0.0),
+            "risk_score": float(d.get("risk_score", 0.0)),
+            "track_id": d.get("track_id", 0),
+            "vibration_pattern": d.get("vibration_pattern", "NONE"),
+            "direction":  d.get("zone", "12시"),
+            "is_vehicle": d.get("is_vehicle", False),
+            "is_animal":  d.get("is_animal", False),
+            "depth_source": "bbox_ondevice",
+            "cx": d.get("cx", 0.0), "cy": d.get("cy", 0.0),
+            "w":  d.get("w", 0.0),  "h":  d.get("h", 0.0),
+        }
+        for d in raw_detections
+    ]
+
+    # tracker 업데이트 (EMA 평활화 + 접근 감지)
+    _t_tracker = _time.monotonic()
+    tracker = get_tracker(session_id)
+    objects, motion_changes = tracker.update(objects)
+    _tracker_ms = int((_time.monotonic() - _t_tracker) * 1000)
+
+    # DB 저장 (fire & store)
+    db.save_detections(device_id, session_id, request_id,
+                       raw_detections, mode, lat, lng)
+
+    # 스냅샷 저장 (대시보드 호환)
+    if objects:
+        db.save_snapshot(session_id, objects)
+
+    # NLG 문장 생성
+    hazards: list[str] = []
+    if mode == "찾기":
+        target = body.get("query_text", "")
+        sentence = build_find_sentence(target, objects, camera_orientation)
+        alert_mode = "critical"
+    else:
+        previous = db.get_snapshot(wifi_ssid)
+        space_changes = _space_changes(objects, previous) if previous and objects else []
+        all_changes = motion_changes + space_changes
+        sentence  = build_sentence(objects, all_changes, camera_orientation=camera_orientation)
+        alert_mode = get_alert_mode(objects[0]) if objects else "silent"
+        if _should_suppress(session_id, sentence, alert_mode):
+            alert_mode = "silent"
+
+    return _with_perf({
+        "mode": mode, "sentence": sentence, "alert_mode": alert_mode,
+        "objects": objects, "changes": motion_changes,
+    }, _t0, request_id, 0, _tracker_ms)
+
+
+@router.post("/question", dependencies=[Depends(_verify_api_key)])
+async def answer_question(body: dict):
+    """
+    질문 응답 전용 엔드포인트 (이미지 전송 없음).
+
+    폰이 "앞에 뭐 있어?" 같은 질문을 하면, 서버에 누적된 tracker 상태
+    (최근 /detect_json으로 쌓인 데이터)를 꺼내 요약 문장을 반환.
+    """
+    _t0 = _time.monotonic()
+    device_id  = body.get("device_id", "")
+    wifi_ssid  = body.get("wifi_ssid", "")
+    request_id = body.get("request_id", f"srv-q-{int(_t0*1000)}")
+    camera_orientation = body.get("camera_orientation", "front")
+
+    session_id = _normalize_session_id(wifi_ssid, device_id)
+    tracker    = get_tracker(session_id)
+
+    # tracker에 누적된 최근 3초 상태 조회
+    tracked = tracker.get_current_state(max_age_s=3.0)
+
+    # tracker가 비어 있으면 DB에서 복원 시도 (서버 재시작 후 첫 질문 등)
+    if not tracked:
+        recent = db.get_recent_detections(session_id, max_age_s=3.0)
+        tracked = [
+            {
+                "class":      r["class_ko"], "class_ko": r["class_ko"],
+                "distance_m": r["dist_m"],   "direction": r["zone"],
+                "is_vehicle": bool(r["is_vehicle"]),
+                "is_animal":  bool(r["is_animal"]),
+                "depth_source": "db",
+            }
+            for r in recent
+        ]
+
+    sentence = build_question_sentence([], [], {}, tracked, camera_orientation)
+    alert_mode = get_alert_mode(tracked[0], is_hazard=False) if tracked else "silent"
+
+    # 질문 응답 후 3초간 periodic silent 처리 (폰 측 suppressPeriodicUntil 호환)
+    _last_sentence[session_id] = (sentence, _time.monotonic())
+
+    return _with_perf({
+        "mode": "질문", "sentence": sentence, "alert_mode": alert_mode,
+        "tracked": tracked,
+    }, _t0, request_id)
+
 
 @router.post("/tts", dependencies=[Depends(_verify_api_key)])
 async def tts_endpoint(text: str = Form("")):
