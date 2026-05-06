@@ -32,8 +32,10 @@ import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
@@ -1144,13 +1146,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             if (!isAnalyzing.get()) return
             checkRevisit()
 
-            val now = System.currentTimeMillis()
-            if (now - lastStreamFrameTime < INTERVAL_MS) return
-            val route = if (shouldUseOnDeviceDetector()) "on_device" else "unavailable"
-            val maxInFlight = MAX_ON_DEVICE_IN_FLIGHT
-            if (inFlightCount.getAndIncrement() >= maxInFlight) {
-            // 걸음감지 시나리오: 수집 윈도우 안에서만 프레임 처리
-            // isCollecting=false → 움직임 트리거 대기 중 → 프레임 처리 불필요
+            // 스트림이 살아있음을 항상 기록 — !isCollecting return보다 앞에 있어야
+            // scheduleFallbackCapture()가 "스톨"로 오판해서 captureAndProcess()를 호출하는 것을 방지
+            lastStreamFrameTime = System.currentTimeMillis()
+
+            // 걸음감지 시나리오: 수집 윈도우 안에서만 추론
+            // isCollecting=false → 움직임 트리거 대기 중 → 추론 불필요
             if (!isCollecting) return
 
             // 동시 처리 요청 제한 (온디바이스 기준)
@@ -1158,16 +1159,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 inFlightCount.decrementAndGet()
                 return
             }
-            lastStreamFrameTime = System.currentTimeMillis()
 
             val requestId = nextRequestId()
             val file = imageProxyToJpegFile(imageProxy)
-            Log.d("VG_FLOW", "request_id=$requestId route=$route mode=$currentMode stream_file=${file.length()}B")
-            if (route == "on_device") processOnDevice(file, requestId)
-            else {
-                file.delete()
-                handleFail()
-            }
             Log.d("VG_FLOW", "request_id=$requestId mode=$currentMode [수집중] stream_file=${file.length()}B")
             // 항상 온디바이스 추론 (서버 분기 제거)
             processOnDevice(file, requestId)
@@ -1253,7 +1247,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     }
 
     private fun captureAndProcess() {
-        // 일회성 STT 캡처: stream 요청이 진행 중이면 스킵 (중복 방지)
+        // yoloDetector 초기화 전이면 스킵 — 서버 경로로 빠지는 것 방지
+        if (yoloDetector == null) {
+            Log.d("VG_FLOW", "capture skipped: detector not ready")
+            return
+        }
+        // 일회성 캡처: stream 요청이 진행 중이면 스킵 (중복 방지)
         if (inFlightCount.get() > 0) {
             Log.d("VG_FLOW", "capture skipped: inFlight=${inFlightCount.get()}")
             return
@@ -1266,13 +1265,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                     inFlightCount.incrementAndGet()
                     val requestId = nextRequestId()
-                    val route = if (shouldUseOnDeviceDetector()) "on_device" else "unavailable"
-                    Log.d("VG_FLOW", "request_id=$requestId route=$route mode=$currentMode file=${file.length()}B")
-                    if (route == "on_device") processOnDevice(file, requestId)
-                    else {
-                        file.delete()
-                        handleFail()
-                    }
+                    // 항상 온디바이스 추론 (서버 추론 없음)
+                    Log.d("VG_FLOW", "request_id=$requestId route=on_device mode=$currentMode file=${file.length()}B")
+                    processOnDevice(file, requestId)
                 }
                 override fun onError(e: ImageCaptureException) {
                     inFlightCount.decrementAndGet()
@@ -1842,7 +1837,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                             h          = hn
                         ))
                     }
-                }
                 }
                 // 더 최신 응답이 이미 반영됐으면 이 응답은 UI 갱신 생략
                 val isLatest = lastAppliedSeq.accumulateAndGet(mySeq) { cur, new -> if (new > cur) new else cur } == mySeq
