@@ -658,7 +658,9 @@ def get_last_gps(session_id: str) -> dict | None:
 
 
 def get_recent_sessions(limit: int = 10) -> list[str]:
-    """GPS 데이터가 있는 최근 세션 ID 목록 반환 (대시보드 세션 선택용)."""
+    """최근 활동 세션 ID 목록 반환 (대시보드 세션 선택용).
+    GPS 데이터 우선 조회, 없으면 detection_events에서 보완.
+    """
     with _conn() as conn:
         if _IS_POSTGRES:
             with conn.cursor() as cur:
@@ -667,13 +669,38 @@ def get_recent_sessions(limit: int = 10) -> list[str]:
                     "GROUP BY session_id "
                     "ORDER BY MAX(id) DESC LIMIT %s", (limit,))
                 rows = cur.fetchall()
-            return [r["session_id"] for r in rows]
+                gps_sessions = [r["session_id"] for r in rows]
+                if len(gps_sessions) < limit:
+                    cur.execute(
+                        "SELECT session_id FROM detection_events "
+                        "GROUP BY session_id "
+                        "ORDER BY MAX(id) DESC LIMIT %s", (limit,))
+                    rows = cur.fetchall()
+                    det_sessions = [r["session_id"] for r in rows]
+                    seen = set(gps_sessions)
+                    for s in det_sessions:
+                        if s not in seen:
+                            gps_sessions.append(s)
+                            seen.add(s)
+                return gps_sessions[:limit]
         else:
             rows = conn.execute(
                 "SELECT session_id FROM gps_history "
                 "GROUP BY session_id "
                 "ORDER BY MAX(id) DESC LIMIT ?", (limit,)).fetchall()
-            return [r[0] for r in rows]
+            gps_sessions = [r[0] for r in rows]
+            if len(gps_sessions) < limit:
+                rows = conn.execute(
+                    "SELECT session_id FROM detection_events "
+                    "GROUP BY session_id "
+                    "ORDER BY MAX(id) DESC LIMIT ?", (limit,)).fetchall()
+                det_sessions = [r[0] for r in rows]
+                seen = set(gps_sessions)
+                for s in det_sessions:
+                    if s not in seen:
+                        gps_sessions.append(s)
+                        seen.add(s)
+            return gps_sessions[:limit]
 
 
 def get_latest_session() -> str | None:

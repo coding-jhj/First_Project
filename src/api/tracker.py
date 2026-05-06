@@ -105,6 +105,7 @@ class SessionTracker:
     def __init__(self):
         # key: COCO 클래스명(영어), value: 추적 정보 dict
         self._tracks: dict[str, dict] = {}
+        self._voting = VotingBuffer()
 
     def update(self, objects: list[dict]) -> tuple[list[dict], list[str]]:
         """

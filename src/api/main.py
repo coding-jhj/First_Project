@@ -83,6 +83,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={
             "sentence": "분석 중 오류가 발생했어요. 주의해서 이동하세요.",
+            "alert_mode": "normal",
             "objects": [],
             "hazards": [],
             "changes": [],
