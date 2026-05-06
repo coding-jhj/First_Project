@@ -1153,7 +1153,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
             // 걸음감지 시나리오: 수집 윈도우 안에서만 추론
             // isCollecting=false → 움직임 트리거 대기 중 → 추론 불필요
-            if (!isCollecting) return
+            // yoloDetector=null → 모델 미탑재 → 반복 예외 방지
+            if (!isCollecting || yoloDetector == null) return
 
             // 동시 처리 요청 제한 (온디바이스 기준)
             if (inFlightCount.getAndIncrement() >= MAX_ON_DEVICE_IN_FLIGHT) {
