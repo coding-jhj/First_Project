@@ -105,6 +105,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private val VOTE_WINDOW    = 3
     private val VOTE_MIN_COUNT = 2
 
+    // ── 걸음감지 시나리오 ──────────────────────────────────────────────────
+    // 움직임 감지 → 3초 수집 → 투표 요약 → TTS 1회 출력 → 대기
+    @Volatile private var isCollecting        = false
+    @Volatile private var lastMotionTriggerMs = 0L
+    private val frameBuffer     = mutableListOf<List<Detection>>()
+    private val frameBufferLock = Any()
+    private val MOTION_THRESHOLD    = 13.0f   // 중력(9.8) + 여유 → 걷기/스윙 감지
+    private val MOTION_COOLDOWN_MS  = 3000L   // 수집 윈도우와 같은 길이 (중복 트리거 방지)
+    private val FRAME_COLLECTION_MS = 3000L   // 수집 윈도우 길이
+    private val VOTE_SUMMARY_RATIO  = 0.5f    // 50% 이상 프레임에서 등장해야 채택
+
     private val classLastSpoken = mutableMapOf<String, Long>()
     private val CLASS_COOLDOWN_MS = 5000L  // 음성 안내 후 같은 사물 재발화 간격
     private val BEEP_AREA_THRESH  = 0.08f  // bbox 면적 8% 이상 = 가까이 있음
@@ -530,6 +541,23 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }
         lastAccelTotal = magnitude
 
+        // ── 걸음/움직임 트리거 ─────────────────────────────────────────────
+        // magnitude > 13.0 → 걷거나 폰을 흔드는 중
+        // !isCollecting && !isSpeaking() → 중복 수집 및 TTS 겹침 방지
+        val nowMs = System.currentTimeMillis()
+        if (isAnalyzing.get()
+            && magnitude > MOTION_THRESHOLD
+            && nowMs - lastMotionTriggerMs > MOTION_COOLDOWN_MS
+            && !isCollecting
+            && !isSpeaking()
+        ) {
+            lastMotionTriggerMs = nowMs
+            isCollecting        = true
+            synchronized(frameBufferLock) { frameBuffer.clear() }
+            Log.d("VG_MOTION", "움직임 감지(magnitude=${String.format("%.1f", magnitude)}) → 프레임 수집 시작 (${FRAME_COLLECTION_MS}ms)")
+            handler.postDelayed({ finalizeCollection() }, FRAME_COLLECTION_MS)
+        }
+
         val x = event.values[0]; val y = event.values[1]
         val prev = cameraOrientation
         cameraOrientation = when {
@@ -674,6 +702,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             // ── 장애물 모드: 즉시 캡처 ───────────────────────────────────────
             "장애물" -> {
                 currentMode = mode
+                isCollecting = false; synchronized(frameBufferLock) { frameBuffer.clear() }
                 captureAndProcess()
             }
             // ── 찾기 모드 (확인 의도 통합) ────────────────────────────────────
@@ -682,6 +711,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             "찾기" -> {
                 findTarget  = SentenceBuilder.extractFindTarget(text)
                 currentMode = "찾기"
+                isCollecting = false; synchronized(frameBufferLock) { frameBuffer.clear() }
                 SentenceBuilder.clearStableClocks()
                 if (findTarget.isEmpty()) {
                     speak("확인할게요.")
@@ -693,6 +723,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             "신호등" -> {
                 speakBuiltIn("신호등을 확인할게요.")
                 currentMode = "신호등"
+                isCollecting = false; synchronized(frameBufferLock) { frameBuffer.clear() }
                 captureAndProcess()
             }
             "다시읽기" -> {
@@ -725,6 +756,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             "unknown" -> speak("다시 말씀해 주세요.")
             else -> {
                 currentMode = mode
+                isCollecting = false; synchronized(frameBufferLock) { frameBuffer.clear() }
                 SentenceBuilder.clearStableClocks()
                 speakBuiltIn("$mode 모드.")
             }
@@ -1026,6 +1058,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         lastSuccessTime = System.currentTimeMillis()
         lastStreamFrameTime = 0L   // 재시작 시 첫 프레임 즉시 처리 (초기 지연 방지)
         inFlightCount.set(0)       // stuck in-flight 요청 초기화 (카메라 재바인딩 없는 재시작 대비)
+        // 걸음감지 상태 초기화 — 이전 수집 세션이 남아있지 않도록
+        isCollecting = false
+        lastMotionTriggerMs = 0L
+        synchronized(frameBufferLock) { frameBuffer.clear() }
         btnToggle.text = "■ 분석 중지"
         btnToggle.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFDC2626.toInt())
         tvStatus.text  = "분석 중..."
@@ -1102,7 +1138,14 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             checkRevisit()
 
             val now = System.currentTimeMillis()
-            if (now - lastStreamFrameTime < INTERVAL_MS) return
+            // 스트림 생존 시각 갱신 — isCollecting 여부와 무관하게 먼저 기록
+            // scheduleFallbackCapture()가 "스톨"로 오판해서 불필요한 captureAndProcess()를 막음
+            lastStreamFrameTime = now
+
+            // 걸음감지 시나리오: 수집 윈도우(isCollecting=true) 안에서만 추론
+            // 대기 중에는 카메라 프레임을 받되 추론은 하지 않음
+            if (!isCollecting) return
+
             val route = if (shouldUseOnDeviceDetector()) "on_device" else "unavailable"
             val maxInFlight = MAX_ON_DEVICE_IN_FLIGHT
             if (inFlightCount.getAndIncrement() >= maxInFlight) {
@@ -1437,6 +1480,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     }
                 }
 
+                // ── 걸음감지 수집 모드 분기 ───────────────────────────────────
+                // isCollecting=true → 버퍼에 저장하고 TTS/서버 전송 없이 종료
+                // finalizeCollection()이 3초 후 한 번만 TTS를 출력함
+                if (isCollecting) {
+                    synchronized(frameBufferLock) { frameBuffer.add(voted) }
+                    Log.d("VG_MOTION", "수집 중 ${frameBuffer.size}프레임 | 이번 ${voted.size}개 탐지")
+                    inFlightCount.decrementAndGet()
+                    imageFile.delete()
+                    return@Thread
+                }
+
                 if (voted.isEmpty()) {
                     Log.d("VG_DETECT", "→ 장애물 없음")
                     imageFile.delete()
@@ -1500,6 +1554,59 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 handleFail()
             }
         }.start()
+    }
+
+    // ── 걸음감지 요약 처리 ────────────────────────────────────────────────
+    // handler.postDelayed로 FRAME_COLLECTION_MS 후 호출됨
+    // 수집된 프레임들을 투표로 요약해 TTS 1회 출력
+    private fun finalizeCollection() {
+        isCollecting = false
+        val frames = synchronized(frameBufferLock) { frameBuffer.toList() }
+        Log.d("VG_MOTION", "수집 완료: 총 ${frames.size}프레임")
+
+        if (frames.isEmpty()) {
+            speak("주변에 장애물이 없어요.")
+            return
+        }
+
+        // 물체별 등장 횟수 카운트 + 신뢰도 최고 Detection 보존
+        val countMap     = mutableMapOf<String, Int>()
+        val detectionMap = mutableMapOf<String, Detection>()
+        for (frame in frames) {
+            for (det in frame) {
+                countMap[det.classKo] = (countMap[det.classKo] ?: 0) + 1
+                val prev = detectionMap[det.classKo]
+                if (prev == null || det.confidence > prev.confidence) {
+                    detectionMap[det.classKo] = det
+                }
+            }
+        }
+
+        // 50% 이상 프레임에서 등장한 물체만 채택 (순간 오탐 필터링)
+        val threshold  = (frames.size * VOTE_SUMMARY_RATIO).toInt().coerceAtLeast(1)
+        val summarized = countMap
+            .filter { it.value >= threshold }
+            .map { detectionMap[it.key]!! }
+            .sortedByDescending { it.w * it.h }  // 화면 면적 큰 것(가까운 것) 우선
+
+        Log.d("VG_MOTION", "요약: ${frames.size}프레임 → 임계값=$threshold → ${summarized.size}개 채택")
+
+        if (summarized.isEmpty()) {
+            speak("주변에 장애물이 없어요.")
+            return
+        }
+
+        val sentence = when (currentMode) {
+            "찾기" -> SentenceBuilder.buildFind(findTarget, summarized)
+            else   -> SentenceBuilder.build(summarized)
+        }
+
+        Log.d("VG_MOTION", "요약 문장: \"$sentence\"")
+        runOnUiThread {
+            tvStatus.text   = sentence
+            tvDetected.text = "인식: $sentence"
+        }
+        speak(sentence)
     }
 
     private fun sendDetectionJsonToServer(
