@@ -704,6 +704,8 @@ function renderGps(gps, track) {
 
 // ── 폴링 ─────────────────────────────────────────────
 let prevObjectCount = 0;
+let eventSource = null;
+let pollTimer = null;
 
 async function poll() {
   const sessionId = document.getElementById('sessionId').value.trim() || '__default__';
@@ -743,6 +745,50 @@ async function poll() {
     dot.className  = 'pulse-dot offline';
     text.textContent = '서버 연결 끊김';
   }
+}
+
+function applyPushedStatus(data, sessionId) {
+  const dot = document.getElementById('statusDot');
+  const text = document.getElementById('statusText');
+  dot.className = 'pulse-dot';
+  const resolvedSession = data.session_id ?? sessionId;
+  text.textContent = data.gps ? `연결됨 · ${resolvedSession}` : '연결됨 · 세션 선택 필요';
+
+  renderObjects(data.objects);
+  renderGps(data.gps, data.track);
+
+  fetch(`${SERVER_BASE}/team-locations`)
+    .then(r => r.json())
+    .then(d => renderTeamLocations(d.locations ?? [], resolvedSession))
+    .catch(() => {});
+
+  const currCount = (data.objects ?? []).length;
+  if (currCount > prevObjectCount && prevObjectCount >= 0) {
+    const names = (data.objects ?? []).map(o => o.class_ko).join(', ');
+    if (names) showToast(`감지: ${names}`);
+  }
+  prevObjectCount = currCount;
+
+  const objCount = (data.objects ?? []).length;
+  document.getElementById('lastUpdate').innerHTML =
+    '마지막 업데이트: ' + new Date().toLocaleTimeString('ko-KR') +
+    `<br>감지: ${objCount}개`;
+}
+
+function connectEventStream() {
+  const sessionId = document.getElementById('sessionId').value.trim() || '__default__';
+  if (eventSource) eventSource.close();
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+
+  eventSource = new EventSource(`${SERVER_BASE}/events/${encodeURIComponent(sessionId)}`);
+  eventSource.addEventListener('status', (event) => {
+    applyPushedStatus(JSON.parse(event.data), sessionId);
+  });
+  eventSource.onerror = () => {
+    document.getElementById('statusDot').className = 'pulse-dot offline';
+    document.getElementById('statusText').textContent = 'SSE 재연결 중';
+    if (!pollTimer) pollTimer = setInterval(poll, POLL_MS * 2);
+  };
 }
 
 function showToast(msg) {
@@ -792,7 +838,7 @@ function selectSession(s) {
   prevObjectCount = 0; mapCentered = false;
   if (marker)    { map.removeLayer(marker);    marker    = null; }
   if (trackLine) { map.removeLayer(trackLine); trackLine = null; }
-  poll();
+  connectEventStream();
 }
 
 // ── 세션 ID 변경 시 리셋 ─────────────────────────────
@@ -801,11 +847,11 @@ document.getElementById('sessionId').addEventListener('change', () => {
   mapCentered     = false;
   if (marker)    { map.removeLayer(marker);    marker    = null; }
   if (trackLine) { map.removeLayer(trackLine); trackLine = null; }
+  connectEventStream();
 });
 
 // ── 시작 ─────────────────────────────────────────────
-poll();
-setInterval(poll, POLL_MS);
+connectEventStream();
 </script>
 </body>
 </html>

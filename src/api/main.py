@@ -17,10 +17,13 @@ async def lifespan(app: FastAPI):
     print("[main] policy.json 적재 완료")
     # DB 초기화는 동기적으로 (빠름)
     db.init_db()
-    # 새 아키텍처: 서버에서 YOLO/Depth 추론 없음 → TTS 워밍업만 유지
+    db.start_event_writer()
+    # 서버는 온디바이스 탐지 결과 JSON만 처리한다.
+    # YOLO/Depth 같은 이미지 분석 모델은 앱 또는 별도 ML 런타임에서만 실행한다.
     import threading
     threading.Thread(target=_warmup_tts, daemon=True).start()
     yield  # 서버 실행 중 (이 이후는 종료 시 실행)
+    db.stop_event_writer()
 
 
 def _warmup_tts():
@@ -65,6 +68,7 @@ async def health():
         "device":          "android_on_device",
         "db_mode":         "postgresql" if db._IS_POSTGRES else "sqlite",
         "db":              db_status,
+        "db_writer":       db.get_event_writer_stats(),
     }
 
 

@@ -111,7 +111,7 @@ class SessionTracker:
         새 프레임의 탐지 결과를 받아 거리를 평활화하고 변화를 감지.
 
         Args:
-            objects: detect_and_depth()가 반환한 탐지 물체 목록
+            objects: 온디바이스 탐지 JSON을 서버에서 정규화한 물체 목록
 
         Returns:
             smoothed_objects: 거리가 EMA로 안정화된 물체 목록
