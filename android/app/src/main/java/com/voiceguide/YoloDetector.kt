@@ -3,6 +3,7 @@ package com.voiceguide
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
+import android.app.ActivityManager
 import android.content.Context
 import android.graphics.Bitmap
 import java.nio.FloatBuffer
@@ -64,15 +65,27 @@ class YoloDetector(context: Context) {
             }
         }
         val bytes = context.assets.open(modelName).readBytes()
+
+        // GPU 유무 감지: OpenGL ES 2.0 이상 지원 기기 = GPU 하드웨어 있음
+        val hasGpu = runCatching {
+            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            am.deviceConfigurationInfo.reqGlEsVersion >= 0x20000
+        }.getOrDefault(false)
+
         val opts = OrtSession.SessionOptions().apply {
-            setIntraOpNumThreads(2)
-            setInterOpNumThreads(1)
-            // NNAPI_FLAG_USE_FP16(=1) 미설정(0) → FP32 모드로 NPU/DSP 가속
-            try {
-                addNnapi()
-                android.util.Log.d("VG_PERF", "NNAPI FP32 추론 — $modelName")
-            } catch (_: Exception) {
-                android.util.Log.d("VG_PERF", "NNAPI 불가 → CPU 2스레드 fallback — $modelName")
+            val cores = Runtime.getRuntime().availableProcessors().coerceAtMost(4)
+            setIntraOpNumThreads(cores)
+            if (hasGpu) {
+                // GPU 경로: NNAPI 활성화 (하드웨어 가속 — GPU/NPU/DSP 중 기기가 선택)
+                // FP16 오탐이 발생하면 setModelFormat 또는 quantization으로 별도 대응
+                try {
+                    addNnapi()
+                    android.util.Log.d("VG_PERF", "GPU(NNAPI) + CPU $cores 스레드 — $modelName")
+                } catch (_: Exception) {
+                    android.util.Log.d("VG_PERF", "NNAPI 불가 → CPU $cores 스레드 fallback — $modelName")
+                }
+            } else {
+                android.util.Log.d("VG_PERF", "CPU $cores 스레드 추론 — $modelName")
             }
         }
         session = env.createSession(bytes, opts)
