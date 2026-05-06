@@ -36,6 +36,7 @@ import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -245,6 +246,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // ── ONNX 온디바이스 추론 ───────────────────────────────────────────
     private var yoloDetector: YoloDetector? = null
     private val stairsDetector = StairsDetector()
+    private val mvpPipeline = MvpPipeline()
 
     companion object {
         private const val PERM_CODE          = 100  // 카메라 + 마이크 (앱 시작 시)
@@ -1078,7 +1080,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             val file = imageProxyToJpegFile(imageProxy)
             Log.d("VG_FLOW", "request_id=$requestId route=$route mode=$currentMode stream_file=${file.length()}B")
             if (route == "on_device") processOnDevice(file, requestId)
-            else sendToServer(file, requestId)
+            else rejectServerInferenceFallback(file, requestId)
         } catch (e: Exception) {
             if (inFlightCount.get() > 0) inFlightCount.decrementAndGet()
             Log.e("VG_FLOW", "stream analysis failed", e)
@@ -1177,7 +1179,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     val route = if (shouldUseOnDeviceDetector()) "on_device" else "server"
                     Log.d("VG_FLOW", "request_id=$requestId route=$route mode=$currentMode file=${file.length()}B")
                     if (route == "on_device") processOnDevice(file, requestId)
-                    else sendToServer(file, requestId)
+                    else rejectServerInferenceFallback(file, requestId)
                 }
                 override fun onError(e: ImageCaptureException) {
                     inFlightCount.decrementAndGet()
@@ -1192,12 +1194,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     private fun shouldUseOnDeviceDetector(): Boolean {
         val detector = yoloDetector ?: return false
-        val supportsOnDevice = currentMode == "장애물" || currentMode == "찾기"
-        if (!supportsOnDevice) return false
-        // 새 아키텍처: 장애물/찾기는 항상 온디바이스 추론
-        // 서버 URL이 있어도 이미지를 보내지 않고, 추론 결과 JSON만 전송
+        // Image inference is always on-device. The server only receives JSON SSOT updates.
         Log.d("VG_FLOW", "on-device (new arch) model=${detector.modelName}")
         return true
+    }
+
+    private fun rejectServerInferenceFallback(imageFile: File, requestId: String) {
+        Log.w("VG_FLOW", "request_id=$requestId server image inference disabled; waiting for on-device detector")
+        imageFile.delete()
+        handleFail()
     }
 
     private fun isNetworkAvailable(): Boolean {
@@ -1262,7 +1267,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             cameraExecutor,
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    sendToServerWithMode(file, "들고있는것", nextRequestId())
+                    val requestId = nextRequestId()
+                    inFlightCount.incrementAndGet()
+                    if (shouldUseOnDeviceDetector()) processOnDevice(file, requestId)
+                    else rejectServerInferenceFallback(file, requestId)
                 }
                 override fun onError(e: ImageCaptureException) {
                     speak("사진을 찍지 못했어요.")
@@ -1382,8 +1390,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 val inferMs = System.currentTimeMillis() - tInfer
 
                 val tDedup = System.currentTimeMillis()
-                // 중복 bbox 제거(IoU 기반) → 투표 필터 순서로 처리 (중복 제거 먼저 해야 카운트가 정확)
-                val voted = voteOnly(removeDuplicates(rawDetections))
+                // 중복 bbox 제거(IoU 기반) → 투표 필터 → MVP 파이프라인 순서로 처리
+                val mvpFrame = mvpPipeline.update(voteOnly(removeDuplicates(rawDetections)))
+                val voted = mvpFrame.detections
                 val dedupMs = System.currentTimeMillis() - tDedup
 
                 val totalMs = System.currentTimeMillis() - t0
@@ -1466,10 +1475,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                             else                                               -> "normal"
                         }
                         Log.d("VG_DETECT", "→ 음성 출력 (mode=$mode)")
+                        performVibrationFeedback(mvpFrame.vibrationPattern)
                         handleSuccess(sentence, mode)
                     }
                     shouldBeep -> {
                         Log.d("VG_DETECT", "→ 비프음")
+                        performVibrationFeedback(mvpFrame.vibrationPattern)
                         handleSuccess(sentence, "beep")
                     }
                     else       -> {
@@ -1488,17 +1499,30 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             } catch (e: Exception) {
                 Log.e("VG_DETECT", "request_id=$requestId On-device detection failed", e)
                 bmp?.recycle()
-                if (isServerFallbackAvailable()) {
-                    sendToServer(imageFile, requestId)  // 온디바이스 실패 → 서버 시도 (서버도 실패시 handleFail)
-                } else {
-                    imageFile.delete()
-                    handleFail()
-                }
+                imageFile.delete()
+                handleFail()
             }
         }.start()
     }
 
     /** JPEG 파일의 EXIF 회전 태그를 읽어 실제 화면 방향으로 비트맵을 회전한다. */
+    private fun performVibrationFeedback(pattern: VibrationPattern) {
+        if (pattern == VibrationPattern.NONE) return
+        val timings = when (pattern) {
+            VibrationPattern.SHORT -> longArrayOf(0, 45)
+            VibrationPattern.DOUBLE -> longArrayOf(0, 55, 65, 55)
+            VibrationPattern.URGENT -> longArrayOf(0, 90, 60, 90, 60, 140)
+            VibrationPattern.NONE -> return
+        }
+        val vibrator = getSystemService(VIBRATOR_SERVICE) as android.os.Vibrator
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            vibrator.vibrate(android.os.VibrationEffect.createWaveform(timings, -1))
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(timings, -1)
+        }
+    }
+
     private fun decodeBitmapUpright(file: File): android.graphics.Bitmap {
         val exif = android.media.ExifInterface(file.absolutePath)
         val degrees = when (exif.getAttributeInt(
@@ -1550,7 +1574,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                                 put("w",          d.w.toDouble())
                                 put("h",          d.h.toDouble())
                                 put("zone",       SentenceBuilder.getClock(d.cx))
-                                put("dist_m",     VoicePolicy.calcDistBboxM(d.w, d.h))
+                                put("dist_m",     if (d.distanceM > 0f) d.distanceM.toDouble() else VoicePolicy.calcDistBboxM(d.w, d.h))
+                                put("track_id",   d.trackId)
+                                put("risk_score", d.riskScore.toDouble())
+                                put("vibration_pattern", d.vibrationPattern)
                                 put("is_vehicle", d.classKo in VoicePolicy.vehicleKo())
                                 put("is_animal",  d.classKo in VoicePolicy.animalKo())
                             })

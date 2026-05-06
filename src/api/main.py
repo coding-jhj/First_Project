@@ -58,10 +58,13 @@ async def health():
     """서버 상태 + DB 연결 확인. 새 아키텍처에서 YOLO/Depth는 서버에서 실행 안 함."""
     db_status = _check_db()
     return {
-        "status":  "ok" if db_status == "ok" else "degraded",
-        "arch":    "ondevice",
-        "db_mode": "postgresql" if db._IS_POSTGRES else "sqlite",
-        "db":      db_status,
+        "status":          "ok" if db_status == "ok" else "degraded",
+        "server_role":     "ssot_json_dashboard",
+        "image_inference": "disabled",
+        "depth_v2":        "disabled",
+        "device":          "android_on_device",
+        "db_mode":         "postgresql" if db._IS_POSTGRES else "sqlite",
+        "db":              db_status,
     }
 
 

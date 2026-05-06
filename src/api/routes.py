@@ -123,12 +123,39 @@ def _space_changes(current: list[dict], previous: list[dict]) -> list[str]:
         changes.append(f"{name}{_i_ga(name)} 없어졌어요")
     return changes
 
-@router.post("/detect")
-async def detect_deprecated():
-    """구 아키텍처 엔드포인트 — 새 아키텍처에서는 /detect_json 사용."""
+@router.post("/detect", dependencies=[Depends(_verify_api_key)])
+async def detect(
+    image:              UploadFile,
+    wifi_ssid:          str   = Form(""),
+    device_id:          str   = Form(""),
+    camera_orientation: str   = Form("front"),
+    mode:               str   = Form("장애물"),
+    query_text:         str   = Form(""),
+    lat:                float = Form(0.0),
+    lng:                float = Form(0.0),
+    request_id:         str   = Form(""),
+):
+    _t0 = _time.monotonic()
+    request_id = request_id or f"srv-{int(_t0 * 1000)}"
+    session_id = _normalize_session_id(wifi_ssid, device_id)
+
+    if lat != 0.0 or lng != 0.0:
+        db.save_gps(session_id, lat, lng)
+
     return JSONResponse(
+        {
+            "mode": mode,
+            "sentence": "이미지 추론은 휴대폰에서 실행해 주세요. 서버는 detect_json 결과 확인과 대시보드만 처리합니다.",
+            "alert_mode": "silent",
+            "objects": [],
+            "hazards": [],
+            "changes": [],
+            "scene": {},
+            "depth_source": "disabled",
+            "server_role": "ssot_json_dashboard",
+            "request_id": request_id,
+        },
         status_code=410,
-        content={"error": "deprecated", "message": "서버 추론이 제거됐습니다. /detect_json 을 사용하세요."},
     )
 
 def _extract_find_target(text: str) -> str:
@@ -194,6 +221,9 @@ async def detect_from_json(body: dict):
             "class_ko":   d.get("class_ko", ""),
             "confidence": d.get("confidence", 0.0),
             "distance_m": d.get("dist_m", 0.0),
+            "risk_score": float(d.get("risk_score", 0.0)),
+            "track_id": d.get("track_id", 0),
+            "vibration_pattern": d.get("vibration_pattern", "NONE"),
             "direction":  d.get("zone", "12시"),
             "is_vehicle": d.get("is_vehicle", False),
             "is_animal":  d.get("is_animal", False),
