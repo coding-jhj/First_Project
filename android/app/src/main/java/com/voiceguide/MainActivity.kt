@@ -1137,14 +1137,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             if (!isAnalyzing.get()) return
             checkRevisit()
 
+            // INTERVAL_MS 기반 레이트 리미팅 — 서 있든 걷든 항상 동작
+            // isCollecting 여부는 processOnDevice 결과 처리 시점에 분기 (버퍼 vs 즉시 TTS)
             val now = System.currentTimeMillis()
-            // 스트림 생존 시각 갱신 — isCollecting 여부와 무관하게 먼저 기록
-            // scheduleFallbackCapture()가 "스톨"로 오판해서 불필요한 captureAndProcess()를 막음
-            lastStreamFrameTime = now
-
-            // 걸음감지 시나리오: 수집 윈도우(isCollecting=true) 안에서만 추론
-            // 대기 중에는 카메라 프레임을 받되 추론은 하지 않음
-            if (!isCollecting) return
+            if (now - lastStreamFrameTime < INTERVAL_MS) return
 
             val route = if (shouldUseOnDeviceDetector()) "on_device" else "unavailable"
             val maxInFlight = MAX_ON_DEVICE_IN_FLIGHT
