@@ -3,7 +3,7 @@
 > KDT AI Human 3팀 | 프로젝트 기간 2026-04-24 ~ 2026-05-13
 
 실시간 카메라 영상으로 주변 장애물·위험 요소를 탐지하고 한국어 음성으로 안내하는 Android 앱입니다.  
-온디바이스(폰 단독) 추론과 서버(GCP Cloud Run) 추론 두 가지 경로를 지원하며, 서버 연동 시 Depth Anything V2로 정밀 거리를 추정합니다.
+YOLO 추론과 이미지 분석은 Android 온디바이스에서 수행하고, 서버(GCP Cloud Run)는 탐지 결과 JSON 수신·디바이스별 상태 배포·DB 저장을 담당합니다.
 
 ---
 
@@ -26,21 +26,17 @@
 
 ```
 Android 앱 (Kotlin)
- ├─ 온디바이스 경로 ─────────────────────────────────────────────
- │    CameraX 캡처 → yolo11n.onnx (ONNX Runtime) → SentenceBuilder.kt → TTS
- │
- └─ 서버 경로 (WiFi/LTE) ────────────────────────────────────────
-      이미지 JPEG 업로드 (480px, 65% 압축)
-           ↓
-      FastAPI (GCP Cloud Run)
-       ├─ YOLO26s 탐지 (imgsz=320)           ← 병렬 실행
-       └─ Depth Anything V2 ViT-S 거리 추정  ←
-           ↓
-      NLG (sentence.py) → JSON 응답 → Android TTS 재생
+ └─ CameraX 캡처 → yolo11n.onnx (ONNX Runtime) → 탐지 결과 JSON
+          ↓
+     FastAPI (GCP Cloud Run)
+      ├─ JSON 검증/정규화
+      ├─ device_id별 최신 결과 배포 (/status/{device_id})
+      ├─ DB 저장 (detection_events, detections)
+      └─ NLG (sentence.py) → JSON 응답 → Android TTS 재생
 ```
 
-- **온디바이스**: 서버 없이 폰 단독 동작. 배터리·발열 고려해 700ms 간격 추론
-- **서버 연동**: Depth V2로 정밀 거리 추정. 4프레임당 1회 Depth 실행 후 캐시 재사용
+- **온디바이스**: 서버 없이도 폰 단독 탐지 가능. 배터리·발열 고려해 프레임 수 제어
+- **서버 연동**: 이미지 업로드 없이 탐지 JSON만 전송해 대시보드, 팀 위치, DB 기록에 반영
 - **정책 SSOT**: `policy.json` 1개로 Android·서버 NLG 규칙 동기화 (`GET /api/policy`)
 
 ---
@@ -82,7 +78,7 @@ Android 앱 (Kotlin)
 |---|---|
 | Android | Kotlin, CameraX, ONNX Runtime, OkHttp |
 | 서버 | Python 3.10, FastAPI, Uvicorn |
-| 비전 | YOLOv11 (ultralytics 8.4.33), Depth Anything V2 ViT-S |
+| 비전 | Android ONNX Runtime 기반 YOLOv11n |
 | NLG | 커스텀 한국어 문장 생성 (조사 자동화 포함) |
 | TTS | Android 내장 TTS / ElevenLabs (고품질) |
 | STT | Android SpeechRecognizer |
@@ -101,15 +97,13 @@ pip install -r requirements.txt
 
 # 2. 환경 변수 설정
 cp .env.example .env
-# .env에 DEPTH_ENABLED=1, SERVER_YOLO_MODEL=yolo26s.pt 설정
+# 선택: DATABASE_URL, API_KEY, ALLOWED_ORIGINS 설정
 
 # 3. 서버 시작
 uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 ```
 
-**필요 모델 파일** (프로젝트 루트에 위치):
-- `yolo26s.pt` — 커스텀 학습 YOLO 모델 (20MB)
-- `depth_anything_v2_vits.pth` — Depth V2 ViT-S 가중치 (99MB, 없으면 bbox fallback)
+서버 실행에는 YOLO/Depth 모델 파일이 필요하지 않습니다.
 
 ### GCP Cloud Run 배포
 
@@ -121,13 +115,13 @@ gcloud run deploy voiceguide \
   --allow-unauthenticated
 ```
 
-> `yolo26s.pt`는 `.gcloudignore`에서 명시적으로 허용되어 빌드 컨텍스트에 포함됩니다.
+Cloud Run 서버 이미지는 Torch/Ultralytics/OpenCV 없이 JSON 라우터 중심으로 빌드됩니다.
 
 ### 서버 상태 확인
 
 ```
 GET /health
-→ {"status":"ok", "depth_v2":"loaded", "device":"cpu", "db":"ok"}
+→ {"status":"ok", "role":"json-router", "inference":"disabled", "db":"ok"}
 ```
 
 ---
@@ -138,7 +132,7 @@ GET /health
 2. `assets/yolo11n.onnx` 파일 확인 (온디바이스 추론용)
 3. 앱 실행 후 우상단 설정(⚙) → 서버 URL 입력
    - 비워두면 온디바이스 전용 모드
-   - 서버 URL 입력 시 Depth V2 정밀 거리 추정 활성화
+   - 서버 URL 입력 시 탐지 JSON을 서버 DB/대시보드에 동기화
 4. "▶ 분석 시작" 버튼 또는 음성으로 "시작"
 
 **음성 명령 예시:**
@@ -156,17 +150,43 @@ GET /health
 
 ### POST /detect
 
-이미지를 분석해 장애물·거리·안내 문장을 반환합니다.
+Android 온디바이스 YOLO 결과 JSON을 받아 세션별 상태를 갱신하고, 필요 시 DB에 저장한 뒤 안내 문장을 반환합니다. 서버는 이미지를 받거나 YOLO/Depth 추론을 수행하지 않습니다.
 
-**요청 (multipart/form-data):**
+**요청 (application/json):**
 
 | 필드 | 타입 | 설명 |
 |---|---|---|
-| image | File | JPEG 이미지 |
+| event_id | string | 탐지 이벤트 ID |
+| request_id | string | 요청 추적 ID |
 | mode | string | 장애물 / 찾기 / 질문 / 들고있는것 |
 | device_id | string | 세션 식별자 |
+| wifi_ssid | string | 선택: 공간 식별 보조값 |
 | camera_orientation | string | front / back / left / right |
 | query_text | string | 찾기 모드에서 탐색할 물체명 |
+| objects | array | 온디바이스 탐지 객체 목록 |
+| client_perf | object | 앱 추론/후처리 시간 |
+
+**요청 예시:**
+
+```json
+{
+  "event_id": "and-1778050000000-1",
+  "request_id": "and-1778050000000-1",
+  "device_id": "device-a",
+  "wifi_ssid": "office",
+  "mode": "장애물",
+  "camera_orientation": "front",
+  "objects": [
+    {
+      "class_ko": "의자",
+      "confidence": 0.91,
+      "bbox_norm_xywh": [0.4, 0.45, 0.2, 0.25],
+      "depth_source": "on_device_bbox"
+    }
+  ],
+  "client_perf": {"infer_ms": 18, "dedup_ms": 1}
+}
+```
 
 **응답:**
 
@@ -194,25 +214,18 @@ GET /health
 
 ## 모델 설명
 
-### YOLO26s (서버 전용)
+### 서버 역할
 
-- 기반: YOLOv11s 아키텍처, COCO 80클래스
-- 파라미터: 약 1,000만 개, 22.8 GFLOPs
-- 입력 크기: 320×320 (imgsz=320)
-- 로컬 벤치마크: CPU 기준 평균 **29ms (34 FPS)**
-- 신뢰도: 클래스별 개별 임계값 적용 (차량 0.35, 소형물체 0.65~0.75)
+- JSON 수신: Android가 온디바이스에서 만든 탐지 결과를 `/detect`로 전송
+- 디바이스별 상태 배포: `/status/{device_id}`, `/sessions`, `/team-locations`에서 최신 결과 조회
+- DB 저장: `detection_events`에 원본 JSON, `detections`에 개별 객체 행 저장
+- 금지: 서버 YOLO 추론, Depth 추론, 이미지 분석, 이미지 업로드 처리
 
 ### yolo11n.onnx (온디바이스)
 
 - 기반: YOLOv11n, ONNX 변환
 - 폰 단독 실행 (ONNX Runtime Android)
 - 투표(Voting) 필터: 3프레임 중 2회 이상 탐지된 물체만 안내 (오탐 방지)
-
-### Depth Anything V2 ViT-S
-
-- 단안 카메라 상대적 깊이 추정
-- 서버에서 4프레임당 1회 추론, 나머지는 캐시 재사용
-- bbox 중앙·하단 4개 포인트 샘플링 후 하위 30% 값 사용 (안전 우선)
 
 ---
 
@@ -253,12 +266,12 @@ GET /health
 
 | 이슈 | 상태 |
 |---|---|
-| 서버 FPS 6~7 (목표 10+) | 개선 중 — 이중 디코딩 제거·imgsz 320 축소 적용 |
+| 온디바이스 FPS 안정화 | 개선 중 — 프레임 수 제어·후처리 경량화 적용 |
 | 화면 큰 글씨 "분석중" 고정 | 수정 완료 (2026-05-05) |
 | 다음 장애물 안내 지연 | 수정 완료 — dedup 시간 5초→2.5초 단축 |
 | 화면 텍스트 빠른 깜빡임 | 개선 필요 |
 | TTS 음성과 화면 텍스트 불일치 | 개선 필요 |
-| Cloud Run 배포 시 yolo26s.pt 누락 | 수정 완료 (2026-05-05) |
+| 서버 이미지 추론 의존성 | 제거 완료 — JSON 라우터 구조로 전환 |
 
 ---
 
@@ -268,15 +281,15 @@ GET /health
 VoiceGuide/
 ├── src/
 │   ├── api/
-│   │   ├── main.py          # FastAPI 앱 진입점·워밍업
-│   │   ├── routes.py        # /detect /tts /gps 등 엔드포인트
-│   │   ├── db.py            # SQLite/PostgreSQL 세션·GPS 저장
+│   │   ├── main.py          # FastAPI 앱 진입점
+│   │   ├── routes.py        # /detect JSON /tts /gps 등 엔드포인트
+│   │   ├── db.py            # 탐지 이벤트·세션·GPS 저장
 │   │   └── tracker.py       # 세션별 물체 이동 추적
 │   ├── vision/
-│   │   └── detect.py        # YOLO 탐지, 방향·거리·위험도 계산
+│   │   └── detect.py        # 로컬/실험용 YOLO 탐지 코드 (서버 런타임 미사용)
 │   ├── depth/
-│   │   ├── depth.py         # Depth V2 추론, YOLO 병렬 실행
-│   │   └── hazard.py        # 바닥 위험 감지
+│   │   ├── depth.py         # 로컬/실험용 Depth 코드 (서버 런타임 미사용)
+│   │   └── hazard.py        # 로컬/실험용 바닥 위험 감지
 │   ├── nlg/
 │   │   ├── sentence.py      # 한국어 안내 문장 생성
 │   │   └── templates.py     # 방향·거리 표현 템플릿
@@ -295,14 +308,14 @@ VoiceGuide/
 │       ├── VoicePolicy.kt         # 서버 정책 동기화 클라이언트
 │       ├── BoundingBoxOverlay.kt  # 디버그용 bbox 오버레이
 │       └── StairsDetector.kt      # 계단 전용 탐지기
-├── depth_anything_v2/        # Depth Anything V2 모델 코드
+├── depth_anything_v2/        # 로컬 실험용 Depth Anything V2 모델 코드
 ├── templates/
 │   └── dashboard.html        # 실시간 세션 대시보드
 ├── tools/                    # 캘리브레이션·벤치마크 스크립트
 ├── train/                    # 파인튜닝 스크립트
 ├── tests/                    # pytest 단위 테스트
 ├── Dockerfile                # GCP Cloud Run 배포용
-├── .gcloudignore             # gcloud 업로드 필터 (yolo26s.pt 명시 허용)
+├── .gcloudignore             # gcloud 업로드 필터
 └── requirements.txt
 ```
 

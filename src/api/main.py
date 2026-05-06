@@ -17,30 +17,13 @@ async def lifespan(app: FastAPI):
     print("[main] policy.json 적재 완료")
     # DB 초기화는 동기적으로 (빠름)
     db.init_db()
-    # YOLO·Depth·OCR·TTS 워밍업은 모두 백그라운드 — yield 전에 블로킹하지 않아야
-    # Cloud Run이 PORT=8080을 즉시 감지할 수 있음 (동기 로드 시 30초+ 걸려 타임아웃 발생)
+    db.start_event_writer()
+    # 서버는 온디바이스 탐지 결과 JSON만 처리한다.
+    # YOLO/Depth 같은 이미지 분석 모델은 앱 또는 별도 ML 런타임에서만 실행한다.
     import threading
     threading.Thread(target=_warmup_tts, daemon=True).start()
     yield  # 서버 실행 중 (이 이후는 종료 시 실행)
-
-
-def _warmup_yolo():
-    try:
-        import numpy as np
-        from src.vision.detect import model, CONF_THRESHOLD
-        model(np.zeros((640, 640, 3), dtype=np.uint8), conf=CONF_THRESHOLD, verbose=False)
-        print("[main] YOLO 워밍업 완료")
-    except Exception as e:
-        print(f"[main] YOLO 워밍업 실패: {e}")
-
-
-def _warmup_depth():
-    try:
-        from src.depth.depth import _load_model
-        _load_model()
-        print("[main] Depth V2 워밍업 완료")
-    except Exception as e:
-        print(f"[main] Depth V2 워밍업 실패: {e}")
+    db.stop_event_writer()
 
 
 def _warmup_tts():
@@ -75,17 +58,16 @@ app.add_middleware(
 
 @app.get("/health")
 async def health():
-    """서버 상태 + Depth V2 모델 로드 여부 + DB 연결 확인."""
+    """서버 상태 + DB 연결 확인."""
     db_status = _check_db()
     overall = "ok" if db_status == "ok" else "degraded"
     return {
         "status":   overall,
-        "server_role": "ssot_json_dashboard",
-        "image_inference": "disabled",
-        "depth_v2": "disabled",
-        "device":   "android_on_device",
+        "role":     "json-router",
+        "inference": "disabled",
         "db_mode":  "postgresql" if db._IS_POSTGRES else "sqlite",
         "db":       db_status,
+        "db_writer": db.get_event_writer_stats(),
     }
 
 
