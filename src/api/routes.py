@@ -17,7 +17,6 @@ Android 앱과 Gradio 데모가 호출하는 API 엔드포인트를 정의합니
   - 이미지가 필요 없는 모드(저장/위치목록)는 빠르게 처리하고 반환
 """
 
-import asyncio
 import os
 import uuid
 import hashlib
@@ -40,7 +39,6 @@ def _verify_api_key(
         return
     raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
-from src.depth.depth import detect_and_depth
 from src.nlg.sentence import (
     build_sentence, build_find_sentence,
     build_question_sentence, build_held_sentence,
@@ -125,92 +123,13 @@ def _space_changes(current: list[dict], previous: list[dict]) -> list[str]:
         changes.append(f"{name}{_i_ga(name)} 없어졌어요")
     return changes
 
-@router.post("/detect", dependencies=[Depends(_verify_api_key)])
-async def detect(
-    image:              UploadFile,
-    wifi_ssid:          str   = Form(""),
-    device_id:          str   = Form(""),
-    camera_orientation: str   = Form("front"),
-    mode:               str   = Form("장애물"),
-    query_text:         str   = Form(""),
-    lat:                float = Form(0.0),
-    lng:                float = Form(0.0),
-    request_id:         str   = Form(""),
-):
-    _t0 = _time.monotonic()
-    request_id = request_id or f"srv-{int(_t0 * 1000)}"
-    session_id = _normalize_session_id(wifi_ssid, device_id)
-
-    image_bytes = await image.read()
-
-    if lat != 0.0 or lng != 0.0:
-        db.save_gps(session_id, lat, lng)
-
-    _t_detect = _time.monotonic()
-    loop = asyncio.get_event_loop()
-    objects, hazards, scene = await loop.run_in_executor(None, detect_and_depth, image_bytes)
-    _detect_ms = int((_time.monotonic() - _t_detect) * 1000)
-
-    _t_tracker = _time.monotonic()
-    tracker = get_tracker(session_id)
-    objects, motion_changes = tracker.update(objects)
-    _tracker_ms = int((_time.monotonic() - _t_tracker) * 1000)
-
-    previous = db.get_snapshot(wifi_ssid)
-    space_changes = _space_changes(objects, previous) if previous and objects else []
-    if objects:
-        db.save_snapshot(wifi_ssid, objects)
-        db.save_snapshot(session_id, objects)
-
-    all_changes = motion_changes + space_changes
-
-    if mode == "들고있는것":
-        sentence = build_held_sentence(objects)
-        return _with_perf({
-            "mode": mode, "sentence": sentence, "alert_mode": "critical",
-            "objects": objects, "hazards": hazards, "changes": motion_changes,
-            "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
-        }, _t0, request_id, _detect_ms, _tracker_ms)
-
-    if mode == "질문":
-        tracked = tracker.get_current_state(max_age_s=3.0)
-        sentence = build_question_sentence(objects, hazards, scene, tracked, camera_orientation)
-        alert_mode = get_alert_mode(objects[0], is_hazard=bool(hazards)) if objects else ("critical" if hazards else "silent")
-        return _with_perf({
-            "mode": mode, "sentence": sentence, "alert_mode": alert_mode,
-            "objects": objects, "hazards": hazards, "changes": motion_changes,
-            "scene": scene, "tracked": tracked,
-            "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
-        }, _t0, request_id, _detect_ms, _tracker_ms)
-
-    if mode == "찾기":
-        target = _extract_find_target(query_text)
-        sentence = build_find_sentence(target, objects, camera_orientation)
-        return _with_perf({
-            "mode": mode, "sentence": sentence, "alert_mode": "critical",
-            "objects": objects, "hazards": hazards, "changes": all_changes,
-            "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
-        }, _t0, request_id, _detect_ms, _tracker_ms)
-
-    sentence = build_sentence(objects, all_changes, camera_orientation=camera_orientation)
-    alert_mode = get_alert_mode(objects[0]) if objects else "silent"
-
-    extras = [v for v in [
-        scene.get("danger_warning"), scene.get("slippery_warning"),
-        scene.get("tactile_block_warning"), scene.get("crowd_warning"),
-        scene.get("safe_direction"), scene.get("traffic_light_msg"),
-    ] if v]
-    if extras:
-        sentence = sentence + " " + " ".join(extras)
-
-    if _should_suppress(session_id, sentence, alert_mode):
-        alert_mode = "silent"
-
-    return _with_perf({
-        "mode": mode, "sentence": sentence, "alert_mode": alert_mode,
-        "objects": objects, "hazards": hazards, "changes": all_changes, "scene": scene,
-        "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
-    }, _t0, request_id, _detect_ms, _tracker_ms)
+@router.post("/detect")
+async def detect_deprecated():
+    """구 아키텍처 엔드포인트 — 새 아키텍처에서는 /detect_json 사용."""
+    return JSONResponse(
+        status_code=410,
+        content={"error": "deprecated", "message": "서버 추론이 제거됐습니다. /detect_json 을 사용하세요."},
+    )
 
 def _extract_find_target(text: str) -> str:
     """
