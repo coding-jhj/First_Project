@@ -108,12 +108,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     // ── 걸음감지 시나리오 ──────────────────────────────────────────────────
     // 움직임 감지 → 3초 수집 → 투표 요약 → TTS 1회 출력 → 대기
     @Volatile private var isCollecting        = false
-    @Volatile private var lastMotionTriggerMs = 0L
     private val frameBuffer     = mutableListOf<List<Detection>>()
     private val frameBufferLock = Any()
-    private val MOTION_THRESHOLD    = 13.0f   // 중력(9.8) + 여유 → 걷기/스윙 감지
-    private val MOTION_COOLDOWN_MS  = 3000L   // 수집 윈도우와 같은 길이 (중복 트리거 방지)
-    private val FRAME_COLLECTION_MS = 3000L   // 수집 윈도우 길이
+    private val FRAME_COLLECTION_MS = 3000L   // 질문 시 프레임 수집 윈도우
     private val VOTE_SUMMARY_RATIO  = 0.5f    // 50% 이상 프레임에서 등장해야 채택
 
     private val classLastSpoken = mutableMapOf<String, Long>()
@@ -541,23 +538,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }
         lastAccelTotal = magnitude
 
-        // ── 걸음/움직임 트리거 ─────────────────────────────────────────────
-        // magnitude > 13.0 → 걷거나 폰을 흔드는 중
-        // !isCollecting && !isSpeaking() → 중복 수집 및 TTS 겹침 방지
-        val nowMs = System.currentTimeMillis()
-        if (isAnalyzing.get()
-            && magnitude > MOTION_THRESHOLD
-            && nowMs - lastMotionTriggerMs > MOTION_COOLDOWN_MS
-            && !isCollecting
-            && !isSpeaking()
-        ) {
-            lastMotionTriggerMs = nowMs
-            isCollecting        = true
-            synchronized(frameBufferLock) { frameBuffer.clear() }
-            Log.d("VG_MOTION", "움직임 감지(magnitude=${String.format("%.1f", magnitude)}) → 프레임 수집 시작 (${FRAME_COLLECTION_MS}ms)")
-            handler.postDelayed({ finalizeCollection() }, FRAME_COLLECTION_MS)
-        }
-
         val x = event.values[0]; val y = event.values[1]
         val prev = cameraOrientation
         cameraOrientation = when {
@@ -697,7 +677,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             // 수정: 즉시 이미지 캡처 → 서버에 mode="질문" 전송 → tracker 상태 포함 응답
             "질문" -> {
                 speak("확인할게요.")
-                captureAndProcessAsQuestion()
+                isCollecting = true
+                synchronized(frameBufferLock) { frameBuffer.clear() }
+                handler.postDelayed({ finalizeCollection() }, FRAME_COLLECTION_MS)
             }
             // ── 장애물 모드: 즉시 캡처 ───────────────────────────────────────
             "장애물" -> {
@@ -1058,9 +1040,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         lastSuccessTime = System.currentTimeMillis()
         lastStreamFrameTime = 0L   // 재시작 시 첫 프레임 즉시 처리 (초기 지연 방지)
         inFlightCount.set(0)       // stuck in-flight 요청 초기화 (카메라 재바인딩 없는 재시작 대비)
-        // 걸음감지 상태 초기화 — 이전 수집 세션이 남아있지 않도록
         isCollecting = false
-        lastMotionTriggerMs = 0L
         synchronized(frameBufferLock) { frameBuffer.clear() }
         btnToggle.text = "■ 분석 중지"
         btnToggle.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFDC2626.toInt())
@@ -1137,8 +1117,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             if (!isAnalyzing.get()) return
             checkRevisit()
 
-            // INTERVAL_MS 기반 레이트 리미팅 — 서 있든 걷든 항상 동작
-            // isCollecting 여부는 processOnDevice 결과 처리 시점에 분기 (버퍼 vs 즉시 TTS)
+            // INTERVAL_MS 기반 레이트 리미팅 — 항상 동작
+            // isCollecting=true(질문 응답 중)이면 결과를 버퍼에만 저장하고 즉시 TTS 생략
             val now = System.currentTimeMillis()
             if (now - lastStreamFrameTime < INTERVAL_MS) return
 
@@ -1313,23 +1293,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
      * 질문 모드 전용 즉시 캡처.
      * 온디바이스로 탐지한 뒤 JSON을 서버에 전송하고, 서버가 없으면 로컬 안내를 사용한다.
      */
-    private fun captureAndProcessAsQuestion() {
-        val file = File.createTempFile("vg_q_", ".jpg", cacheDir)
-        imageCapture?.takePicture(
-            ImageCapture.OutputFileOptions.Builder(file).build(),
-            cameraExecutor,
-            object : ImageCapture.OnImageSavedCallback {
-                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    inFlightCount.incrementAndGet()
-                    processOnDevice(file, nextRequestId(), "질문")
-                }
-                override fun onError(e: ImageCaptureException) {
-                    file.delete()
-                    speak("사진을 찍지 못했어요.")
-                }
-            })
-    }
-
     /**
      * 들고있는것 모드 전용 즉시 캡처.
      * 서버에 mode="들고있는것" 전송 → 가장 가까운 물건 기준 응답을 받음.
@@ -1476,7 +1439,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     }
                 }
 
-                // ── 걸음감지 수집 모드 분기 ───────────────────────────────────
+                // ── 질문 응답 수집 모드 분기 ───────────────────────────────────
                 // isCollecting=true → 버퍼에 저장하고 TTS/서버 전송 없이 종료
                 // finalizeCollection()이 3초 후 한 번만 TTS를 출력함
                 if (isCollecting) {
@@ -1552,8 +1515,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }.start()
     }
 
-    // ── 걸음감지 요약 처리 ────────────────────────────────────────────────
-    // handler.postDelayed로 FRAME_COLLECTION_MS 후 호출됨
+    // ── 질문 응답 요약 처리 ───────────────────────────────────────────────
+    // "앞에 뭐 있어?" 등 질문 시 handler.postDelayed로 FRAME_COLLECTION_MS 후 호출됨
     // 수집된 프레임들을 투표로 요약해 TTS 1회 출력
     private fun finalizeCollection() {
         isCollecting = false
