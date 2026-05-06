@@ -58,17 +58,16 @@ app.add_middleware(
 
 @app.get("/health")
 async def health():
-    """서버 상태 + DB 연결 확인. 새 아키텍처에서 YOLO/Depth는 서버에서 실행 안 함."""
+    """서버 상태 + DB 연결 확인."""
     db_status = _check_db()
+    overall = "ok" if db_status == "ok" else "degraded"
     return {
-        "status":          "ok" if db_status == "ok" else "degraded",
-        "server_role":     "ssot_json_dashboard",
-        "image_inference": "disabled",
-        "depth_v2":        "disabled",
-        "device":          "android_on_device",
-        "db_mode":         "postgresql" if db._IS_POSTGRES else "sqlite",
-        "db":              db_status,
-        "db_writer":       db.get_event_writer_stats(),
+        "status":    overall,
+        "role":      "json-router",
+        "inference": "disabled",
+        "db_mode":   "postgresql" if db._IS_POSTGRES else "sqlite",
+        "db":        db_status,
+        "db_writer": db.get_event_writer_stats(),
     }
 
 

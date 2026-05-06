@@ -80,7 +80,7 @@ class YoloDetector(context: Context) {
                 "NNAPI 세션 실패 → CPU $cores 스레드 fallback — $modelName: ${e.message}"
             )
             env.createSession(bytes, sessionOptions(useNnapi = false)).also {
-                android.util.Log.d("VG_PERF", "CPU $cores 스레드 추론 — $modelName")
+                android.util.Log.d("VG_PERF", "CPU 2스레드 추론 — $modelName")
             }
         }
         inputName = session.inputNames.iterator().next()

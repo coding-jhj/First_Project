@@ -1164,9 +1164,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
             val requestId = nextRequestId()
             val file = imageProxyToJpegFile(imageProxy)
-            Log.d("VG_FLOW", "request_id=$requestId mode=$currentMode [수집중] stream_file=${file.length()}B")
-            // 항상 온디바이스 추론 (서버 분기 제거)
-            processOnDevice(file, requestId)
+            Log.d("VG_FLOW", "request_id=$requestId route=$route mode=$currentMode stream_file=${file.length()}B")
+            if (route == "on_device") processOnDevice(file, requestId)
+            else {
+                file.delete()
+                handleFail()
+            }
         } catch (e: Exception) {
             if (inFlightCount.get() > 0) inFlightCount.decrementAndGet()
             Log.e("VG_FLOW", "stream analysis failed", e)
@@ -1267,9 +1270,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                     inFlightCount.incrementAndGet()
                     val requestId = nextRequestId()
-                    // 항상 온디바이스 추론 (서버 추론 없음)
-                    Log.d("VG_FLOW", "request_id=$requestId route=on_device mode=$currentMode file=${file.length()}B")
-                    processOnDevice(file, requestId)
+                    val route = if (shouldUseOnDeviceDetector()) "on_device" else "unavailable"
+                    Log.d("VG_FLOW", "request_id=$requestId route=$route mode=$currentMode file=${file.length()}B")
+                    if (route == "on_device") processOnDevice(file, requestId)
+                    else {
+                        file.delete()
+                        handleFail()
+                    }
                 }
                 override fun onError(e: ImageCaptureException) {
                     inFlightCount.decrementAndGet()
