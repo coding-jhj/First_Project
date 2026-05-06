@@ -85,6 +85,26 @@ def _init_sqlite():
                 lng        REAL NOT NULL,
                 timestamp  TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS detections (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id   TEXT    NOT NULL,
+                session_id  TEXT    NOT NULL,
+                request_id  TEXT    NOT NULL DEFAULT '',
+                class_ko    TEXT    NOT NULL,
+                confidence  REAL    NOT NULL,
+                cx          REAL    NOT NULL,
+                cy          REAL    NOT NULL,
+                w           REAL    NOT NULL,
+                h           REAL    NOT NULL,
+                zone        TEXT    NOT NULL DEFAULT '12시',
+                dist_m      REAL    NOT NULL DEFAULT 0.0,
+                is_vehicle  INTEGER NOT NULL DEFAULT 0,
+                is_animal   INTEGER NOT NULL DEFAULT 0,
+                mode        TEXT    NOT NULL DEFAULT '장애물',
+                lat         REAL    NOT NULL DEFAULT 0.0,
+                lng         REAL    NOT NULL DEFAULT 0.0,
+                detected_at TEXT    NOT NULL
+            );
         """)
 
 
@@ -114,6 +134,28 @@ def _init_postgres():
                     lat        DOUBLE PRECISION NOT NULL,
                     lng        DOUBLE PRECISION NOT NULL,
                     timestamp  TEXT NOT NULL
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS detections (
+                    id          BIGSERIAL PRIMARY KEY,
+                    device_id   TEXT             NOT NULL,
+                    session_id  TEXT             NOT NULL,
+                    request_id  TEXT             NOT NULL DEFAULT '',
+                    class_ko    TEXT             NOT NULL,
+                    confidence  DOUBLE PRECISION NOT NULL,
+                    cx          DOUBLE PRECISION NOT NULL,
+                    cy          DOUBLE PRECISION NOT NULL,
+                    w           DOUBLE PRECISION NOT NULL,
+                    h           DOUBLE PRECISION NOT NULL,
+                    zone        TEXT             NOT NULL DEFAULT '12시',
+                    dist_m      DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+                    is_vehicle  BOOLEAN          NOT NULL DEFAULT FALSE,
+                    is_animal   BOOLEAN          NOT NULL DEFAULT FALSE,
+                    mode        TEXT             NOT NULL DEFAULT '장애물',
+                    lat         DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+                    lng         DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+                    detected_at TEXT             NOT NULL
                 )
             """)
 
@@ -324,6 +366,100 @@ def get_latest_session() -> str | None:
     """가장 최근 GPS를 보낸 세션 ID 반환."""
     sessions = get_recent_sessions(limit=1)
     return sessions[0] if sessions else None
+
+
+# ── 온디바이스 탐지 결과 저장 ─────────────────────────────────────────────────
+
+_DETECTIONS_KEEP = 500  # 세션별 최대 보관 수
+
+def save_detections(
+    device_id: str,
+    session_id: str,
+    request_id: str,
+    detections: list[dict],
+    mode: str = "장애물",
+    lat: float = 0.0,
+    lng: float = 0.0,
+) -> None:
+    """폰에서 온 탐지 결과 리스트를 DB에 저장."""
+    if not detections:
+        return
+    ts = datetime.now().isoformat()
+    with _conn() as conn:
+        for d in detections:
+            if _IS_POSTGRES:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO detections "
+                        "(device_id, session_id, request_id, class_ko, confidence, "
+                        " cx, cy, w, h, zone, dist_m, is_vehicle, is_animal, "
+                        " mode, lat, lng, detected_at) "
+                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                        (device_id, session_id, request_id,
+                         d.get("class_ko",""), d.get("confidence", 0.0),
+                         d.get("cx", 0.0), d.get("cy", 0.0),
+                         d.get("w", 0.0),  d.get("h", 0.0),
+                         d.get("zone","12시"), d.get("dist_m", 0.0),
+                         d.get("is_vehicle", False), d.get("is_animal", False),
+                         mode, lat, lng, ts),
+                    )
+                    cur.execute(
+                        "DELETE FROM detections WHERE session_id = %s AND id NOT IN "
+                        "(SELECT id FROM detections WHERE session_id = %s "
+                        " ORDER BY id DESC LIMIT %s)",
+                        (session_id, session_id, _DETECTIONS_KEEP),
+                    )
+            else:
+                conn.execute(
+                    "INSERT INTO detections "
+                    "(device_id, session_id, request_id, class_ko, confidence, "
+                    " cx, cy, w, h, zone, dist_m, is_vehicle, is_animal, "
+                    " mode, lat, lng, detected_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (device_id, session_id, request_id,
+                     d.get("class_ko",""), d.get("confidence", 0.0),
+                     d.get("cx", 0.0), d.get("cy", 0.0),
+                     d.get("w", 0.0),  d.get("h", 0.0),
+                     d.get("zone","12시"), d.get("dist_m", 0.0),
+                     int(d.get("is_vehicle", False)), int(d.get("is_animal", False)),
+                     mode, lat, lng, ts),
+                )
+        if not _IS_POSTGRES:
+            conn.execute(
+                "DELETE FROM detections WHERE session_id = ? AND id NOT IN "
+                "(SELECT id FROM detections WHERE session_id = ? "
+                " ORDER BY id DESC LIMIT ?)",
+                (session_id, session_id, _DETECTIONS_KEEP),
+            )
+
+
+def get_recent_detections(session_id: str, max_age_s: float = 3.0) -> list[dict]:
+    """최근 N초 이내 탐지 결과 반환 — 질문 응답 및 tracker 복원용."""
+    from datetime import timedelta
+    cutoff = (datetime.now() - timedelta(seconds=max_age_s)).isoformat()
+    with _conn() as conn:
+        if _IS_POSTGRES:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT class_ko, confidence, cx, cy, w, h, zone, dist_m, "
+                    "       is_vehicle, is_animal, detected_at "
+                    "FROM detections WHERE session_id = %s AND detected_at > %s "
+                    "ORDER BY id DESC LIMIT 100",
+                    (session_id, cutoff),
+                )
+                rows = cur.fetchall()
+            return [dict(r) for r in rows]
+        else:
+            rows = conn.execute(
+                "SELECT class_ko, confidence, cx, cy, w, h, zone, dist_m, "
+                "       is_vehicle, is_animal, detected_at "
+                "FROM detections WHERE session_id = ? AND detected_at > ? "
+                "ORDER BY id DESC LIMIT 100",
+                (session_id, cutoff),
+            ).fetchall()
+            keys = ["class_ko","confidence","cx","cy","w","h",
+                    "zone","dist_m","is_vehicle","is_animal","detected_at"]
+            return [dict(zip(keys, r)) for r in rows]
 
 
 def get_gps_track(session_id: str, limit: int = 100) -> list[dict]:
