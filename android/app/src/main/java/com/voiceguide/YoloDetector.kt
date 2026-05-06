@@ -64,22 +64,23 @@ class YoloDetector(context: Context) {
             }
         }
         val bytes = context.assets.open(modelName).readBytes()
+        val cores = Runtime.getRuntime().availableProcessors().coerceAtMost(4)
         fun sessionOptions(useNnapi: Boolean) = OrtSession.SessionOptions().apply {
-            setIntraOpNumThreads(2)
+            setIntraOpNumThreads(cores)
             setInterOpNumThreads(1)
             if (useNnapi) addNnapi()
         }
         session = try {
             env.createSession(bytes, sessionOptions(useNnapi = true)).also {
-                android.util.Log.d("VG_PERF", "NNAPI FP32 추론 — $modelName")
+                android.util.Log.d("VG_PERF", "NNAPI + CPU $cores 스레드 — $modelName")
             }
         } catch (e: Exception) {
             android.util.Log.w(
                 "VG_PERF",
-                "NNAPI 세션 실패 → CPU 2스레드 fallback — $modelName: ${e.message}"
+                "NNAPI 세션 실패 → CPU $cores 스레드 fallback — $modelName: ${e.message}"
             )
             env.createSession(bytes, sessionOptions(useNnapi = false)).also {
-                android.util.Log.d("VG_PERF", "CPU 2스레드 추론 — $modelName")
+                android.util.Log.d("VG_PERF", "CPU $cores 스레드 추론 — $modelName")
             }
         }
         inputName = session.inputNames.iterator().next()
