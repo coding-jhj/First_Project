@@ -74,17 +74,6 @@ def test_spaces_snapshot_endpoint():
     assert response.json() == {"saved": True}
 
 
-def test_stt_endpoint_exists():
-    """STT 엔드포인트가 존재하는지 확인 (마이크 없어도 응답 와야 함)."""
-    # 서버에 마이크가 없어도 speech_recognition 미설치 fallback으로 응답해야 함
-    response = client.post("/stt")
-    assert response.status_code == 200
-    body = response.json()
-    assert "text"    in body    # 인식된 텍스트 (마이크 없으면 빈 문자열)
-    assert "mode"    in body    # 분류된 모드 (마이크 없으면 "unknown")
-    assert "success" in body    # 성공 여부 플래그
-
-
 def test_protected_status_requires_api_key(monkeypatch):
     # API_KEY 설정 시 X-API-Key 헤더 없이 접근하면 401 반환, 헤더 포함 시 200 반환
     monkeypatch.setattr(routes, "_API_KEY", "test-secret")

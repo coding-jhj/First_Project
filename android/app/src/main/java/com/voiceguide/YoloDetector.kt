@@ -18,8 +18,8 @@ import java.nio.FloatBuffer
  *   PyTorch/TensorFlow 등 어떤 프레임워크로 만든 모델이든
  *   ONNX로 변환하면 Android·iOS·PC 어디서든 실행 가능.
  *
- * 서버 모드와 온디바이스 모드 비교:
- *   서버 모드: 이미지 → WiFi → PC → YOLO + Depth V2 → 결과 → 폰
+ * 서버 연동과 온디바이스 추론:
+ *   서버 연동: 온디바이스 탐지 JSON → 서버 저장/대시보드 → 폰
  *   온디바이스: 이미지 → 폰 내 ONNX 추론 → 결과 (서버 불필요)
  */
 

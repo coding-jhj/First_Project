@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 import os
 from dotenv import load_dotenv
-load_dotenv()  # .env 파일에서 DATABASE_URL, ELEVENLABS_API_KEY 등 로드
+load_dotenv()  # .env 파일에서 DATABASE_URL, API_KEY 등 로드
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,19 +19,9 @@ async def lifespan(app: FastAPI):
     db.init_db()
     db.start_event_writer()
     # 서버는 온디바이스 탐지 결과 JSON만 처리한다.
-    # YOLO/Depth 같은 이미지 분석 모델은 앱 또는 별도 ML 런타임에서만 실행한다.
-    import threading
-    threading.Thread(target=_warmup_tts, daemon=True).start()
+    # 추가 모델성 기능은 서버 런타임에서 실행하지 않는다.
     yield  # 서버 실행 중 (이 이후는 종료 시 실행)
     db.stop_event_writer()
-
-
-def _warmup_tts():
-    try:
-        from src.voice.tts import warmup_cache
-        warmup_cache()
-    except Exception:
-        pass  # TTS 워밍업 실패해도 서버 동작에 영향 없음 (첫 요청 시 자동 생성)
 
 
 app = FastAPI(title="VoiceGuide API", lifespan=lifespan)

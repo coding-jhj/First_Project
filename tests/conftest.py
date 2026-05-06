@@ -4,9 +4,8 @@ import numpy as np
 
 
 def pytest_configure(config):
-    # 커스텀 마커 등록 — pytest -m integration / pytest -m demo 로 선택 실행 가능
+    # 커스텀 마커 등록 — pytest -m integration 로 선택 실행 가능
     config.addinivalue_line("markers", "integration: 실행 중인 서버 필요 (pytest -m integration)")
-    config.addinivalue_line("markers", "demo: Gradio/pygame 등 데모 라이브러리 필요 (pytest -m demo)")
 
 
 @pytest.fixture(scope="session")

@@ -1,7 +1,7 @@
 """
 VoiceGuide FastAPI 라우터
 ===========================
-Android 앱과 Gradio 데모가 호출하는 API 엔드포인트를 정의합니다.
+Android 앱이 호출하는 API 엔드포인트를 정의합니다.
 
 주요 엔드포인트:
   POST /detect           — 온디바이스 탐지 결과 JSON 수신/배포/저장
@@ -9,7 +9,6 @@ Android 앱과 Gradio 데모가 호출하는 API 엔드포인트를 정의합니
   GET  /locations        — 저장 장소 목록
   GET  /locations/find/{label} — 장소 검색
   DELETE /locations/{label}   — 장소 삭제
-  POST /stt              — PC 마이크 음성 인식 (Gradio 데모용)
 
 설계 원칙:
   - 모든 엔드포인트는 반드시 sentence 필드를 반환 → TTS로 바로 읽을 수 있음
@@ -25,7 +24,7 @@ import asyncio
 from collections import defaultdict
 
 from fastapi import APIRouter, Depends, Body, Form, Header, HTTPException, Response
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
 # ── API Key 인증 ────────────────────────────────────────────────────────────
 _API_KEY = os.getenv("API_KEY", "")
@@ -538,16 +537,6 @@ async def answer_question(body: dict):
     }, _t0, request_id)
 
 
-@router.post("/tts", dependencies=[Depends(_verify_api_key)])
-async def tts_endpoint(text: str = Form("")):
-    from src.voice.tts import _cache_path, _generate
-    import os
-    if not text: return JSONResponse({"error": "text is empty"}, status_code=400)
-    path = _cache_path(text)
-    if not os.path.exists(path):
-        if not _generate(text, path): return JSONResponse({"error": "TTS generation failed"}, status_code=500)
-    return FileResponse(path, media_type="audio/wav")
-
 @router.post("/gps", dependencies=[Depends(_verify_api_key)])
 async def save_gps_ping(
     wifi_ssid: str = Form(""), device_id: str = Form(""),
@@ -620,12 +609,3 @@ async def dashboard():
 async def save_space_snapshot(body: dict):
     db.save_snapshot(body.get("space_id", ""), body.get("objects", []))
     return {"saved": True}
-
-@router.post("/stt")
-async def stt_listen():
-    try:
-        from src.voice.stt import listen_and_classify
-        text, mode = listen_and_classify()
-        return {"text": text, "mode": mode, "success": bool(text)}
-    except Exception as e:
-        return {"text": "", "mode": "unknown", "success": False, "error": str(e)}

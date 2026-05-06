@@ -61,14 +61,13 @@ Android 앱 (Kotlin)
 
 ### 실험 기능 (동작하나 정확도 개선 중)
 
-- 계단 감지 (`StairsDetector.kt` 전용 ONNX 모델)
+- 계단 감지 (`StairsDetector.kt` 영상 패턴 기반 보조 감지)
 - 거리 수치 안내 ("약 2미터" 형식)
 - 점자 블록 경로 위 장애물 감지
-- 바닥 위험 감지 (Depth 맵 기반 좁은 통로·울퉁불퉁한 바닥)
 
 ### 예정 기능
 
-옷 색상 매칭, 낙상 감지, 약 알림, 버스 OCR, 하차 알림, 바코드 인식
+낙상 감지, 약 알림, 하차 알림, 바코드 인식
 
 ---
 
@@ -80,7 +79,7 @@ Android 앱 (Kotlin)
 | 서버 | Python 3.10, FastAPI, Uvicorn |
 | 비전 | Android ONNX Runtime 기반 YOLOv11n |
 | NLG | 커스텀 한국어 문장 생성 (조사 자동화 포함) |
-| TTS | Android 내장 TTS / ElevenLabs (고품질) |
+| TTS | Android 내장 TTS |
 | STT | Android SpeechRecognizer |
 | DB | SQLite (로컬) / PostgreSQL (Supabase, LTE 환경) |
 | 배포 | GCP Cloud Run (asia-northeast3) |
@@ -103,7 +102,7 @@ cp .env.example .env
 uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 ```
 
-서버 실행에는 YOLO/Depth 모델 파일이 필요하지 않습니다.
+서버 실행에는 추가 모델 파일이 필요하지 않습니다.
 
 ### GCP Cloud Run 배포
 
@@ -150,7 +149,7 @@ GET /health
 
 ### POST /detect
 
-Android 온디바이스 YOLO 결과 JSON을 받아 세션별 상태를 갱신하고, 필요 시 DB에 저장한 뒤 안내 문장을 반환합니다. 서버는 이미지를 받거나 YOLO/Depth 추론을 수행하지 않습니다.
+Android 온디바이스 YOLO 결과 JSON을 받아 세션별 상태를 갱신하고, 필요 시 DB에 저장한 뒤 안내 문장을 반환합니다. 서버는 이미지를 받거나 추가 추론을 수행하지 않습니다.
 
 **요청 (application/json):**
 
@@ -219,7 +218,7 @@ Android 온디바이스 YOLO 결과 JSON을 받아 세션별 상태를 갱신하
 - JSON 수신: Android가 온디바이스에서 만든 탐지 결과를 `/detect`로 전송
 - 디바이스별 상태 배포: `/status/{device_id}`, `/sessions`, `/team-locations`에서 최신 결과 조회
 - DB 저장: `detection_events`에 원본 JSON, `detections`에 개별 객체 행 저장
-- 금지: 서버 YOLO 추론, Depth 추론, 이미지 분석, 이미지 업로드 처리
+- 금지: 서버 추론, 서버 TTS, 이미지 분석, 이미지 업로드 처리
 
 ### yolo11n.onnx (온디바이스)
 
@@ -246,9 +245,8 @@ Android 온디바이스 YOLO 결과 JSON을 받아 세션별 상태를 갱신하
 
 | 항목 | 결과 |
 |---|---|
-| 서버 처리 FPS | 6~7 FPS (목표 10fps 미달, 개선 진행 중) |
-| 차량 탐지 | 정상 동작 확인 |
-| Depth 거리 추정 | bbox 대비 정밀도 향상 확인 |
+| JSON 처리 | 정상 동작 확인 |
+| 차량 탐지 결과 동기화 | 정상 동작 확인 |
 | TTS·화면 텍스트 동기화 | 불일치 발생 → 2026-05-05 수정 완료 |
 | 화면 텍스트 안정성 | 빠른 깜빡임 현상 — 개선 진행 중 |
 
@@ -282,20 +280,12 @@ VoiceGuide/
 ├── src/
 │   ├── api/
 │   │   ├── main.py          # FastAPI 앱 진입점
-│   │   ├── routes.py        # /detect JSON /tts /gps 등 엔드포인트
+│   │   ├── routes.py        # /detect JSON /gps /status 등 엔드포인트
 │   │   ├── db.py            # 탐지 이벤트·세션·GPS 저장
 │   │   └── tracker.py       # 세션별 물체 이동 추적
-│   ├── vision/
-│   │   └── detect.py        # 로컬/실험용 YOLO 탐지 코드 (서버 런타임 미사용)
-│   ├── depth/
-│   │   ├── depth.py         # 로컬/실험용 Depth 코드 (서버 런타임 미사용)
-│   │   └── hazard.py        # 로컬/실험용 바닥 위험 감지
 │   ├── nlg/
 │   │   ├── sentence.py      # 한국어 안내 문장 생성
 │   │   └── templates.py     # 방향·거리 표현 템플릿
-│   ├── voice/
-│   │   ├── tts.py           # gTTS / ElevenLabs TTS
-│   │   └── stt.py           # Google STT (로컬 데모용)
 │   └── config/
 │       ├── policy.json      # Android·서버 공통 정책 (SSOT)
 │       └── policy.py        # 정책 로더
@@ -308,10 +298,9 @@ VoiceGuide/
 │       ├── VoicePolicy.kt         # 서버 정책 동기화 클라이언트
 │       ├── BoundingBoxOverlay.kt  # 디버그용 bbox 오버레이
 │       └── StairsDetector.kt      # 계단 전용 탐지기
-├── depth_anything_v2/        # 로컬 실험용 Depth Anything V2 모델 코드
 ├── templates/
 │   └── dashboard.html        # 실시간 세션 대시보드
-├── tools/                    # 캘리브레이션·벤치마크 스크립트
+├── tools/                    # 모델 내보내기·서버 점검·테스트 이미지 도구
 ├── train/                    # 파인튜닝 스크립트
 ├── tests/                    # pytest 단위 테스트
 ├── Dockerfile                # GCP Cloud Run 배포용
