@@ -15,7 +15,7 @@ def sample_image_bytes() -> bytes:
     # scope="session": 테스트 세션당 1회만 생성 → 모든 테스트 파일에서 재사용 (속도 최적화)
     img = np.random.randint(80, 200, (480, 640, 3), dtype=np.uint8)  # 노이즈 이미지 — YOLO 실제 탐지 없음
     _, buf = cv2.imencode(".jpg", img)   # JPEG 바이트로 인코딩
-    return buf.tobytes()                 # bytes 반환 — FastAPI UploadFile과 동일 포맷
+    return buf.tobytes()                 # 비전 단위 테스트용 JPEG bytes
 
 
 @pytest.fixture(scope="session")

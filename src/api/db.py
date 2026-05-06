@@ -14,6 +14,9 @@ DATABASE_URL 환경변수 유무에 따라 자동 전환:
 import os
 import json
 import sqlite3
+import queue
+import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime
 
@@ -66,6 +69,44 @@ def init_db():
 def _init_sqlite():
     with _conn() as conn:
         conn.executescript("""
+            CREATE TABLE IF NOT EXISTS detection_events (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id     TEXT NOT NULL UNIQUE,
+                request_id   TEXT,
+                session_id   TEXT NOT NULL,
+                device_id    TEXT,
+                wifi_ssid    TEXT,
+                mode         TEXT,
+                timestamp    TEXT NOT NULL,
+                lat          REAL,
+                lng          REAL,
+                objects_json TEXT NOT NULL,
+                hazards_json TEXT NOT NULL,
+                scene_json   TEXT NOT NULL,
+                raw_json     TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS detections (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id        TEXT NOT NULL,
+                session_id      TEXT NOT NULL,
+                class_name      TEXT,
+                class_ko        TEXT NOT NULL,
+                confidence      REAL,
+                bbox_x          REAL,
+                bbox_y          REAL,
+                bbox_w          REAL,
+                bbox_h          REAL,
+                direction       TEXT,
+                distance_m      REAL,
+                risk_score      REAL,
+                timestamp       TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_detection_events_session_time
+                ON detection_events (session_id, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_detections_session_time
+                ON detections (session_id, id DESC);
+            CREATE INDEX IF NOT EXISTS idx_detections_class
+                ON detections (class_ko);
             CREATE TABLE IF NOT EXISTS snapshots (
                 id        INTEGER PRIMARY KEY AUTOINCREMENT,
                 space_id  TEXT NOT NULL,
@@ -91,6 +132,54 @@ def _init_sqlite():
 def _init_postgres():
     with _conn() as conn:
         with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS detection_events (
+                    id           BIGSERIAL PRIMARY KEY,
+                    event_id     TEXT NOT NULL UNIQUE,
+                    request_id   TEXT,
+                    session_id   TEXT NOT NULL,
+                    device_id    TEXT,
+                    wifi_ssid    TEXT,
+                    mode         TEXT,
+                    timestamp    TIMESTAMPTZ NOT NULL,
+                    lat          DOUBLE PRECISION,
+                    lng          DOUBLE PRECISION,
+                    objects_json JSONB NOT NULL,
+                    hazards_json JSONB NOT NULL,
+                    scene_json   JSONB NOT NULL,
+                    raw_json     JSONB NOT NULL
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS detections (
+                    id              BIGSERIAL PRIMARY KEY,
+                    event_id        TEXT NOT NULL REFERENCES detection_events(event_id) ON DELETE CASCADE,
+                    session_id      TEXT NOT NULL,
+                    class_name      TEXT,
+                    class_ko        TEXT NOT NULL,
+                    confidence      DOUBLE PRECISION,
+                    bbox_x          DOUBLE PRECISION,
+                    bbox_y          DOUBLE PRECISION,
+                    bbox_w          DOUBLE PRECISION,
+                    bbox_h          DOUBLE PRECISION,
+                    direction       TEXT,
+                    distance_m      DOUBLE PRECISION,
+                    risk_score      DOUBLE PRECISION,
+                    timestamp       TIMESTAMPTZ NOT NULL
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_detection_events_session_time "
+                "ON detection_events (session_id, id DESC)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_detections_session_time "
+                "ON detections (session_id, id DESC)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_detections_class "
+                "ON detections (class_ko)"
+            )
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS snapshots (
                     id        BIGSERIAL PRIMARY KEY,
@@ -151,6 +240,231 @@ def get_snapshot(space_id: str, max_age_s: float | None = None) -> list[dict] | 
 
 
 _SNAPSHOT_KEEP = 20  # 공간별 스냅샷 최대 보관 수 (이 이상이면 오래된 것부터 삭제)
+_EVENT_KEEP = 200
+_EVENT_QUEUE_MAX = int(os.getenv("DETECTION_EVENT_QUEUE_MAX", "512"))
+_EVENT_BATCH_SIZE = int(os.getenv("DETECTION_EVENT_BATCH_SIZE", "24"))
+_EVENT_FLUSH_INTERVAL_S = float(os.getenv("DETECTION_EVENT_FLUSH_INTERVAL_S", "0.25"))
+_event_queue: queue.Queue[dict | None] = queue.Queue(maxsize=_EVENT_QUEUE_MAX)
+_writer_stop = threading.Event()
+_writer_thread: threading.Thread | None = None
+_dropped_event_count = 0
+
+
+def start_event_writer() -> None:
+    """Start the background writer used by /detect to avoid request-thread DB stalls."""
+    global _writer_thread
+    if _writer_thread and _writer_thread.is_alive():
+        return
+    _writer_stop.clear()
+    _writer_thread = threading.Thread(target=_event_writer_loop, name="vg-db-writer", daemon=True)
+    _writer_thread.start()
+
+
+def stop_event_writer(timeout_s: float = 3.0) -> None:
+    _writer_stop.set()
+    try:
+        _event_queue.put_nowait(None)
+    except queue.Full:
+        pass
+    if _writer_thread and _writer_thread.is_alive():
+        _writer_thread.join(timeout=timeout_s)
+
+
+def get_event_writer_stats() -> dict:
+    return {
+        "queued": _event_queue.qsize(),
+        "dropped": _dropped_event_count,
+        "running": bool(_writer_thread and _writer_thread.is_alive()),
+    }
+
+
+def enqueue_detection_event(**kwargs) -> bool:
+    global _dropped_event_count
+    try:
+        _event_queue.put_nowait(kwargs)
+        return True
+    except queue.Full:
+        _dropped_event_count += 1
+        return False
+
+
+def _event_writer_loop() -> None:
+    while not _writer_stop.is_set():
+        batch = []
+        try:
+            first = _event_queue.get(timeout=_EVENT_FLUSH_INTERVAL_S)
+        except queue.Empty:
+            continue
+        if first is None:
+            break
+        batch.append(first)
+
+        deadline = time.monotonic() + _EVENT_FLUSH_INTERVAL_S
+        while len(batch) < _EVENT_BATCH_SIZE and time.monotonic() < deadline:
+            try:
+                item = _event_queue.get_nowait()
+            except queue.Empty:
+                break
+            if item is None:
+                _writer_stop.set()
+                break
+            batch.append(item)
+
+        for item in batch:
+            try:
+                save_detection_event(**item)
+            except Exception as e:
+                print(f"[DB] detection event async save failed: {e}")
+            finally:
+                _event_queue.task_done()
+
+    while True:
+        try:
+            item = _event_queue.get_nowait()
+        except queue.Empty:
+            break
+        if item is not None:
+            try:
+                save_detection_event(**item)
+            except Exception as e:
+                print(f"[DB] detection event final flush failed: {e}")
+        _event_queue.task_done()
+
+
+def save_detection_event(
+    *,
+    event_id: str,
+    request_id: str,
+    session_id: str,
+    device_id: str,
+    wifi_ssid: str,
+    mode: str,
+    objects: list[dict],
+    hazards: list[dict],
+    scene: dict,
+    raw_payload: dict,
+    lat: float | None = None,
+    lng: float | None = None,
+) -> None:
+    """온디바이스 탐지 결과 이벤트와 개별 객체 행을 함께 저장한다."""
+    ts = datetime.now().isoformat()
+    objects_json = json.dumps(objects, ensure_ascii=False)
+    hazards_json = json.dumps(hazards, ensure_ascii=False)
+    scene_json = json.dumps(scene, ensure_ascii=False)
+    raw_json = json.dumps(raw_payload, ensure_ascii=False)
+
+    with _conn() as conn:
+        if _IS_POSTGRES:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO detection_events "
+                    "(event_id, request_id, session_id, device_id, wifi_ssid, mode, timestamp, "
+                    " lat, lng, objects_json, hazards_json, scene_json, raw_json) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb) "
+                    "ON CONFLICT (event_id) DO NOTHING",
+                    (event_id, request_id, session_id, device_id, wifi_ssid, mode, ts,
+                     lat, lng, objects_json, hazards_json, scene_json, raw_json),
+                )
+                cur.execute("DELETE FROM detections WHERE event_id = %s", (event_id,))
+                _insert_detection_rows(cur, event_id, session_id, objects, ts, postgres=True)
+                cur.execute(
+                    "DELETE FROM detection_events WHERE session_id = %s AND id NOT IN "
+                    "(SELECT id FROM detection_events WHERE session_id = %s ORDER BY id DESC LIMIT %s)",
+                    (session_id, session_id, _EVENT_KEEP),
+                )
+        else:
+            conn.execute(
+                "INSERT OR IGNORE INTO detection_events "
+                "(event_id, request_id, session_id, device_id, wifi_ssid, mode, timestamp, "
+                " lat, lng, objects_json, hazards_json, scene_json, raw_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (event_id, request_id, session_id, device_id, wifi_ssid, mode, ts,
+                 lat, lng, objects_json, hazards_json, scene_json, raw_json),
+            )
+            conn.execute("DELETE FROM detections WHERE event_id = ?", (event_id,))
+            _insert_detection_rows(conn, event_id, session_id, objects, ts, postgres=False)
+            conn.execute(
+                "DELETE FROM detection_events WHERE session_id = ? AND id NOT IN "
+                "(SELECT id FROM detection_events WHERE session_id = ? ORDER BY id DESC LIMIT ?)",
+                (session_id, session_id, _EVENT_KEEP),
+            )
+
+
+def _insert_detection_rows(cur, event_id: str, session_id: str, objects: list[dict], ts: str, postgres: bool) -> None:
+    rows = []
+    for obj in objects:
+        bbox = obj.get("bbox_norm_xywh") or [None, None, None, None]
+        rows.append((
+            event_id,
+            session_id,
+            obj.get("class", ""),
+            obj.get("class_ko", ""),
+            obj.get("confidence"),
+            bbox[0] if len(bbox) > 0 else None,
+            bbox[1] if len(bbox) > 1 else None,
+            bbox[2] if len(bbox) > 2 else None,
+            bbox[3] if len(bbox) > 3 else None,
+            obj.get("direction"),
+            obj.get("distance_m"),
+            obj.get("risk_score"),
+            ts,
+        ))
+    if not rows:
+        return
+
+    if postgres:
+        cur.executemany(
+            "INSERT INTO detections "
+            "(event_id, session_id, class_name, class_ko, confidence, bbox_x, bbox_y, bbox_w, bbox_h, "
+            " direction, distance_m, risk_score, timestamp) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            rows,
+        )
+    else:
+        cur.executemany(
+            "INSERT INTO detections "
+            "(event_id, session_id, class_name, class_ko, confidence, bbox_x, bbox_y, bbox_w, bbox_h, "
+            " direction, distance_m, risk_score, timestamp) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+
+
+def get_latest_detection_event(session_id: str) -> dict | None:
+    with _conn() as conn:
+        if _IS_POSTGRES:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT event_id, request_id, timestamp, objects_json, hazards_json, scene_json "
+                    "FROM detection_events WHERE session_id = %s ORDER BY id DESC LIMIT 1",
+                    (session_id,),
+                )
+                row = cur.fetchone()
+            if not row:
+                return None
+            return {
+                "event_id": row["event_id"],
+                "request_id": row["request_id"],
+                "timestamp": str(row["timestamp"]),
+                "objects": row["objects_json"],
+                "hazards": row["hazards_json"],
+                "scene": row["scene_json"],
+            }
+        row = conn.execute(
+            "SELECT event_id, request_id, timestamp, objects_json, hazards_json, scene_json "
+            "FROM detection_events WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+            (session_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "event_id": row[0],
+            "request_id": row[1],
+            "timestamp": row[2],
+            "objects": json.loads(row[3]),
+            "hazards": json.loads(row[4]),
+            "scene": json.loads(row[5]),
+        }
 
 
 def save_snapshot(space_id: str, objects: list[dict]):

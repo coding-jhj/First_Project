@@ -4,7 +4,7 @@ VoiceGuide FastAPI 라우터
 Android 앱과 Gradio 데모가 호출하는 API 엔드포인트를 정의합니다.
 
 주요 엔드포인트:
-  POST /detect           — 이미지 분석 (장애물/찾기/확인/저장/위치목록 5가지 모드)
+  POST /detect           — 온디바이스 탐지 결과 JSON 수신/배포/저장
   POST /locations/save   — 장소 저장
   GET  /locations        — 저장 장소 목록
   GET  /locations/find/{label} — 장소 검색
@@ -14,18 +14,18 @@ Android 앱과 Gradio 데모가 호출하는 API 엔드포인트를 정의합니
 설계 원칙:
   - 모든 엔드포인트는 반드시 sentence 필드를 반환 → TTS로 바로 읽을 수 있음
   - 오류가 나도 음성 안내가 나오도록 전역 예외 핸들러 적용 (main.py)
-  - 이미지가 필요 없는 모드(저장/위치목록)는 빠르게 처리하고 반환
+  - 서버는 YOLO 추론이나 이미지 분석을 하지 않고, 앱이 보낸 JSON만 처리
 """
 
-import asyncio
 import os
 import uuid
 import hashlib
 import json
-from datetime import datetime
+import asyncio
+from collections import defaultdict
 
-from fastapi import APIRouter, Depends, UploadFile, Form, Header, HTTPException, Response
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import APIRouter, Depends, Body, Form, Header, HTTPException, Response
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 # ── API Key 인증 ────────────────────────────────────────────────────────────
 _API_KEY = os.getenv("API_KEY", "")
@@ -40,13 +40,13 @@ def _verify_api_key(
         return
     raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
-from src.depth.depth import detect_and_depth
 from src.nlg.sentence import (
     build_sentence, build_find_sentence,
     build_question_sentence, build_held_sentence,
-    get_alert_mode, _i_ga, _un_neun,
+    get_alert_mode, _i_ga,
 )
 from src.api import db
+from src.api import events
 from src.api.tracker import get_tracker
 
 router = APIRouter()
@@ -80,6 +80,50 @@ async def get_voice_policy(
 import time as _time
 _last_sentence: dict[str, tuple[str, float]] = {}
 _DEDUP_SECS = 2.5
+_SAVE_EVERY_N_FRAMES = max(1, int(os.getenv("DETECT_SAVE_EVERY_N_FRAMES", "5")))
+_SNAPSHOT_MIN_INTERVAL_S = float(os.getenv("SNAPSHOT_MIN_INTERVAL_S", "1.0"))
+_last_snapshot: dict[str, tuple[str, float]] = {}
+_frame_counts: dict[str, int] = defaultdict(int)
+
+
+def _object_signature(objects: list[dict]) -> str:
+    parts = []
+    for obj in objects[:8]:
+        bbox = obj.get("bbox_norm_xywh") or [0, 0, 0, 0]
+        area = round(float(bbox[2]) * float(bbox[3]), 3) if len(bbox) >= 4 else 0
+        parts.append(f"{obj.get('class_ko')}:{obj.get('direction')}:{area}")
+    return "|".join(parts)
+
+
+def _should_persist_frame(session_id: str, objects: list[dict], mode: str) -> bool:
+    _frame_counts[session_id] += 1
+    if mode in {"질문", "찾기", "들고있는것"}:
+        return True
+    if _frame_counts[session_id] % _SAVE_EVERY_N_FRAMES == 0:
+        return True
+    signature = _object_signature(objects)
+    prev_signature, prev_ts = _last_snapshot.get(session_id, ("", 0.0))
+    return signature != prev_signature and (_time.monotonic() - prev_ts) >= _SNAPSHOT_MIN_INTERVAL_S
+
+
+def _mark_persisted(session_id: str, objects: list[dict]) -> None:
+    _last_snapshot[session_id] = (_object_signature(objects), _time.monotonic())
+
+
+def _publish_dashboard_event(session_id: str, payload: dict, gps: dict | None = None, track: list[dict] | None = None) -> None:
+    events.publish(session_id, {
+        "session_id": session_id,
+        "objects": payload.get("objects", []),
+        "gps": gps,
+        "track": track or [],
+        "latest_event": {
+            "event_id": payload.get("event_id"),
+            "request_id": payload.get("request_id"),
+            "objects": payload.get("objects", []),
+            "hazards": payload.get("hazards", []),
+            "scene": payload.get("scene", {}),
+        },
+    })
 
 def _normalize_session_id(wifi_ssid: str = "", device_id: str = "") -> str:
     """기기별 대시보드 세션 ID 정규화."""
@@ -125,72 +169,193 @@ def _space_changes(current: list[dict], previous: list[dict]) -> list[str]:
         changes.append(f"{name}{_i_ga(name)} 없어졌어요")
     return changes
 
+
+_ZONE_BOUNDARIES = [
+    (0.11, "8시"), (0.22, "9시"), (0.33, "10시"),
+    (0.44, "11시"), (0.56, "12시"), (0.67, "1시"),
+    (0.78, "2시"), (0.89, "3시"), (1.01, "4시"),
+]
+
+
+def _direction_from_bbox(obj: dict) -> str:
+    if obj.get("direction"):
+        return str(obj["direction"])
+    bbox = obj.get("bbox_norm_xywh") or []
+    if len(bbox) >= 4:
+        cx = float(bbox[0]) + float(bbox[2]) / 2
+    else:
+        cx = float(obj.get("cx", 0.5))
+    for boundary, label in _ZONE_BOUNDARIES:
+        if cx < boundary:
+            return label
+    return "4시"
+
+
+def _distance_from_bbox(obj: dict) -> float:
+    if obj.get("distance_m") is not None:
+        return round(float(obj["distance_m"]), 1)
+    bbox = obj.get("bbox_norm_xywh") or []
+    if len(bbox) >= 4:
+        area = max(0.0001, float(bbox[2]) * float(bbox[3]))
+    else:
+        area = max(0.0001, float(obj.get("w", 0.1)) * float(obj.get("h", 0.1)))
+    try:
+        from src.config.policy import get_policy
+        calib = float(get_policy().get("on_device", {}).get("bbox_calib_area", 0.12))
+    except Exception:
+        calib = 0.12
+    return round(min(15.0, max(0.1, (calib / area) ** 0.5)), 1)
+
+
+def _risk_from_object(obj: dict) -> float:
+    if obj.get("risk_score") is not None:
+        return float(obj["risk_score"])
+    dist = float(obj.get("distance_m", 15.0))
+    bbox = obj.get("bbox_norm_xywh") or [0, 0, 0.1, 0.1]
+    area = float(bbox[2]) * float(bbox[3]) if len(bbox) >= 4 else 0.01
+    distance_score = max(0.0, min(1.0, (7.0 - dist) / 7.0))
+    area_score = max(0.0, min(1.0, area / 0.12))
+    return round(max(distance_score, area_score), 2)
+
+
+def _normalize_objects(raw_objects: list[dict]) -> list[dict]:
+    from src.config.policy import get_policy
+    classes = get_policy().get("classes", {})
+    vehicle_ko = set(classes.get("vehicle_ko", []))
+    animal_ko = set(classes.get("animal_ko", []))
+    critical_ko = set(classes.get("critical_ko", []))
+
+    objects = []
+    for raw in raw_objects:
+        if not isinstance(raw, dict):
+            continue
+        class_ko = str(raw.get("class_ko") or raw.get("classKo") or raw.get("label") or "").strip()
+        if not class_ko:
+            continue
+        bbox = raw.get("bbox_norm_xywh")
+        if not bbox:
+            cx = float(raw.get("cx", 0.5))
+            cy = float(raw.get("cy", 0.5))
+            w = float(raw.get("w", 0.1))
+            h = float(raw.get("h", 0.1))
+            bbox = [round(cx - w / 2, 6), round(cy - h / 2, 6), round(w, 6), round(h, 6)]
+        bbox = [round(float(v), 6) for v in bbox[:4]]
+        obj = {
+            "class": str(raw.get("class") or raw.get("class_name") or class_ko),
+            "class_ko": class_ko,
+            "confidence": round(float(raw.get("confidence", 0.0)), 4),
+            "bbox_norm_xywh": bbox,
+            "direction": _direction_from_bbox({**raw, "bbox_norm_xywh": bbox}),
+            "depth_source": str(raw.get("depth_source", "on_device_bbox")),
+            "is_vehicle": bool(raw.get("is_vehicle", class_ko in vehicle_ko)),
+            "is_animal": bool(raw.get("is_animal", class_ko in animal_ko)),
+            "is_dangerous": bool(raw.get("is_dangerous", class_ko in critical_ko)),
+        }
+        obj["distance_m"] = _distance_from_bbox({**raw, "bbox_norm_xywh": bbox})
+        obj["risk_score"] = _risk_from_object(obj)
+        objects.append(obj)
+    return sorted(objects, key=lambda x: x.get("risk_score", 0), reverse=True)[:8]
+
+
 @router.post("/detect", dependencies=[Depends(_verify_api_key)])
 async def detect(
-    image:              UploadFile,
-    wifi_ssid:          str   = Form(""),
-    device_id:          str   = Form(""),
-    camera_orientation: str   = Form("front"),
-    mode:               str   = Form("장애물"),
-    query_text:         str   = Form(""),
-    lat:                float = Form(0.0),
-    lng:                float = Form(0.0),
-    request_id:         str   = Form(""),
+    payload: dict = Body(...),
 ):
     _t0 = _time.monotonic()
+    wifi_ssid = str(payload.get("wifi_ssid", ""))
+    device_id = str(payload.get("device_id", ""))
+    camera_orientation = str(payload.get("camera_orientation", "front"))
+    mode = str(payload.get("mode", "장애물"))
+    query_text = str(payload.get("query_text", ""))
+    lat = float(payload.get("lat") or 0.0)
+    lng = float(payload.get("lng") or 0.0)
+    request_id = str(payload.get("request_id") or "")
     request_id = request_id or f"srv-{int(_t0 * 1000)}"
+    event_id = str(payload.get("event_id") or request_id or uuid.uuid4().hex)
     session_id = _normalize_session_id(wifi_ssid, device_id)
-
-    image_bytes = await image.read()
 
     if lat != 0.0 or lng != 0.0:
         db.save_gps(session_id, lat, lng)
 
-    _t_detect = _time.monotonic()
-    loop = asyncio.get_event_loop()
-    objects, hazards, scene = await loop.run_in_executor(None, detect_and_depth, image_bytes)
-    _detect_ms = int((_time.monotonic() - _t_detect) * 1000)
+    objects = _normalize_objects(payload.get("objects", []))
+    hazards = payload.get("hazards", [])
+    if not isinstance(hazards, list):
+        hazards = []
+    scene = payload.get("scene", {})
+    if not isinstance(scene, dict):
+        scene = {}
+    _detect_ms = int(payload.get("client_perf", {}).get("infer_ms", 0) or 0)
 
     _t_tracker = _time.monotonic()
     tracker = get_tracker(session_id)
     objects, motion_changes = tracker.update(objects)
     _tracker_ms = int((_time.monotonic() - _t_tracker) * 1000)
 
-    previous = db.get_snapshot(wifi_ssid)
+    should_persist = _should_persist_frame(session_id, objects, mode)
+    previous = db.get_snapshot(wifi_ssid) if should_persist and wifi_ssid else None
     space_changes = _space_changes(objects, previous) if previous and objects else []
-    if objects:
+    if objects and should_persist:
         db.save_snapshot(wifi_ssid, objects)
         db.save_snapshot(session_id, objects)
+        _mark_persisted(session_id, objects)
 
     all_changes = motion_changes + space_changes
+    db_enqueued = False
+    if should_persist:
+        db_enqueued = db.enqueue_detection_event(
+            event_id=event_id,
+            request_id=request_id,
+            session_id=session_id,
+            device_id=device_id,
+            wifi_ssid=wifi_ssid,
+            mode=mode,
+            objects=objects,
+            hazards=hazards,
+            scene=scene,
+            raw_payload=payload,
+            lat=lat if lat != 0.0 or lng != 0.0 else None,
+            lng=lng if lat != 0.0 or lng != 0.0 else None,
+        )
 
     if mode == "들고있는것":
         sentence = build_held_sentence(objects)
-        return _with_perf({
-            "mode": mode, "sentence": sentence, "alert_mode": "critical",
+        response_payload = _with_perf({
+            "mode": mode, "event_id": event_id, "session_id": session_id,
+            "sentence": sentence, "alert_mode": "critical",
             "objects": objects, "hazards": hazards, "changes": motion_changes,
+            "db_queued": db_enqueued,
             "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
         }, _t0, request_id, _detect_ms, _tracker_ms)
+        _publish_dashboard_event(session_id, response_payload, db.get_last_gps(session_id), db.get_gps_track(session_id, limit=100))
+        return response_payload
 
     if mode == "질문":
         tracked = tracker.get_current_state(max_age_s=3.0)
         sentence = build_question_sentence(objects, hazards, scene, tracked, camera_orientation)
         alert_mode = get_alert_mode(objects[0], is_hazard=bool(hazards)) if objects else ("critical" if hazards else "silent")
-        return _with_perf({
-            "mode": mode, "sentence": sentence, "alert_mode": alert_mode,
+        response_payload = _with_perf({
+            "mode": mode, "event_id": event_id, "session_id": session_id,
+            "sentence": sentence, "alert_mode": alert_mode,
             "objects": objects, "hazards": hazards, "changes": motion_changes,
             "scene": scene, "tracked": tracked,
+            "db_queued": db_enqueued,
             "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
         }, _t0, request_id, _detect_ms, _tracker_ms)
+        _publish_dashboard_event(session_id, response_payload, db.get_last_gps(session_id), db.get_gps_track(session_id, limit=100))
+        return response_payload
 
     if mode == "찾기":
         target = _extract_find_target(query_text)
         sentence = build_find_sentence(target, objects, camera_orientation)
-        return _with_perf({
-            "mode": mode, "sentence": sentence, "alert_mode": "critical",
+        response_payload = _with_perf({
+            "mode": mode, "event_id": event_id, "session_id": session_id,
+            "sentence": sentence, "alert_mode": "critical",
             "objects": objects, "hazards": hazards, "changes": all_changes,
+            "db_queued": db_enqueued,
             "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
         }, _t0, request_id, _detect_ms, _tracker_ms)
+        _publish_dashboard_event(session_id, response_payload, db.get_last_gps(session_id), db.get_gps_track(session_id, limit=100))
+        return response_payload
 
     sentence = build_sentence(objects, all_changes, camera_orientation=camera_orientation)
     alert_mode = get_alert_mode(objects[0]) if objects else "silent"
@@ -206,11 +371,15 @@ async def detect(
     if _should_suppress(session_id, sentence, alert_mode):
         alert_mode = "silent"
 
-    return _with_perf({
-        "mode": mode, "sentence": sentence, "alert_mode": alert_mode,
+    response_payload = _with_perf({
+        "mode": mode, "event_id": event_id, "session_id": session_id,
+        "sentence": sentence, "alert_mode": alert_mode,
         "objects": objects, "hazards": hazards, "changes": all_changes, "scene": scene,
+        "db_queued": db_enqueued,
         "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
     }, _t0, request_id, _detect_ms, _tracker_ms)
+    _publish_dashboard_event(session_id, response_payload, db.get_last_gps(session_id), db.get_gps_track(session_id, limit=100))
+    return response_payload
 
 def _extract_find_target(text: str) -> str:
     """
@@ -256,7 +425,33 @@ async def get_session_status(session_id: str):
     tracker = get_tracker(req_session_id)
     current = tracker.get_current_state(max_age_s=5.0)
     if not current: current = db.get_snapshot(req_session_id, max_age_s=8.0) or []
-    return {"session_id": req_session_id, "objects": current, "gps": gps, "track": db.get_gps_track(req_session_id, limit=100)}
+    latest = db.get_latest_detection_event(req_session_id)
+    return {
+        "session_id": req_session_id,
+        "objects": current,
+        "gps": gps,
+        "track": db.get_gps_track(req_session_id, limit=100),
+        "latest_event": latest,
+    }
+
+@router.get("/events/{session_id}", dependencies=[Depends(_verify_api_key)])
+async def stream_session_events(session_id: str):
+    req_session_id = _normalize_session_id(session_id)
+
+    async def event_stream():
+        initial = await get_session_status(req_session_id)
+        yield "event: status\n"
+        yield f"data: {json.dumps(initial, ensure_ascii=False)}\n\n"
+        async with events.subscribe(req_session_id) as queue:
+            while True:
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=15)
+                    yield "event: status\n"
+                    yield f"data: {payload}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 @router.get("/sessions", dependencies=[Depends(_verify_api_key)])
 async def list_sessions():
