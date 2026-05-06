@@ -1568,6 +1568,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }
 
         Log.d("VG_MOTION", "요약 문장: \"$sentence\"")
+        pendingStatusText = sentence   // ← 추가: TTS onStart 시 덮어쓰기 방지
         runOnUiThread {
             tvStatus.text   = sentence
             tvDetected.text = "인식: $sentence"
@@ -1905,8 +1906,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 return@runOnUiThread
             }
             lastDetectionTime = System.currentTimeMillis()
-            // tvStatus는 항상 최신 탐지 결과로 업데이트 — silent여도 텍스트는 표시
-            tvStatus.text = sentence
+            // tvDetected: 항상 즉시 업데이트 (탐지 결과 표시)
+            // tvStatus: TTS가 실제로 시작될 때 onStart 콜백에서 업데이트 (음성/텍스트 동기화)
+            pendingStatusText = sentence
             when (effectiveMode) {
                 "critical" -> {
                     val now = System.currentTimeMillis()
@@ -1932,7 +1934,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         speak(sentence)
                     }
                 }
-                "silent" -> { /* TTS 억제 — tvStatus는 위에서 이미 업데이트됨 */ }
+                "silent" -> {
+                    // TTS 없음 → onStart 콜백이 발생하지 않으므로 tvStatus 직접 업데이트
+                    pendingStatusText = ""
+                    tvStatus.text = sentence
+                }
                 else -> {
                     if (sentence != lastSentence && !isSpeaking()) {
                         lastSentence      = sentence
