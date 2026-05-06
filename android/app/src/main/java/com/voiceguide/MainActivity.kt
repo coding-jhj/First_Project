@@ -65,7 +65,7 @@ import kotlin.math.abs
  *   onCreate → TTS 초기화 → "시작할까요?" 음성 → "네" → 카메라 권한 요청
  *   → 카메라 시작 → 1초마다 캡처 → ONNX 또는 서버 추론 → TTS 안내
  */
-@androidx.camera.core.ExperimentalGetImage
+@androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
 class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEventListener {
 
     // ── UI 뷰 참조 ─────────────────────────────────────────────────────
