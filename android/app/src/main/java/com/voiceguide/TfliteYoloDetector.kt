@@ -2,76 +2,67 @@ package com.voiceguide
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.PixelFormat
+import androidx.camera.core.ImageProxy
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import org.tensorflow.lite.Interpreter
+import org.tensorflow.lite.gpu.CompatibilityList
+import org.tensorflow.lite.gpu.GpuDelegate
 
 class TfliteYoloDetector(context: Context) {
-    private val interpreter: Interpreter
+    private var interpreter: Interpreter
+    private var gpuDelegate: GpuDelegate? = null
+    private val modelBuffer: ByteBuffer
     val modelName: String
-    val executionProvider: String
+    var executionProvider: String = "TFLite-XNNPACK"
+        private set
     private val inputSize: Int
     private val outputRows: Int
     private val outputCols: Int
     private val confThreshold = 0.40f
     private val iouThreshold  = 0.45f
     private var outputShapeLogged = false
+    private val inputBuffer: ByteBuffer
+    private val outputBuffer: Array<Array<FloatArray>>
+    private val bitmapPixels: IntArray
+    private val rgbNorm = FloatArray(256) { it / 255f }
+    private var lastInputLayoutKey: String? = null
+    private var cachedPlan: SamplingPlan? = null
 
-    // 매 프레임 할당 제거 — 클래스 생성 시 1회만 할당
-    private lateinit var inputBuffer: ByteBuffer
-    private lateinit var outputArray: Array<Array<FloatArray>>
-    // 패딩 영역 초기화용 제로 배열 — ByteBuffer.put(byte[])가 System.arraycopy 경유 최속
-    private lateinit var zeroBytes: ByteArray
 
     init {
         modelName = listOf("yolo26n_float32.tflite").first { name ->
             try { context.assets.open(name).close(); true }
             catch (_: Exception) { false }
         }
-        val modelBytes  = context.assets.open(modelName).readBytes()
-        val modelBuffer = ByteBuffer.allocateDirect(modelBytes.size).order(ByteOrder.nativeOrder())
+        val modelBytes = context.assets.open(modelName).readBytes()
+        modelBuffer = ByteBuffer.allocateDirect(modelBytes.size).order(ByteOrder.nativeOrder())
         modelBuffer.put(modelBytes)
         modelBuffer.rewind()
 
-        // 1순위 최적화: NNAPI 델리게이트 (NPU/GPU 가속)
-        // NNAPI 지원 기기에서 XNNPACK 대비 2~5× 빠름
-        // 미지원 기기(Android 8.0 등)는 catch → XNNPACK fallback
-        var provider = "TFLite-XNNPACK"
-        val options  = Interpreter.Options().apply {
-            setNumThreads(4)
-            setUseXNNPACK(true)
-            try {
-                addDelegate(org.tensorflow.lite.nnapi.NnApiDelegate())
-                provider = "TFLite-NNAPI"
-            } catch (_: Throwable) {
-                // NNAPI 미지원 — XNNPACK으로 그대로 진행
-            }
-        }
-        interpreter      = Interpreter(modelBuffer, options)
-        executionProvider = provider
+        interpreter = createInterpreter()
 
         val inputShape  = interpreter.getInputTensor(0).shape()
         inputSize       = inputShape.getOrNull(1) ?: 320
         val outputShape = interpreter.getOutputTensor(0).shape()
-        outputRows      = outputShape.getOrNull(1) ?: 300
-        outputCols      = outputShape.getOrNull(2) ?: 6
-
-        // 사전 할당
-        val bufBytes  = 4 * inputSize * inputSize * 3
-        inputBuffer   = ByteBuffer.allocateDirect(bufBytes).order(ByteOrder.nativeOrder())
-        outputArray   = Array(1) { Array(outputRows) { FloatArray(outputCols) } }
-        zeroBytes     = ByteArray(bufBytes)  // all zeros — 패딩 영역 초기화용
-
-        android.util.Log.d("VG_PERF",
-            "YOLO model=$modelName provider=$executionProvider size=${inputSize}x${inputSize} " +
-            "shape=${inputShape.toList()}")
+        outputRows = outputShape.getOrNull(1) ?: 300
+        outputCols = outputShape.getOrNull(2) ?: 6
+        inputBuffer = ByteBuffer.allocateDirect(4 * inputSize * inputSize * 3).order(ByteOrder.nativeOrder())
+        outputBuffer = Array(1) { Array(outputRows) { FloatArray(outputCols) } }
+        bitmapPixels = IntArray(inputSize * inputSize)
+        android.util.Log.d(
+            "VG_PERF",
+            "YOLO input model=$modelName provider=$executionProvider size=${inputSize}x$inputSize shape=${inputShape.joinToString(prefix = "[", postfix = "]")}"
+        )
     }
 
-    // @Synchronized 제거 — MAX_ON_DEVICE_IN_FLIGHT=1로 단일 스레드 진입 보장됨
-    fun detect(bitmap: Bitmap): List<Detection> {
-        val origW   = bitmap.width
-        val origH   = bitmap.height
-        val scale   = minOf(inputSize.toFloat() / origW, inputSize.toFloat() / origH)
+    @Synchronized
+    fun detect(bitmap: Bitmap): TfliteDetectionResult {
+        val tPreprocess = System.nanoTime()
+        val origW = bitmap.width
+        val origH = bitmap.height
+        val scale = minOf(inputSize.toFloat() / origW, inputSize.toFloat() / origH)
         val scaledW = (origW * scale + 0.5f).toInt()
         val scaledH = (origH * scale + 0.5f).toInt()
         val padX    = (inputSize - scaledW) / 2
@@ -84,95 +75,270 @@ class TfliteYoloDetector(context: Context) {
         canvas.drawBitmap(scaled, padX.toFloat(), padY.toFloat(), null)
         scaled.recycle()
 
-        fillInputFromBitmap(letterboxed)
+        prepareInputLayout("bitmap:$origW:$origH:$padX:$padY:$scaledW:$scaledH")
+        bitmapToNHWC(letterboxed)
         letterboxed.recycle()
-        return runModel(padX, padY, scaledW, scaledH)
+        val preprocessMs = elapsedMs(tPreprocess)
+        return runModel(inputBuffer, padX, padY, scaledW, scaledH, preprocessMs)
     }
 
-    fun detect(frame: YuvFrame): List<Detection> {
-        val origW   = frame.displayWidth
-        val origH   = frame.displayHeight
-        val scale   = minOf(inputSize.toFloat() / origW, inputSize.toFloat() / origH)
-        val scaledW = (origW * scale + 0.5f).toInt()
-        val scaledH = (origH * scale + 0.5f).toInt()
-        val padX    = (inputSize - scaledW) / 2
-        val padY    = (inputSize - scaledH) / 2
-        fillInputFromYuv(frame, scale, padX, padY, scaledW, scaledH)
-        return runModel(padX, padY, scaledW, scaledH)
+    @Synchronized
+    fun detect(imageProxy: ImageProxy): TfliteDetectionResult {
+        val tPreprocess = System.nanoTime()
+        val rotation = ((imageProxy.imageInfo.rotationDegrees % 360) + 360) % 360
+        val displayW = if (rotation % 180 == 0) imageProxy.width else imageProxy.height
+        val displayH = if (rotation % 180 == 0) imageProxy.height else imageProxy.width
+        val scale = minOf(inputSize.toFloat() / displayW, inputSize.toFloat() / displayH)
+        val scaledW = (displayW * scale + 0.5f).toInt()
+        val scaledH = (displayH * scale + 0.5f).toInt()
+        val padX = (inputSize - scaledW) / 2
+        val padY = (inputSize - scaledH) / 2
+
+        prepareInputLayout("proxy:${imageProxy.width}:${imageProxy.height}:$rotation:$padX:$padY:$scaledW:$scaledH")
+        if (imageProxy.format == PixelFormat.RGBA_8888) {
+            rgbaToNHWC(imageProxy, rotation, displayW, displayH, scale, padX, padY, scaledW, scaledH)
+        } else {
+            yuvPlanesToNHWC(imageProxy, rotation, displayW, displayH, scale, padX, padY, scaledW, scaledH)
+        }
+        val preprocessMs = elapsedMs(tPreprocess)
+        return runModel(inputBuffer, padX, padY, scaledW, scaledH, preprocessMs)
     }
 
-    private fun runModel(padX: Int, padY: Int, scaledW: Int, scaledH: Int): List<Detection> {
+    private fun runModel(
+        inputBuffer: ByteBuffer,
+        padX: Int,
+        padY: Int,
+        scaledW: Int,
+        scaledH: Int,
+        preprocessMs: Long
+    ): TfliteDetectionResult {
         inputBuffer.rewind()
-        interpreter.run(inputBuffer, outputArray)
+        val tInfer = System.nanoTime()
+        try {
+            interpreter.run(inputBuffer, outputBuffer)
+        } catch (e: RuntimeException) {
+            if (gpuDelegate == null) throw e
+            android.util.Log.w("VG_PERF", "GPU delegate failed; falling back to XNNPACK", e)
+            fallbackToXnnpack()
+            inputBuffer.rewind()
+            interpreter.run(inputBuffer, outputBuffer)
+        }
+        val inferMs = elapsedMs(tInfer)
         if (!outputShapeLogged) {
             outputShapeLogged = true
             android.util.Log.d("VG_PERF",
                 "YOLO output model=$modelName provider=$executionProvider shape=[1, $outputRows, $outputCols]")
         }
-        return postProcessEndToEnd(outputArray[0], padX, padY, scaledW, scaledH)
+
+        val tPostprocess = System.nanoTime()
+        val detections = postProcessEndToEnd(outputBuffer[0], padX, padY, scaledW, scaledH)
+        val postprocessMs = elapsedMs(tPostprocess)
+        return TfliteDetectionResult(detections, preprocessMs, inferMs, postprocessMs)
     }
 
-    private fun fillInputFromBitmap(bitmap: Bitmap) {
-        val pixels = IntArray(inputSize * inputSize)
-        bitmap.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
-        inputBuffer.rewind()
-        for (pixel in pixels) {
-            inputBuffer.putFloat(((pixel shr 16) and 0xFF) / 255f)
-            inputBuffer.putFloat(((pixel shr 8)  and 0xFF) / 255f)
-            inputBuffer.putFloat((pixel          and 0xFF) / 255f)
+    private fun createInterpreter(): Interpreter {
+        val compatList = CompatibilityList()
+        return try {
+            if (compatList.isDelegateSupportedOnThisDevice) {
+                val options = GpuDelegate.Options().apply {
+                    setPrecisionLossAllowed(false)
+                    setInferencePreference(GpuDelegate.Options.INFERENCE_PREFERENCE_SUSTAINED_SPEED)
+                }
+                gpuDelegate = GpuDelegate(options)
+                executionProvider = "TFLite-GPU-FP32"
+                modelBuffer.rewind()
+                Interpreter(modelBuffer, Interpreter.Options().apply {
+                    addDelegate(gpuDelegate)
+                })
+            } else {
+                createXnnpackInterpreter()
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("VG_PERF", "GPU delegate init failed; using XNNPACK", e)
+            gpuDelegate?.close()
+            gpuDelegate = null
+            createXnnpackInterpreter()
+        } finally {
+            compatList.close()
         }
     }
 
-    private fun fillInputFromYuv(
-        frame: YuvFrame,
-        scale: Float,
-        padX: Int, padY: Int,
-        scaledW: Int, scaledH: Int
-    ) {
-        // 2순위 최적화 ①: System.arraycopy 경유 제로 초기화 (~1ms) — putFloat(0f) 반복 대비 수 배 빠름
-        inputBuffer.rewind()
-        inputBuffer.put(zeroBytes)
+    private fun createXnnpackInterpreter(): Interpreter {
+        executionProvider = "TFLite-XNNPACK"
+        modelBuffer.rewind()
+        return Interpreter(modelBuffer, Interpreter.Options().apply {
+            setNumThreads(4)
+            setUseXNNPACK(true)
+        })
+    }
 
-        val nv21       = frame.nv21
-        val frameW     = frame.width
-        val frameH     = frame.height
-        val rotation   = ((frame.rotationDegrees % 360) + 360) % 360
-        // 2순위 최적화 ②: 나눗셈 → 역수 곱셈 (정수 나눗셈보다 빠름)
-        val scaleRecip = 1f / scale
-        val yuvBase    = frameW * frameH  // Y plane 크기 — UV base 오프셋
+    private fun fallbackToXnnpack() {
+        interpreter.close()
+        gpuDelegate?.close()
+        gpuDelegate = null
+        interpreter = createXnnpackInterpreter()
+    }
+
+    private fun bitmapToNHWC(bitmap: Bitmap) {
+        bitmap.getPixels(bitmapPixels, 0, inputSize, 0, 0, inputSize, inputSize)
+        inputBuffer.rewind()
+        for (pixel in bitmapPixels) {
+            inputBuffer.putFloat(rgbNorm[(pixel shr 16) and 0xFF])
+            inputBuffer.putFloat(rgbNorm[(pixel shr 8) and 0xFF])
+            inputBuffer.putFloat(rgbNorm[pixel and 0xFF])
+        }
+        inputBuffer.rewind()
+    }
+
+    private fun yuvPlanesToNHWC(
+        imageProxy: ImageProxy,
+        rotation: Int,
+        displayWidth: Int,
+        displayHeight: Int,
+        scale: Float,
+        padX: Int,
+        padY: Int,
+        scaledW: Int,
+        scaledH: Int
+    ) {
+        val planes = imageProxy.planes
+        val yPlane = planes[0]
+        val uPlane = planes[1]
+        val vPlane = planes[2]
+        val yBuffer = yPlane.buffer
+        val uBuffer = uPlane.buffer
+        val vBuffer = vPlane.buffer
+        val plan = samplingPlan(displayWidth, displayHeight, scale, padX, padY, scaledW, scaledH)
 
         for (y in padY until padY + scaledH) {
-            val srcDisplayY = ((y - padY) * scaleRecip).toInt().coerceIn(0, frame.displayHeight - 1)
+            val srcDisplayY = plan.srcDisplayY[y]
             for (x in padX until padX + scaledW) {
-                val srcDisplayX = ((x - padX) * scaleRecip).toInt().coerceIn(0, frame.displayWidth - 1)
+                val srcDisplayX = plan.srcDisplayX[x]
                 val srcX: Int
                 val srcY: Int
                 when (rotation) {
-                    90  -> { srcX = srcDisplayY;             srcY = frameH - 1 - srcDisplayX }
-                    180 -> { srcX = frameW - 1 - srcDisplayX; srcY = frameH - 1 - srcDisplayY }
-                    270 -> { srcX = frameW - 1 - srcDisplayY; srcY = srcDisplayX }
-                    else -> { srcX = srcDisplayX;             srcY = srcDisplayY }
+                    90 -> {
+                        srcX = srcDisplayY
+                        srcY = imageProxy.height - 1 - srcDisplayX
+                    }
+                    180 -> {
+                        srcX = imageProxy.width - 1 - srcDisplayX
+                        srcY = imageProxy.height - 1 - srcDisplayY
+                    }
+                    270 -> {
+                        srcX = imageProxy.width - 1 - srcDisplayY
+                        srcY = srcDisplayX
+                    }
+                    else -> {
+                        srcX = srcDisplayX
+                        srcY = srcDisplayY
+                    }
                 }
-                val yIndex = srcY * frameW + srcX
-                // 2순위 최적화 ③: UV row base를 외부 루프에서 계산 불가(srcY가 inner에서 변함)
-                // → 대신 UV 인덱스를 단일 식으로 합산하고 불필요한 coerceIn 제거
-                val uvBase2 = yuvBase + (srcY ushr 1) * frameW + (srcX and -2)
-
-                val yy   = (nv21[yIndex].toInt() and 0xFF) - 16
-                val vv   = (nv21[uvBase2].toInt()     and 0xFF) - 128
-                val uu   = (nv21[uvBase2 + 1].toInt() and 0xFF) - 128
-                val c298 = 298 * yy.coerceAtLeast(0)
-                val r    = ((c298 + 409 * vv + 128) ushr 8).coerceIn(0, 255)
-                val g    = ((c298 - 100 * uu - 208 * vv + 128) ushr 8).coerceIn(0, 255)
-                val b    = ((c298 + 516 * uu + 128) ushr 8).coerceIn(0, 255)
-
-                // 절대 위치 putFloat — 순차 접근 대비 약간 느리지만 패딩 영역 skip 덕분에 총량 감소
-                val offset = (y * inputSize + x) * 12  // 12 = 3 channels × 4 bytes
-                inputBuffer.putFloat(offset,      r / 255f)
-                inputBuffer.putFloat(offset +  4, g / 255f)
-                inputBuffer.putFloat(offset +  8, b / 255f)
+                val yIndex = srcY * yPlane.rowStride + srcX * yPlane.pixelStride
+                val uvX = srcX / 2
+                val uvY = srcY / 2
+                val uIndex = uvY * uPlane.rowStride + uvX * uPlane.pixelStride
+                val vIndex = uvY * vPlane.rowStride + uvX * vPlane.pixelStride
+                val yy = (yBuffer.get(yIndex).toInt() and 0xFF).coerceAtLeast(16)
+                val uu = (uBuffer.get(uIndex).toInt() and 0xFF) - 128
+                val vv = (vBuffer.get(vIndex).toInt() and 0xFF) - 128
+                val c = yy - 16
+                val r = ((298 * c + 409 * vv + 128) shr 8).coerceIn(0, 255)
+                val g = ((298 * c - 100 * uu - 208 * vv + 128) shr 8).coerceIn(0, 255)
+                val b = ((298 * c + 516 * uu + 128) shr 8).coerceIn(0, 255)
+                val offset = (y * inputSize + x) * 3 * 4
+                inputBuffer.putFloat(offset, rgbNorm[r])
+                inputBuffer.putFloat(offset + 4, rgbNorm[g])
+                inputBuffer.putFloat(offset + 8, rgbNorm[b])
             }
         }
+        inputBuffer.rewind()
+    }
+
+    private fun rgbaToNHWC(
+        imageProxy: ImageProxy,
+        rotation: Int,
+        displayWidth: Int,
+        displayHeight: Int,
+        scale: Float,
+        padX: Int,
+        padY: Int,
+        scaledW: Int,
+        scaledH: Int
+    ) {
+        val plane = imageProxy.planes[0]
+        val buffer = plane.buffer
+        val plan = samplingPlan(displayWidth, displayHeight, scale, padX, padY, scaledW, scaledH)
+
+        for (y in padY until padY + scaledH) {
+            val srcDisplayY = plan.srcDisplayY[y]
+            for (x in padX until padX + scaledW) {
+                val srcDisplayX = plan.srcDisplayX[x]
+                val srcX: Int
+                val srcY: Int
+                when (rotation) {
+                    90 -> {
+                        srcX = srcDisplayY
+                        srcY = imageProxy.height - 1 - srcDisplayX
+                    }
+                    180 -> {
+                        srcX = imageProxy.width - 1 - srcDisplayX
+                        srcY = imageProxy.height - 1 - srcDisplayY
+                    }
+                    270 -> {
+                        srcX = imageProxy.width - 1 - srcDisplayY
+                        srcY = srcDisplayX
+                    }
+                    else -> {
+                        srcX = srcDisplayX
+                        srcY = srcDisplayY
+                    }
+                }
+                val rgbaIndex = srcY * plane.rowStride + srcX * plane.pixelStride
+                val inputOffset = (y * inputSize + x) * 3 * 4
+                inputBuffer.putFloat(inputOffset, rgbNorm[buffer.get(rgbaIndex).toInt() and 0xFF])
+                inputBuffer.putFloat(inputOffset + 4, rgbNorm[buffer.get(rgbaIndex + 1).toInt() and 0xFF])
+                inputBuffer.putFloat(inputOffset + 8, rgbNorm[buffer.get(rgbaIndex + 2).toInt() and 0xFF])
+            }
+        }
+        inputBuffer.rewind()
+    }
+
+    private fun prepareInputLayout(key: String) {
+        if (lastInputLayoutKey == key) return
+        clearInputBuffer()
+        lastInputLayoutKey = key
+    }
+
+    private fun clearInputBuffer() {
+        var offset = 0
+        repeat(inputSize * inputSize * 3) {
+            inputBuffer.putFloat(offset, 0f)
+            offset += 4
+        }
+        inputBuffer.rewind()
+    }
+
+    private fun samplingPlan(
+        displayWidth: Int,
+        displayHeight: Int,
+        scale: Float,
+        padX: Int,
+        padY: Int,
+        scaledW: Int,
+        scaledH: Int
+    ): SamplingPlan {
+        val key = "$displayWidth:$displayHeight:$padX:$padY:$scaledW:$scaledH"
+        cachedPlan?.let { if (it.key == key) return it }
+        val srcDisplayX = IntArray(inputSize)
+        val srcDisplayY = IntArray(inputSize)
+        for (x in padX until padX + scaledW) {
+            srcDisplayX[x] = ((x - padX) / scale).toInt().coerceIn(0, displayWidth - 1)
+        }
+        for (y in padY until padY + scaledH) {
+            srcDisplayY[y] = ((y - padY) / scale).toInt().coerceIn(0, displayHeight - 1)
+        }
+        return SamplingPlan(key, srcDisplayX, srcDisplayY).also { cachedPlan = it }
     }
 
     private fun postProcessEndToEnd(
@@ -232,5 +398,17 @@ class TfliteYoloDetector(context: Context) {
         return if (union > 0f) inter / union else 0f
     }
 
-    fun close() { interpreter.close() }
+    fun close() {
+        interpreter.close()
+        gpuDelegate?.close()
+    }
+
+    private data class SamplingPlan(
+        val key: String,
+        val srcDisplayX: IntArray,
+        val srcDisplayY: IntArray
+    )
+
+    private fun elapsedMs(startNs: Long): Long =
+        ((System.nanoTime() - startNs) / 1_000_000L).coerceAtLeast(0L)
 }
