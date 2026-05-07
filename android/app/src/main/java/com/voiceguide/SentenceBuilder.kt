@@ -49,7 +49,7 @@ object SentenceBuilder {
             val idx       = sortedByX.indexOf(det)
             val clock     = getStableClock(det.classKo, det.cx, idx)
             val dir       = CLOCK_TO_DIRECTION[clock] ?: clock
-            val distStr   = formatDist(det.w, det.h)
+            val distStr   = formatDist(det)
             val locStr    = if (distStr == "코앞" && dir == "바로 앞") "바로 코앞" else "$dir $distStr"
             val ig        = josaIGa(det.classKo)
             val action    = DIRECTION_ACTION[clock] ?: ""
@@ -89,7 +89,7 @@ object SentenceBuilder {
             val idx     = sortedByX.indexOf(found)
             val clock   = getStableClock(found.classKo, found.cx, idx)
             val dir     = CLOCK_TO_DIRECTION[clock] ?: clock
-            val distStr = formatDist(found.w, found.h)
+            val distStr = formatDist(found)
             val locStr  = if (distStr == "코앞" && dir == "바로 앞") "바로 코앞" else "$dir $distStr"
             val un      = josaUnNeun(target)
             val base    = "${target}${un} ${locStr}에 있어요."
@@ -105,7 +105,7 @@ object SentenceBuilder {
                 val hIdx     = sortedByX.indexOf(closerHazard)
                 val hClock   = getStableClock(closerHazard.classKo, closerHazard.cx, hIdx)
                 val hDir     = CLOCK_TO_DIRECTION[hClock] ?: hClock
-                val hDistStr = formatDist(closerHazard.w, closerHazard.h)
+                val hDistStr = formatDist(closerHazard)
                 val hLocStr  = if (hDistStr == "코앞" && hDir == "바로 앞") "바로 코앞" else "$hDir $hDistStr"
                 val hIg      = josaIGa(closerHazard.classKo)
                 "$base 단, ${hLocStr}에 ${closerHazard.classKo}${hIg} 있으니 주의하세요."
@@ -164,7 +164,7 @@ object SentenceBuilder {
         return "4시"
     }
 
-    fun formatDist(w: Float, h: Float): String = VoicePolicy.formatDistBbox(w, h)
+    fun formatDist(det: Detection): String = VoicePolicy.formatDistBbox(det.classKo, det.w, det.h)
 
     fun josaIGa(word: String): String {
         if (word.isEmpty()) return "이"

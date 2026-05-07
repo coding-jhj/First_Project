@@ -1690,7 +1690,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                                 put("w",          d.w.toDouble())
                                 put("h",          d.h.toDouble())
                                 put("zone",       SentenceBuilder.getClock(d.cx))
-                                put("dist_m",     if (d.distanceM > 0f) d.distanceM.toDouble() else VoicePolicy.calcDistBboxM(d.w, d.h))
+                                put("dist_m",     if (d.distanceM > 0f) d.distanceM.toDouble() else VoicePolicy.calcDistBboxM(d.classKo, d.w, d.h))
                                 put("track_id",   d.trackId)
                                 put("risk_score", d.riskScore.toDouble())
                                 put("vibration_pattern", d.vibrationPattern)
