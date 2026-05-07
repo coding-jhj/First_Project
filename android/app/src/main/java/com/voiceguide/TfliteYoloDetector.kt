@@ -22,7 +22,7 @@ class TfliteYoloDetector(context: Context) {
     private val outputCols: Int
     // true: raw YOLO output [84, N] / false: end-to-end NMS output [N, 6]
     private val isRawOutput: Boolean
-    private val confThreshold = 0.25f
+    private val confThreshold = 0.30f
     private val iouThreshold  = 0.45f
     private var outputShapeLogged = false
     private val inputBuffer: ByteBuffer
