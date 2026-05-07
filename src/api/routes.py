@@ -597,6 +597,37 @@ async def get_team_locations():
             locations.append({"session_id": s, "lat": gps["lat"], "lng": gps["lng"]})
     return {"locations": locations}
 
+@router.get("/history/{session_id}", dependencies=[Depends(_verify_api_key)])
+async def get_detection_history(session_id: str):
+    """최근 24시간 탐지 이벤트 내역 조회 — 대시보드 하단 패널 전용.
+
+    [왜 이 엔드포인트가 필요한가]
+    대시보드의 '실시간 현황'은 현재 순간만 보여준다.
+    이 엔드포인트는 "오늘 하루 동안 어떤 물체가 몇 번 탐지됐는지"
+    누적 이력을 제공해 장기적인 패턴 파악에 활용한다.
+
+    [앱 성능에 영향 없는 이유]
+    - 호출자: 브라우저(대시보드)가 30초마다 1회 호출
+    - 앱의 /detect는 초당 수회 호출 → 완전히 다른 경로
+    - DB 조회는 SELECT만 수행, 앱의 쓰기 작업에 영향 없음
+
+    반환:
+        session_id   : 조회한 세션 ID
+        period_hours : 조회 기간 (24시간 고정)
+        summary      : 위험/주의/안전 건수 집계
+        events       : 탐지 이벤트 목록 (최신순, 최대 50건)
+    """
+    req_session_id = _normalize_session_id(session_id)
+    # DB에서 24시간 내역 조회 (SQLite·PostgreSQL 공통 인터페이스)
+    result = db.get_history_24h(req_session_id, limit=50)
+    return {
+        "session_id":   req_session_id,
+        "period_hours": 24,
+        "summary":      result["summary"],
+        "events":       result["events"],
+    }
+
+
 @router.get("/dashboard", dependencies=[Depends(_verify_api_key)])
 async def dashboard():
     from fastapi.responses import HTMLResponse
