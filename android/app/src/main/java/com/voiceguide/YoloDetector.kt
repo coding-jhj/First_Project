@@ -64,23 +64,31 @@ class YoloDetector(context: Context) {
             }
         }
         val bytes = context.assets.open(modelName).readBytes()
-        val cores = Runtime.getRuntime().availableProcessors().coerceAtMost(4)
-        fun sessionOptions(useNnapi: Boolean) = OrtSession.SessionOptions().apply {
+        // CPU 코어 수: 추론 전용 스레드 1개이므로 intra-op 스레드만 활용
+        val cores = Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
+        fun cpuOptions() = OrtSession.SessionOptions().apply {
             setIntraOpNumThreads(cores)
             setInterOpNumThreads(1)
-            if (useNnapi) addNnapi()
+            setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
         }
-        session = try {
-            env.createSession(bytes, sessionOptions(useNnapi = true)).also {
-                android.util.Log.d("VG_PERF", "NNAPI + CPU $cores 스레드 — $modelName")
+        // NNAPI는 Android 10(API 29) 이상 + 모델 호환성 두 조건 모두 충족해야 안정적
+        val canTryNnapi = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q
+        session = if (canTryNnapi) {
+            try {
+                val nnapiOpts = cpuOptions().apply { addNnapi() }
+                env.createSession(bytes, nnapiOpts).also {
+                    android.util.Log.d("VG_PERF", "NNAPI + CPU $cores 스레드 — $modelName")
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("VG_PERF",
+                    "NNAPI 세션 실패 → CPU fallback — $modelName: ${e.message}")
+                env.createSession(bytes, cpuOptions()).also {
+                    android.util.Log.d("VG_PERF", "CPU $cores 스레드 추론 — $modelName")
+                }
             }
-        } catch (e: Exception) {
-            android.util.Log.w(
-                "VG_PERF",
-                "NNAPI 세션 실패 → CPU $cores 스레드 fallback — $modelName: ${e.message}"
-            )
-            env.createSession(bytes, sessionOptions(useNnapi = false)).also {
-                android.util.Log.d("VG_PERF", "CPU $cores 스레드 추론 — $modelName")
+        } else {
+            env.createSession(bytes, cpuOptions()).also {
+                android.util.Log.d("VG_PERF", "CPU $cores 스레드 추론 (API<29) — $modelName")
             }
         }
         inputName = session.inputNames.iterator().next()
