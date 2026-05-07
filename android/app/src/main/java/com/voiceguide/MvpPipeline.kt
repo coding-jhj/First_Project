@@ -12,10 +12,13 @@ enum class VibrationPattern {
     URGENT
 }
 
+enum class EventType { GRADUAL, SUDDEN }
+
 data class MvpFrame(
     val detections: List<Detection>,
     val maxRisk: Float,
-    val vibrationPattern: VibrationPattern
+    val vibrationPattern: VibrationPattern,
+    val shouldSpeak: Boolean
 )
 
 class MvpPipeline {
@@ -27,12 +30,14 @@ class MvpPipeline {
         var w: Float,
         var h: Float,
         var distanceM: Float,
+        var prevDistanceM: Float,
         var risk: Float,
         var missed: Int = 0
     )
 
     private val tracks = mutableListOf<Track>()
     private var nextTrackId = 1
+    private val lastSpokenTime = HashMap<Int, Long>()
 
     fun update(detections: List<Detection>): MvpFrame {
         tracks.forEach { it.missed += 1 }
@@ -40,6 +45,7 @@ class MvpPipeline {
         val assignedTrackIds = mutableSetOf<Int>()
         val assignedDetectionIds = mutableSetOf<Int>()
         val output = mutableListOf<Detection>()
+        val newTrackIds = mutableSetOf<Int>()
 
         val scoredPairs = mutableListOf<Triple<Float, Int, Int>>()
         for (di in detections.indices) {
@@ -73,24 +79,33 @@ class MvpPipeline {
                 w = det.w,
                 h = det.h,
                 distanceM = distanceM,
+                prevDistanceM = distanceM,
                 risk = risk,
                 missed = 0
             )
             tracks.add(track)
+            newTrackIds.add(track.id)
             output.add(withMvpFields(det, track.id, distanceM, risk))
         }
 
         tracks.removeAll { it.missed > MAX_MISSED_FRAMES }
+        val activeIds = tracks.map { it.id }.toSet()
+        lastSpokenTime.keys.removeAll { it !in activeIds }
 
         val sorted = output.sortedWith(
             compareByDescending<Detection> { it.riskScore }
                 .thenByDescending { it.w * it.h }
         )
         val maxRisk = sorted.maxOfOrNull { it.riskScore } ?: 0f
+        val pattern = patternFor(maxRisk, sorted.firstOrNull())
+        val trackMap = tracks.associateBy { it.id }
+        val shouldSpeak = computeShouldSpeak(sorted, newTrackIds, pattern, trackMap)
+
         return MvpFrame(
             detections = sorted,
             maxRisk = maxRisk,
-            vibrationPattern = patternFor(maxRisk, sorted.firstOrNull())
+            vibrationPattern = pattern,
+            shouldSpeak = shouldSpeak
         )
     }
 
@@ -98,6 +113,7 @@ class MvpPipeline {
         val rawDistance = bboxDistanceM(det)
         val rawRisk = computeRisk(det)
 
+        track.prevDistanceM = track.distanceM  // 접근속도 계산을 위해 이전값 보존
         track.cx = EMA_ALPHA * det.cx + (1f - EMA_ALPHA) * track.cx
         track.cy = EMA_ALPHA * det.cy + (1f - EMA_ALPHA) * track.cy
         track.w = EMA_ALPHA * det.w + (1f - EMA_ALPHA) * track.w
@@ -167,6 +183,40 @@ class MvpPipeline {
         }
     }
 
+    // 이벤트 타입 판단: 측면, 빠른 접근, 신규 근접 등장 → SUDDEN
+    private fun eventTypeFor(det: Detection, track: Track, isNew: Boolean): EventType {
+        if (det.cx < SIDE_LEFT_THRESHOLD || det.cx > SIDE_RIGHT_THRESHOLD) return EventType.SUDDEN
+        if (isNew && track.distanceM <= NEW_TRACK_SUDDEN_DIST_M) return EventType.SUDDEN
+        if (!isNew) {
+            val delta = track.prevDistanceM - track.distanceM  // 양수 = 접근 중
+            if (delta >= FAST_APPROACH_DELTA_M) return EventType.SUDDEN
+        }
+        return EventType.GRADUAL
+    }
+
+    // URGENT는 항상 발화. SUDDEN은 진동만. GRADUAL은 5초 쿨다운 적용.
+    private fun computeShouldSpeak(
+        detections: List<Detection>,
+        newTrackIds: Set<Int>,
+        pattern: VibrationPattern,
+        trackMap: Map<Int, Track>
+    ): Boolean {
+        if (pattern == VibrationPattern.URGENT) return true
+        if (detections.isEmpty()) return false
+
+        val now = System.currentTimeMillis()
+        for (det in detections) {
+            val track = trackMap[det.trackId] ?: continue
+            val isNew = det.trackId in newTrackIds
+            if (eventTypeFor(det, track, isNew) == EventType.SUDDEN) continue
+            val lastTime = lastSpokenTime[det.trackId] ?: 0L
+            if (now - lastTime < SPEAK_COOLDOWN_MS) continue
+            lastSpokenTime[det.trackId] = now
+            return true
+        }
+        return false
+    }
+
     private fun iou(det: Detection, track: Track): Float {
         val ax1 = det.cx - det.w / 2f
         val ay1 = det.cy - det.h / 2f
@@ -189,5 +239,10 @@ class MvpPipeline {
         private const val MAX_MISSED_FRAMES = 12
         private const val EMA_ALPHA = 0.55f
         private const val BBOX_CALIB_AREA = 0.06f
+        private const val SIDE_LEFT_THRESHOLD = 0.33f
+        private const val SIDE_RIGHT_THRESHOLD = 0.67f
+        private const val NEW_TRACK_SUDDEN_DIST_M = 2f
+        private const val FAST_APPROACH_DELTA_M = 0.8f
+        private const val SPEAK_COOLDOWN_MS = 5000L
     }
 }

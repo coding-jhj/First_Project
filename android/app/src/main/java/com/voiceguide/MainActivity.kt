@@ -1478,10 +1478,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 else -> "silent"
             }
 
-            Log.d("VG_DETECT", "문장=\"$sentence\" alertMode=$alertMode")
+            // shouldSpeak=false → 진동만, TTS 없음 (URGENT는 pipeline에서 항상 true)
+            val finalAlertMode = if (!mvpFrame.shouldSpeak) "silent" else alertMode
+            Log.d("VG_DETECT", "문장=\"$sentence\" alertMode=$alertMode shouldSpeak=${mvpFrame.shouldSpeak}")
 
             // 로컬 TTS 즉시 처리 — 서버 응답 기다리지 않음
-            handleSuccess(sentence, alertMode)
+            handleSuccess(sentence, finalAlertMode)
 
             // 서버 전송은 IO 스레드에서 fire-and-forget
             uploadDetectionToServer(voted, effectiveMode, requestId, imgW, imgH, decodeMs, inferMs, dedupMs, totalMs)
