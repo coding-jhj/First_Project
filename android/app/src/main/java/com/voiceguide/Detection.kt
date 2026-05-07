@@ -14,14 +14,9 @@ data class Detection(
     val distanceM: Float = 0f
 )
 
-data class YuvFrame(
-    val nv21: ByteArray,
-    val width: Int,
-    val height: Int,
-    val rotationDegrees: Int
-) {
-    val displayWidth: Int =
-        if (rotationDegrees % 180 == 0) width else height
-    val displayHeight: Int =
-        if (rotationDegrees % 180 == 0) height else width
-}
+data class TfliteDetectionResult(
+    val detections: List<Detection>,
+    val preprocessMs: Long,
+    val inferMs: Long,
+    val postprocessMs: Long
+)
