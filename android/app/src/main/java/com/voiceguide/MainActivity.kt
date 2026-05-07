@@ -1837,8 +1837,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         awaitingStartConfirm = true
         speakBuiltIn(
             "보이스가이드예요. " +
-            "시작 버튼을 누르거나 '네'라고 말하면 장애물 안내를 시작해요. " +
-            "'찾기', '확인', '질문' 같은 음성 명령도 사용할 수 있어요."
+            "'찾기', '탐지' 같은 음성 명령도 사용할 수 있어요." +
+            "시작 버튼을 누르거나 '네'라고 말하면 장애물 안내를 시작해요. "
         )
     }
 
