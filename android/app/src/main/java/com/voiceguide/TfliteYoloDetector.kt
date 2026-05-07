@@ -20,6 +20,8 @@ class TfliteYoloDetector(context: Context) {
     private val inputSize: Int
     private val outputRows: Int
     private val outputCols: Int
+    // true: raw YOLO output [84, N] / false: end-to-end NMS output [N, 6]
+    private val isRawOutput: Boolean
     private val confThreshold = 0.40f
     private val iouThreshold  = 0.45f
     private var outputShapeLogged = false
@@ -32,7 +34,7 @@ class TfliteYoloDetector(context: Context) {
 
 
     init {
-        modelName = listOf("yolo26n_float32.tflite").first { name ->
+        modelName = listOf("yolo11n_320.tflite", "yolo26n_float32.tflite").first { name ->
             try { context.assets.open(name).close(); true }
             catch (_: Exception) { false }
         }
@@ -48,6 +50,8 @@ class TfliteYoloDetector(context: Context) {
         val outputShape = interpreter.getOutputTensor(0).shape()
         outputRows = outputShape.getOrNull(1) ?: 300
         outputCols = outputShape.getOrNull(2) ?: 6
+        // outputRows==84 → raw YOLO [1,84,N]; otherwise end-to-end NMS [1,N,6]
+        isRawOutput = (outputRows == 84)
         inputBuffer = ByteBuffer.allocateDirect(4 * inputSize * inputSize * 3).order(ByteOrder.nativeOrder())
         outputBuffer = Array(1) { Array(outputRows) { FloatArray(outputCols) } }
         bitmapPixels = IntArray(inputSize * inputSize)
@@ -131,7 +135,10 @@ class TfliteYoloDetector(context: Context) {
         }
 
         val tPostprocess = System.nanoTime()
-        val detections = postProcessEndToEnd(outputBuffer[0], padX, padY, scaledW, scaledH)
+        val detections = if (isRawOutput)
+            postProcessRaw(outputBuffer[0], padX, padY, scaledW, scaledH)
+        else
+            postProcessEndToEnd(outputBuffer[0], padX, padY, scaledW, scaledH)
         val postprocessMs = elapsedMs(tPostprocess)
         return TfliteDetectionResult(detections, preprocessMs, inferMs, postprocessMs)
     }
@@ -339,6 +346,46 @@ class TfliteYoloDetector(context: Context) {
             srcDisplayY[y] = ((y - padY) / scale).toInt().coerceIn(0, displayHeight - 1)
         }
         return SamplingPlan(key, srcDisplayX, srcDisplayY).also { cachedPlan = it }
+    }
+
+    // raw YOLO11 output: shape [84][N], rows 0-3=cx/cy/w/h (normalized 0-1), rows 4-83=class scores (sigmoid applied)
+    private fun postProcessRaw(
+        rawOutput: Array<FloatArray>,
+        padX: Int, padY: Int,
+        scaledW: Int, scaledH: Int
+    ): List<Detection> {
+        val numAnchors = rawOutput[0].size
+        val candidates = mutableListOf<Detection>()
+        for (i in 0 until numAnchors) {
+            var maxScore = confThreshold
+            var classId = -1
+            for (c in 4 until rawOutput.size) {
+                val s = rawOutput[c][i]
+                if (s > maxScore) { maxScore = s; classId = c - 4 }
+            }
+            if (classId < 0) continue
+            val name = COCO_KO[classId] ?: continue
+
+            // coords are normalized [0,1] relative to inputSize
+            val cx = rawOutput[0][i] * inputSize
+            val cy = rawOutput[1][i] * inputSize
+            val w  = rawOutput[2][i] * inputSize
+            val h  = rawOutput[3][i] * inputSize
+            val x1 = cx - w / 2f
+            val y1 = cy - h / 2f
+            val x2 = cx + w / 2f
+            val y2 = cy + h / 2f
+
+            val cxD = ((x1 + x2) / 2f - padX) / scaledW
+            val cyD = ((y1 + y2) / 2f - padY) / scaledH
+            val wD  = (x2 - x1) / scaledW
+            val hD  = (y2 - y1) / scaledH
+            if (cxD < 0f || cxD > 1f || cyD < 0f || cyD > 1f || wD <= 0f || hD <= 0f) continue
+
+            candidates.add(Detection(classKo = name, confidence = maxScore,
+                                     cx = cxD, cy = cyD, w = wD, h = hD))
+        }
+        return nms(candidates.sortedByDescending { it.confidence }).take(8)
     }
 
     private fun postProcessEndToEnd(
