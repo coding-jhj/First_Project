@@ -69,6 +69,18 @@ def init_db():
 def _init_sqlite():
     with _conn() as conn:
         conn.executescript("""
+            CREATE TABLE IF NOT EXISTS gps_routes (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                route_id    TEXT NOT NULL UNIQUE,
+                session_id  TEXT NOT NULL,
+                name        TEXT,
+                started_at  TEXT NOT NULL,
+                ended_at    TEXT NOT NULL,
+                point_count INTEGER NOT NULL DEFAULT 0,
+                points_json TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_gps_routes_session
+                ON gps_routes (session_id, id DESC);
             CREATE TABLE IF NOT EXISTS detection_events (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 event_id     TEXT NOT NULL UNIQUE,
@@ -129,6 +141,7 @@ def _init_sqlite():
             CREATE TABLE IF NOT EXISTS detections (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 device_id   TEXT    NOT NULL,
+
                 session_id  TEXT    NOT NULL,
                 request_id  TEXT    NOT NULL DEFAULT '',
                 class_ko    TEXT    NOT NULL,
@@ -225,6 +238,22 @@ def _init_postgres():
                     timestamp  TEXT NOT NULL
                 )
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS gps_routes (
+                    id          BIGSERIAL PRIMARY KEY,
+                    route_id    TEXT NOT NULL UNIQUE,
+                    session_id  TEXT NOT NULL,
+                    name        TEXT,
+                    started_at  TEXT NOT NULL,
+                    ended_at    TEXT NOT NULL,
+                    point_count INTEGER NOT NULL DEFAULT 0,
+                    points_json JSONB NOT NULL
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_gps_routes_session "
+                "ON gps_routes (session_id, id DESC)"
+            )
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS detections (
                     id          BIGSERIAL PRIMARY KEY,
@@ -891,6 +920,89 @@ def get_history_24h(session_id: str, limit: int = 50) -> dict:
         summary[e["risk"]] += 1
 
     return {"events": events, "summary": summary}
+
+
+def save_gps_route(session_id: str, name: str | None = None) -> str | None:
+    """gps_history의 현재 좌표를 하나의 완성 경로로 저장하고 gps_history를 초기화.
+    저장된 좌표가 없으면 None 반환, 그 외에는 route_id 반환.
+    """
+    import uuid as _uuid
+    points = get_gps_track(session_id, limit=500)
+    if not points:
+        return None
+
+    route_id = _uuid.uuid4().hex
+    started_at = points[0]["timestamp"]
+    ended_at   = points[-1]["timestamp"]
+    points_json = json.dumps(points, ensure_ascii=False)
+
+    with _conn() as conn:
+        if _IS_POSTGRES:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO gps_routes "
+                    "(route_id, session_id, name, started_at, ended_at, point_count, points_json) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)",
+                    (route_id, session_id, name, started_at, ended_at, len(points), points_json),
+                )
+                cur.execute(
+                    "DELETE FROM gps_history WHERE session_id = %s", (session_id,)
+                )
+        else:
+            conn.execute(
+                "INSERT OR IGNORE INTO gps_routes "
+                "(route_id, session_id, name, started_at, ended_at, point_count, points_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (route_id, session_id, name, started_at, ended_at, len(points), points_json),
+            )
+            conn.execute(
+                "DELETE FROM gps_history WHERE session_id = ?", (session_id,)
+            )
+    return route_id
+
+
+def get_gps_routes(session_id: str, limit: int = 20) -> list[dict]:
+    """세션의 저장된 경로 목록 반환 (메타데이터만, 좌표 제외)."""
+    with _conn() as conn:
+        if _IS_POSTGRES:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT route_id, name, started_at, ended_at, point_count "
+                    "FROM gps_routes WHERE session_id = %s ORDER BY id DESC LIMIT %s",
+                    (session_id, limit),
+                )
+                rows = cur.fetchall()
+            return [{"route_id": r["route_id"], "name": r["name"],
+                     "started_at": str(r["started_at"]), "ended_at": str(r["ended_at"]),
+                     "point_count": r["point_count"]} for r in rows]
+        else:
+            rows = conn.execute(
+                "SELECT route_id, name, started_at, ended_at, point_count "
+                "FROM gps_routes WHERE session_id = ? ORDER BY id DESC LIMIT ?",
+                (session_id, limit),
+            ).fetchall()
+            return [{"route_id": r[0], "name": r[1], "started_at": r[2],
+                     "ended_at": r[3], "point_count": r[4]} for r in rows]
+
+
+def get_gps_route_points(route_id: str) -> list[dict]:
+    """특정 경로의 좌표 목록 반환."""
+    with _conn() as conn:
+        if _IS_POSTGRES:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT points_json FROM gps_routes WHERE route_id = %s", (route_id,)
+                )
+                row = cur.fetchone()
+            if not row:
+                return []
+            pts = row["points_json"]
+            return pts if isinstance(pts, list) else json.loads(pts)
+        else:
+            row = conn.execute(
+                "SELECT points_json FROM gps_routes WHERE route_id = ?", (route_id,)
+            ).fetchone()
+            return json.loads(row[0]) if row else []
 
 
 def get_gps_track(session_id: str, limit: int = 100) -> list[dict]:
