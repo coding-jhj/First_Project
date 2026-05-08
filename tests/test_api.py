@@ -66,6 +66,39 @@ def test_detect_response_schema():
     assert body["objects"][0]["depth_source"] == "on_device_bbox"
 
 
+def test_detect_json_persists_recent_detections():
+    payload = {
+        "device_id": "test_detect_json_device",
+        "wifi_ssid": "test_detect_json_wifi",
+        "request_id": "req-detect-json-1",
+        "mode": "장애물",
+        "camera_orientation": "front",
+        "lat": 37.5665,
+        "lng": 126.9780,
+        "detections": [
+            {
+                "class_ko": "의자",
+                "confidence": 0.91,
+                "cx": 0.5,
+                "cy": 0.55,
+                "w": 0.2,
+                "h": 0.25,
+                "zone": "12시",
+                "dist_m": 1.5,
+            }
+        ],
+    }
+    response = client.post("/detect_json", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sentence"]
+    assert body["objects"][0]["class_ko"] == "의자"
+
+    recent = db.get_recent_detections("test_detect_json_device", max_age_s=60)
+    assert recent
+    assert recent[0]["class_ko"] == "의자"
+
+
 def test_spaces_snapshot_endpoint():
     # 공간 스냅샷 수동 저장 엔드포인트 — 디버깅/테스트 전용
     payload = {"space_id": "test_ssid", "objects": []}

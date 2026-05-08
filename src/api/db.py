@@ -126,7 +126,7 @@ def _init_sqlite():
                 lng        REAL NOT NULL,
                 timestamp  TEXT NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS detections (
+            CREATE TABLE IF NOT EXISTS recent_detections (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 device_id   TEXT    NOT NULL,
                 session_id  TEXT    NOT NULL,
@@ -146,6 +146,8 @@ def _init_sqlite():
                 lng         REAL    NOT NULL DEFAULT 0.0,
                 detected_at TEXT    NOT NULL
             );
+            CREATE INDEX IF NOT EXISTS idx_recent_detections_session_time
+                ON recent_detections (session_id, id DESC);
         """)
 
 
@@ -226,7 +228,7 @@ def _init_postgres():
                 )
             """)
             cur.execute("""
-                CREATE TABLE IF NOT EXISTS detections (
+                CREATE TABLE IF NOT EXISTS recent_detections (
                     id          BIGSERIAL PRIMARY KEY,
                     device_id   TEXT             NOT NULL,
                     session_id  TEXT             NOT NULL,
@@ -247,6 +249,10 @@ def _init_postgres():
                     detected_at TEXT             NOT NULL
                 )
             """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_recent_detections_session_time "
+                "ON recent_detections (session_id, id DESC)"
+            )
 
 
 # ── 공간 스냅샷 ───────────────────────────────────────────────────────────────
@@ -704,7 +710,7 @@ def save_detections(
             if _IS_POSTGRES:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO detections "
+                        "INSERT INTO recent_detections "
                         "(device_id, session_id, request_id, class_ko, confidence, "
                         " cx, cy, w, h, zone, dist_m, is_vehicle, is_animal, "
                         " mode, lat, lng, detected_at) "
@@ -718,14 +724,14 @@ def save_detections(
                          mode, lat, lng, ts),
                     )
                     cur.execute(
-                        "DELETE FROM detections WHERE session_id = %s AND id NOT IN "
-                        "(SELECT id FROM detections WHERE session_id = %s "
+                        "DELETE FROM recent_detections WHERE session_id = %s AND id NOT IN "
+                        "(SELECT id FROM recent_detections WHERE session_id = %s "
                         " ORDER BY id DESC LIMIT %s)",
                         (session_id, session_id, _DETECTIONS_KEEP),
                     )
             else:
                 conn.execute(
-                    "INSERT INTO detections "
+                    "INSERT INTO recent_detections "
                     "(device_id, session_id, request_id, class_ko, confidence, "
                     " cx, cy, w, h, zone, dist_m, is_vehicle, is_animal, "
                     " mode, lat, lng, detected_at) "
@@ -740,8 +746,8 @@ def save_detections(
                 )
         if not _IS_POSTGRES:
             conn.execute(
-                "DELETE FROM detections WHERE session_id = ? AND id NOT IN "
-                "(SELECT id FROM detections WHERE session_id = ? "
+                "DELETE FROM recent_detections WHERE session_id = ? AND id NOT IN "
+                "(SELECT id FROM recent_detections WHERE session_id = ? "
                 " ORDER BY id DESC LIMIT ?)",
                 (session_id, session_id, _DETECTIONS_KEEP),
             )
@@ -757,7 +763,7 @@ def get_recent_detections(session_id: str, max_age_s: float = 3.0) -> list[dict]
                 cur.execute(
                     "SELECT class_ko, confidence, cx, cy, w, h, zone, dist_m, "
                     "       is_vehicle, is_animal, detected_at "
-                    "FROM detections WHERE session_id = %s AND detected_at > %s "
+                    "FROM recent_detections WHERE session_id = %s AND detected_at > %s "
                     "ORDER BY id DESC LIMIT 100",
                     (session_id, cutoff),
                 )
@@ -767,7 +773,7 @@ def get_recent_detections(session_id: str, max_age_s: float = 3.0) -> list[dict]
             rows = conn.execute(
                 "SELECT class_ko, confidence, cx, cy, w, h, zone, dist_m, "
                 "       is_vehicle, is_animal, detected_at "
-                "FROM detections WHERE session_id = ? AND detected_at > ? "
+                "FROM recent_detections WHERE session_id = ? AND detected_at > ? "
                 "ORDER BY id DESC LIMIT 100",
                 (session_id, cutoff),
             ).fetchall()
