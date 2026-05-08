@@ -549,7 +549,7 @@ async def save_gps_ping(
     db.save_gps(session_id, lat, lng)
     gps = db.get_last_gps(session_id)
     track = db.get_gps_track(session_id, limit=100)
-    events.publish(session_id, {
+    await events.publish(session_id, {
         "session_id": session_id,
         "objects": [],
         "gps": gps,
@@ -570,7 +570,7 @@ async def save_gps_route(body: dict = Body(...)):
     routes = db.get_gps_routes(session_id, limit=1)
     meta = routes[0] if routes else {}
     # 경로 저장 완료 → 대시보드에 live track 초기화 신호 전송
-    events.publish(session_id, {
+    await events.publish(session_id, {
         "session_id": session_id,
         "objects": [],
         "gps": None,

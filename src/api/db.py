@@ -69,18 +69,6 @@ def init_db():
 def _init_sqlite():
     with _conn() as conn:
         conn.executescript("""
-            CREATE TABLE IF NOT EXISTS gps_routes (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                route_id    TEXT NOT NULL UNIQUE,
-                session_id  TEXT NOT NULL,
-                name        TEXT,
-                started_at  TEXT NOT NULL,
-                ended_at    TEXT NOT NULL,
-                point_count INTEGER NOT NULL DEFAULT 0,
-                points_json TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_gps_routes_session
-                ON gps_routes (session_id, id DESC);
             CREATE TABLE IF NOT EXISTS detection_events (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 event_id     TEXT NOT NULL UNIQUE,
