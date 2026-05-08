@@ -1,218 +1,201 @@
-# VoiceGuide 아키텍처 & 성능 시각화
+# VoiceGuide 아키텍처 다이어그램
 
-이 문서는 Mermaid 다이어그램을 포함하고 있습니다. 
-GitHub, VS Code Preview, 또는 Mermaid 렌더러에서 보면 자동으로 그림이 표시됩니다.
+현재 코드는 온디바이스 추론을 우선합니다. Android 앱이 CameraX 프레임에서 TFLite YOLO를 실행하고, 문장 생성과 TTS를 즉시 처리합니다. 서버는 이미 탐지된 JSON을 받아 tracker, DB, 대시보드, 기록 조회를 담당합니다.
 
 ---
 
-## 1️⃣ 전체 시스템 아키텍처
+## 1. 전체 시스템 구조
 
 ```mermaid
 graph TB
-    subgraph Android["🤖 Android 디바이스 (온디바이스)"]
-        Camera["📷 CameraX<br/>30fps 프레임 캡처"]
-        TFLite["⚙️ TFLite 추론<br/>YOLO26n_float32<br/>29ms/frame"]
-        Depth["🔍 Depth Module<br/>(3-4프레임당 1회)<br/>거리 추정"]
-        NLG_A["🗣️ NLG 문장생성<br/>policy.json 기반"]
-        TTS["🔊 TTS<br/>한국어 음성"]
-        UI["📺 UI 표시<br/>tvStatus 갱신"]
-        JSON_Send["📤 JSON 전송<br/>(선택)"]
+    subgraph Android["Android 앱 - Kotlin / CameraX"]
+        Camera["CameraX<br/>ImageAnalysis 스트림<br/>필요 시 ImageCapture"]
+        Yolo["TfliteYoloDetector<br/>yolo11n_320.tflite 기본<br/>yolo26n_float32.tflite fallback<br/>GPU delegate 또는 XNNPACK"]
+        Stabilize["프레임 안정화<br/>NMS + 중복 제거<br/>3프레임 vote<br/>MvpPipeline IoU/EMA"]
+        PolicyA["VoicePolicy<br/>policy_default.json<br/>서버 /api/policy 동기화"]
+        SentenceA["SentenceBuilder<br/>장애물 / 찾기 / 질문 / 들고있는것"]
+        Output["TTS + 진동 + UI<br/>tvStatus / tvDetected<br/>BoundingBoxOverlay"]
+        Upload["백그라운드 JSON 업로드<br/>POST /detect<br/>GPS heartbeat /gps"]
     end
-    
-    subgraph Server["☁️ 서버 (GCP Cloud Run)"]
-        API["🔗 FastAPI<br/>JSON 라우터"]
-        NLG_S["🗣️ NLG 재구성<br/>server policy.json"]
-        DB_Save["💾 DB 저장<br/>detection_events<br/>detections<br/>recent_detections"]
-        Status["📍 Status 배포<br/>GET /status/{device_id}"]
-    end
-    
-    subgraph External["🌐 외부 시스템"]
-        Dashboard["📊 대시보드<br/>팀 위치 추적"]
-        DB["🗂️ PostgreSQL<br/>(Supabase)<br/>또는 SQLite"]
-    end
-    
-    Camera --> TFLite
-    TFLite --> Depth
-    Depth --> NLG_A
-    NLG_A --> TTS
-    NLG_A --> UI
-    UI --> JSON_Send
-    JSON_Send --> API
-    
-    API --> NLG_S
-    NLG_S --> DB_Save
-    DB_Save --> DB
-    DB_Save --> Status
-    DB --> Dashboard
-    
-    TTS -.Response.-> UI
-    Status -.배포 결과.-> Android
 
-style Android fill:#e1f5ff
-style Server fill:#fff3e0
-style External fill:#f3e5f5
-style TFLite fill:#ffebee
-style NLG_A fill:#fffde7
-style TTS fill:#e0f2f1
+    subgraph Server["FastAPI 서버 - Cloud Run 또는 로컬"]
+        Health["GET /health<br/>json-router<br/>inference disabled"]
+        PolicyS["GET /api/policy<br/>ETag 정책 배포"]
+        Detect["POST /detect<br/>Android 객체 JSON 정규화"]
+        Legacy["POST /detect_json<br/>구형 recent_detections 호환"]
+        Tracker["SessionTracker<br/>EMA smoothing<br/>접근 변화 감지"]
+        NLG["src/nlg/sentence.py<br/>서버 측 한국어 문장"]
+        Writer["비동기 DB writer<br/>queue + batch flush"]
+        Realtime["GET /status/{session_id}<br/>GET /events/{session_id}<br/>SSE 대시보드"]
+        Team["GET /sessions<br/>GET /team-locations"]
+    end
+
+    subgraph Storage["저장소"]
+        DB["SQLite 로컬<br/>또는 PostgreSQL / Supabase"]
+        Tables["detection_events<br/>detections<br/>snapshots<br/>gps_history<br/>recent_detections"]
+        Dashboard["templates/dashboard.html<br/>Leaflet + SSE"]
+    end
+
+    Camera --> Yolo --> Stabilize --> SentenceA --> Output
+    PolicyS -.정책 동기화.-> PolicyA
+    PolicyA --> Stabilize
+    Stabilize --> Upload
+    Upload --> Detect
+    Upload --> Legacy
+    Upload --> Realtime
+    Detect --> Tracker --> NLG
+    Detect --> Writer
+    Legacy --> Tracker
+    Legacy --> Writer
+    Writer --> DB --> Tables
+    Realtime --> Dashboard
+    Team --> Dashboard
+    Health --> Server
+
+    style Android fill:#e8f5e9
+    style Server fill:#e3f2fd
+    style Storage fill:#fff8e1
+    style Output fill:#fce4ec
 ```
 
 ---
 
-## 2️⃣ 1회 탐지 사이클 (시간 흐름)
+## 2. Android 1프레임 처리 흐름
 
 ```mermaid
 sequenceDiagram
-    participant A as Android<br/>카메라
-    participant T as TFLite<br/>추론
-    participant D as Depth<br/>거리
-    participant N as NLG<br/>문장생성
-    participant P as TTS<br/>음성
-    participant UI as UI<br/>화면
-    participant S as 서버<br/>FastAPI
-    participant DB as DB<br/>저장
-    
-    rect rgb(200, 220, 255)
-    Note over A,UI: 온디바이스 처리 (30fps, ~150ms)
-    
-    A->>A: 프레임 캡처<br/>(30ms)
-    A->>T: 이미지 전달
-    T->>T: YOLO 추론<br/>(29ms)
-    
-    alt 3-4프레임당 1회
-        A->>D: Depth 실행<br/>(~70ms)
-        D->>D: 거리 추정
-    else 나머지 프레임
-        D->>D: 스킵
+    participant C as CameraX
+    participant T as TFLite
+    participant M as MvpPipeline
+    participant S as SentenceBuilder
+    participant U as UI/TTS/진동
+    participant A as FastAPI
+    participant D as DB writer
+    participant V as Dashboard/SSE
+
+    C->>T: ImageProxy 또는 JPEG 파일
+    T->>T: 전처리 + YOLO 추론 + postprocess
+    T-->>M: Detection 목록
+    M->>M: voteOnly, removeDuplicates, IoU tracking, EMA, risk_score
+    M-->>S: 안정화된 상위 객체
+    S-->>U: 로컬 안내 문장
+    U->>U: tvStatus 갱신, TTS, 진동 패턴
+
+    par 비차단 서버 동기화
+        M->>A: POST /detect JSON
+        A->>A: 객체 정규화, bbox 기반 거리 보정, alert_mode 계산
+        A->>D: detection_events/detections 비동기 저장 enqueue
+        A->>V: status 이벤트 publish
+        A-->>M: process_ms/perf 포함 응답
+    and GPS heartbeat
+        U->>A: POST /gps
+        A->>V: 위치/경로 이벤트 publish
     end
-    
-    T->>N: 탐지 결과
-    N->>N: 문장 생성<br/>(5ms)
-    N->>P: 문장 전달
-    N->>UI: 텍스트 전달
-    P->>P: TTS 렌더링<br/>(~100ms)
-    UI->>UI: 화면 갱신<br/>(10ms)
-    
-    end
-    
-    rect rgb(255, 240, 200)
-    Note over S,DB: 서버 연동 (선택) - ~300ms 지연
-    
-    A->>S: JSON 전송<br/>(/detect_json)
-    Note over A,S: 네트워크 지연<br/>(150-200ms)
-    S->>S: JSON 수신<br/>(20ms)
-    S->>N: 서버 NLG<br/>재구성
-    N->>S: 문장 응답
-    S->>DB: DB 저장<br/>(50ms)
-    S->>A: 응답 반환<br/>200 OK
-    Note over S,A: 네트워크 지연<br/>(100-150ms)
-    A->>UI: 결과 표시
-    
-    end
-    
-    Note over A,DB: 전체 왕복: ~300ms = 약 3.3fps<br/>실제: 6-7fps (비동기 + 버퍼링)
 ```
+
+핵심 포인트:
+
+- 서버 응답을 기다린 뒤 말하지 않습니다. 사용자는 Android 로컬 `SentenceBuilder` 결과를 즉시 듣습니다.
+- 서버는 이미지나 모델 추론을 수행하지 않습니다. `/health`도 `inference: disabled`를 반환합니다.
+- `/detect`가 현재 Android 업로드 주 경로이고, `/detect_json`은 구형 포맷 및 테스트 호환용으로 남아 있습니다.
 
 ---
 
-## 3️⃣ 4가지 사용 모드 흐름도
+## 3. 음성 명령과 모드
 
 ```mermaid
 graph TD
-    Start["🎙️ 사용자 음성 명령<br/>또는 자동 감지"]
-    
-    Start --> Mode{탐지 모드}
-    
-    Mode -->|"🚧 장애물 모드"| Obstacle["탐지 물체 분류<br/>위험도 계산<br/>거리/방향 확인"]
-    Obstacle --> ObsNLG["3개 물체<br/>우선순위 정렬<br/>문장 생성"]
-    ObsNLG --> ObsOut["12시 방향 1.5m<br/>앞에 의자가 있어요.<br/>조심해서 이동하세요."]
-    
-    Mode -->|"🔍 찾기 모드"| Find["'가방 찾아줘'<br/>→ 음성 인식<br/>→ 해당 클래스 필터"]
-    Find --> FindNLG["탐지된 가방<br/>방향·거리 추출<br/>문장 생성"]
-    FindNLG --> FindOut["3시 방향 2미터에<br/>가방이 있어요."]
-    
-    Mode -->|"❓ 확인 모드"| Question["'이거 뭐야?'<br/>→ 정면 가장 가까운<br/>물체 분류"]
-    Question --> QuestNLG["단일 물체<br/>상세 설명<br/>문장 생성"]
-    QuestNLG --> QuestOut["당신 앞에는<br/>노트북 컴퓨터가 있어요."]
-    
-    Mode -->|"👋 들고있는것 모드"| Held["손 앞 30cm 범위<br/>물체 탐지"]
-    Held --> HeldNLG["근처 물체 확인<br/>문장 생성"]
-    HeldNLG --> HeldOut["당신이 손에<br/>휴대폰을 들고 있어요."]
-    
-    ObsOut --> Decision{"서버 연동<br/>활성화?"}
-    FindOut --> Decision
-    QuestOut --> Decision
-    HeldOut --> Decision
-    
-    Decision -->|"✅ Yes"| ServerSync["JSON 패킹<br/>/detect_json POST<br/>서버 검증 + DB 저장<br/>팀 위치 배포"]
-    Decision -->|"❌ No"| LocalOnly["온디바이스만<br/>처리 완료"]
-    
-    ServerSync --> End["🔊 TTS 음성<br/>📺 UI 텍스트"]
-    LocalOnly --> End
-    
-    style Obstacle fill:#ffebee
-    style Find fill:#e8f5e9
-    style Question fill:#fff3e0
-    style Held fill:#f3e5f5
-    style ServerSync fill:#e3f2fd
-    style End fill:#c8e6c9
+    Voice["STT 결과"] --> Classify["classifyKeyword()"]
+
+    Classify --> Obstacle["장애물<br/>즉시 캡처/분석"]
+    Classify --> Find["찾기<br/>target 추출<br/>예: 의자 찾아줘"]
+    Classify --> Question["질문/확인<br/>즉시 캡처<br/>예: 지금 뭐 있어?"]
+    Classify --> Held["들고있는것<br/>근거리/손 앞 물체 확인"]
+    Classify --> Traffic["신호등<br/>현재는 모드 진입 후 일반 분석 흐름"]
+    Classify --> Control["다시읽기 / 중지 / 재시작<br/>볼륨업 / 볼륨다운"]
+
+    Obstacle --> LocalNlg["SentenceBuilder.build()"]
+    Find --> LocalNlgFind["SentenceBuilder.buildFind()"]
+    Question --> LocalNlg
+    Held --> LocalNlgHeld["SentenceBuilder.buildHeld()"]
+
+    LocalNlg --> Speak["TTS/진동/UI"]
+    LocalNlgFind --> Speak
+    LocalNlgHeld --> Speak
+    Traffic --> Speak
+    Control --> Speak
+
+    Speak --> Upload["선택: /detect 업로드"]
+
+    style Speak fill:#fce4ec
+    style Upload fill:#e3f2fd
 ```
 
 ---
 
-## 4️⃣ 성능 메트릭스: 현재 vs 목표
+## 4. 서버 API 표면
 
 ```mermaid
 graph LR
-    subgraph perf["성능 메트릭스 (현재 vs 목표)"]
-        direction TB
-        
-        subgraph ondev["온디바이스 성능 ✅"]
-            yolo["YOLO 추론<br/>29ms ✅<br/>(목표: <30ms)"]
-            cap["카메라 캡처<br/>30fps ✅<br/>(목표: 30fps)"]
-            nlg["NLG 생성<br/>5ms ✅<br/>(목표: <10ms)"]
-            tts["TTS 렌더링<br/>100ms ✅<br/>(목표: <150ms)"]
-        end
-        
-        subgraph server["서버 성능 ⚠️"]
-            svr_fps["서버 FPS<br/>6-7fps ❌<br/>(목표: 10fps)"]
-            resp["응답 시간<br/>~300ms ⚠️<br/>(목표: <200ms)"]
-            latency["네트워크 지연<br/>150-200ms 🌐<br/>(제어 불가)"]
-        end
-        
-        subgraph qual["품질 지표 ⚠️"]
-            acc["탐지 정확도<br/>85-90% ⚠️<br/>(목표: >90%)"]
-            sync["TTS-UI 동기화<br/>70% ⚠️<br/>(목표: 100%)"]
-            flick["화면 깜빡임<br/>발생 중 ❌<br/>(목표: 0)"]
-        end
+    Client["Android / Dashboard / TestClient"] --> Policy["GET /api/policy"]
+    Client --> Detect["POST /detect"]
+    Client --> Legacy["POST /detect_json"]
+    Client --> Question["POST /question"]
+    Client --> GPS["POST /gps"]
+    Client --> Status["GET /status/{session_id}"]
+    Client --> Events["GET /events/{session_id}"]
+    Client --> Sessions["GET /sessions"]
+    Client --> Team["GET /team-locations"]
+    Client --> Dashboard["GET /dashboard"]
+    Client --> Health["GET /health"]
+
+    Detect --> Tracker["tracker.update"]
+    Detect --> Queue["db.enqueue_detection_event"]
+    Detect --> Snapshot["db.save_snapshot"]
+    GPS --> GpsDb["db.save_gps"]
+    Queue --> Tables["detection_events + detections"]
+    Legacy --> Recent["recent_detections"]
+    Status --> Snapshot
+    Status --> GpsDb
+    Events --> SSE["SSE publish/subscribe"]
+```
+
+현재 `feature/jaehyun`의 `routes.py`에는 `/history`, `/routes`, `/gps/route/save`, `/locations` 계열 엔드포인트가 구현되어 있지 않습니다. Android 장소 저장/조회는 현재 앱 내부 `SharedPreferences` 흐름입니다.
+
+---
+
+## 5. 성능/안정화 지점
+
+```mermaid
+graph TB
+    subgraph AndroidPerf["Android 성능 경로"]
+        Stream["INTERVAL_MS 50ms<br/>MAX_ON_DEVICE_IN_FLIGHT 1"]
+        ServerSlots["MAX_SERVER_IN_FLIGHT 4"]
+        MvpThrottle["MVP_UPDATE_INTERVAL_MS 750ms"]
+        UploadThrottle["SERVER_UPLOAD_INTERVAL_MS 250ms<br/>SERVER_FORCE_SEND_FRAMES 5"]
+        Model["TFLite GPU FP32<br/>fallback XNNPACK 4 threads"]
     end
-    
-    yolo --> nvid_margin["병목 분석:<br/>서버가 제약"]
-    cap --> nvid_margin
-    nlg --> nvid_margin
-    tts --> nvid_margin
-    
-    svr_fps --> improve["개선 필요:<br/>양자화<br/>배치 처리"]
-    resp --> improve
-    latency --> improve
-    
-    style ondev fill:#e8f5e9
-    style server fill:#fff3e0
-    style qual fill:#ffebee
-    style improve fill:#fff9c4
+
+    subgraph ServerPerf["서버 성능 경로"]
+        NoInfer["이미지 추론 없음"]
+        SaveEvery["DETECT_SAVE_EVERY_N_FRAMES 기본 5"]
+        SnapshotMin["SNAPSHOT_MIN_INTERVAL_S 기본 1.0"]
+        Queue["DETECTION_EVENT_QUEUE_MAX 512<br/>BATCH_SIZE 24<br/>FLUSH_INTERVAL 0.25s"]
+        Keep["session별 event 200개<br/>recent_detections 500개<br/>snapshot 20개"]
+    end
+
+    Stream --> Model --> MvpThrottle --> UploadThrottle --> ServerSlots
+    ServerSlots --> NoInfer --> SaveEvery --> Queue --> Keep
+    SaveEvery --> SnapshotMin
 ```
 
 ---
 
-## 📌 어디서 열어볼까?
+## 6. 현재 문서 기준
 
-### VS Code에서:
-1. 마크다운 미리보기 (⌘K ⌘V)
-2. 또는 [이 파일을 GitHub에 푸시](https://github.com)하면 자동 렌더링
-
-### 온라인 렌더러:
-- https://mermaid.live/
-- 코드를 복사해서 붙여넣으면 실시간 렌더링 가능
-
-### 더 자세히:
-- [CURRENT_STATUS_REPORT.md](../CURRENT_STATUS_REPORT.md) - 상세 분석
-- [SIMULATION_RESULTS.md](../SIMULATION_RESULTS.md) - 테스트 결과
+- Android 실제 구현: `android/app/src/main/java/com/voiceguide/`
+- 서버 실제 구현: `src/api/routes.py`, `src/api/db.py`, `src/api/tracker.py`
+- 문장 생성: Android `SentenceBuilder.kt`, 서버 `src/nlg/sentence.py`
+- 정책 SSOT: `src/config/policy.json`, Android fallback `assets/policy_default.json`
+- 상태 보고서: `CURRENT_STATUS_REPORT.md`
+- 시뮬레이션 스크립트: `test_simulation.py`
