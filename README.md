@@ -10,7 +10,7 @@
 
 ```
 카메라
-  → yolo26n_float32.tflite 온디바이스 추론 (Android 내에서 처리)
+  → yolo11n_320.tflite 온디바이스 추론 (Android 내에서 처리)
     → MvpPipeline (ByteTrack 트래킹 · EMA 평활화 · 위험도 계산)
       → 진동 즉시 출력  ← 오프라인에서도 동작
         → 서버로 탐지 결과 JSON 전송 (POST /detect_json)
@@ -40,7 +40,7 @@
 Android (Kotlin)
  └─ CameraX
      └─ TfliteYoloDetector.kt
-         └─ yolo26n_float32.tflite (TFLite GPU / XNNPACK)
+         └─ yolo11n_320.tflite (TFLite GPU / XNNPACK, fallback: yolo26n_float32.tflite)
              └─ MvpPipeline.kt (ByteTrack-lite · EMA · riskScore)
                  ├─ 진동 즉시 출력
                  └─ POST /detect_json (탐지 결과 JSON)
@@ -66,7 +66,7 @@ YOLO 추론은 Android 온디바이스에서만 실행됩니다.
 | 영역 | 기술 |
 |---|---|
 | Android | Kotlin, CameraX, TensorFlow Lite |
-| 온디바이스 모델 | yolo26n_float32.tflite (FP32, GPU delegate) |
+| 온디바이스 모델 | yolo11n_320.tflite (기본), yolo26n_float32.tflite (fallback) |
 | TTS / STT | Android 내장 |
 | 백엔드 | Python 3.11+, FastAPI |
 | DB | SQLite (로컬) / PostgreSQL Supabase (운영) |
@@ -137,7 +137,8 @@ GET /dashboard
 VoiceGuide/
 ├── android/app/src/main/
 │   ├── assets/
-│   │   ├── yolo26n_float32.tflite   # 온디바이스 추론 모델
+│   │   ├── yolo11n_320.tflite       # 온디바이스 추론 모델 (기본)
+│   │   ├── yolo26n_float32.tflite   # fallback 모델
 │   │   └── policy_default.json      # 기본 정책 (서버 policy 없을 때 사용)
 │   └── java/com/voiceguide/
 │       ├── MainActivity.kt          # 카메라·TTS·STT·서버 연동
