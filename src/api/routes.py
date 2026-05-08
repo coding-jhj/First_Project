@@ -300,7 +300,7 @@ async def detect(
 
     all_changes = motion_changes + space_changes
     db_enqueued = False
-    if should_persist:
+    if should_persist and objects:
         db_enqueued = db.enqueue_detection_event(
             event_id=event_id,
             request_id=request_id,
