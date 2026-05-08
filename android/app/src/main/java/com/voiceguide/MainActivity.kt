@@ -50,7 +50,7 @@ import kotlin.math.abs
  *
  * 앱의 모든 기능을 총괄합니다:
  *   - CameraX로 1초마다 이미지 캡처
- *   - ONNX 온디바이스 추론 (서버 없이 폰 단독 동작)
+ *   - TFLite 온디바이스 추론 (서버 없이 폰 단독 동작)
  *   - 서버 연동 시 온디바이스 탐지 결과 JSON 동기화
  *   - STT로 음성 명령 인식 (11가지 모드)
  *   - TTS로 한국어 음성 안내
@@ -60,7 +60,7 @@ import kotlin.math.abs
  *
  * 전체 흐름:
  *   onCreate → TTS 초기화 → "시작할까요?" 음성 → "네" → 카메라 권한 요청
- *   → 카메라 시작 → 1초마다 캡처 → ONNX 온디바이스 추론 → TTS 안내
+ *   → 카메라 시작 → 1초마다 캡처 → TFLite 온디바이스 추론 → TTS 안내
  */
 class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEventListener {
 
@@ -300,7 +300,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         updateCurrentLocation(loc, "listener:${loc.provider}")
     }
 
-    // ── ONNX 온디바이스 추론 ───────────────────────────────────────────
+    // ── TFLite 온디바이스 추론 ─────────────────────────────────────────
     private var tfliteDetector: TfliteYoloDetector? = null
     private val mvpPipeline = MvpPipeline()
 
@@ -315,7 +315,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             "https://voiceguide-1063164560758.asia-northeast3.run.app"
         private const val PREF_LOCATIONS   = "saved_locations"  // 저장 장소 JSON 배열 키
         private const val INTERVAL_MS      = 50L           // 캡처 간격: 50ms — isSending 게이트가 실제 fps 제어
-        private const val MAX_ON_DEVICE_IN_FLIGHT = 1      // ONNX Runtime 안정성 우선: 단일 in-flight
+        private const val MAX_ON_DEVICE_IN_FLIGHT = 1      // TFLite 안정성 우선: 단일 in-flight
         private const val MAX_SERVER_IN_FLIGHT    = 4      // 서버 동시 요청 최대 수
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
         private const val FAIL_WARN_COUNT  = 3             // 연속 3회 실패 시 경고
@@ -829,7 +829,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         return "unknown"
     }
 
-    // ── ONNX 온디바이스 추론 초기화 ────────────────────────────────────
+    // ── TFLite 온디바이스 추론 초기화 ──────────────────────────────────
 
     private fun tryInitTfliteDetector() {
         // 백그라운드 스레드에서 초기화 (모델 로딩이 느려서 UI 스레드에서 하면 앱 멈춤)
