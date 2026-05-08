@@ -69,6 +69,18 @@ def init_db():
 def _init_sqlite():
     with _conn() as conn:
         conn.executescript("""
+            CREATE TABLE IF NOT EXISTS gps_routes (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                route_id    TEXT NOT NULL UNIQUE,
+                session_id  TEXT NOT NULL,
+                name        TEXT,
+                started_at  TEXT NOT NULL,
+                ended_at    TEXT NOT NULL,
+                point_count INTEGER NOT NULL DEFAULT 0,
+                points_json TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_gps_routes_session
+                ON gps_routes (session_id, id DESC);
             CREATE TABLE IF NOT EXISTS detection_events (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 event_id     TEXT NOT NULL UNIQUE,
@@ -126,6 +138,18 @@ def _init_sqlite():
                 lng        REAL NOT NULL,
                 timestamp  TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS gps_routes (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                route_id    TEXT NOT NULL UNIQUE,
+                session_id  TEXT NOT NULL,
+                name        TEXT,
+                started_at  TEXT NOT NULL,
+                ended_at    TEXT NOT NULL,
+                point_count INTEGER NOT NULL DEFAULT 0,
+                points_json TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_gps_routes_session
+                ON gps_routes (session_id, id DESC);
             CREATE TABLE IF NOT EXISTS recent_detections (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 device_id   TEXT    NOT NULL,
@@ -227,6 +251,22 @@ def _init_postgres():
                     timestamp  TEXT NOT NULL
                 )
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS gps_routes (
+                    id          BIGSERIAL PRIMARY KEY,
+                    route_id    TEXT NOT NULL UNIQUE,
+                    session_id  TEXT NOT NULL,
+                    name        TEXT,
+                    started_at  TEXT NOT NULL,
+                    ended_at    TEXT NOT NULL,
+                    point_count INTEGER NOT NULL DEFAULT 0,
+                    points_json JSONB NOT NULL
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_gps_routes_session "
+                "ON gps_routes (session_id, id DESC)"
+            )
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS recent_detections (
                     id          BIGSERIAL PRIMARY KEY,
@@ -786,6 +826,179 @@ def get_recent_detections(session_id: str, max_age_s: float = 3.0) -> list[dict]
             keys = ["class_ko","confidence","cx","cy","w","h",
                     "zone","dist_m","is_vehicle","is_animal","detected_at"]
             return [dict(zip(keys, r)) for r in rows]
+
+
+def get_history_24h(session_id: str, limit: int = 50) -> dict:
+    """최근 24시간 탐지 이벤트 내역과 위험도별 요약 통계를 반환한다.
+
+    [왜 이 함수가 필요한가]
+    대시보드 하단 패널에서 "오늘 이 기기가 어떤 물체를 얼마나 탐지했는지"를
+    보여주기 위해 추가. 앱의 실시간 탐지 흐름(/detect)과 완전히 별개로 동작하며
+    브라우저(대시보드)가 30초마다 한 번 호출한다.
+
+    [위험도 분류 기준]
+    risk_score 0.7 이상 → critical(위험)
+    risk_score 0.4 이상 → beep(주의)
+    그 미만             → safe(안전)
+    이벤트 위험도 = 해당 이벤트 내 물체들 중 가장 높은 위험도
+
+    반환 형식:
+        {
+            "events":  [{"event_id", "timestamp", "objects"(최대3개), "risk"}, ...],
+            "summary": {"total", "critical", "beep", "safe"}
+        }
+    """
+    def _risk_level(risk_score: float) -> str:
+        if risk_score >= 0.7:
+            return "critical"
+        if risk_score >= 0.4:
+            return "beep"
+        return "safe"
+
+    def _event_risk(objects: list) -> str:
+        # 이벤트에 포함된 물체가 없으면 안전으로 처리
+        if not objects:
+            return "safe"
+        levels = [_risk_level(float(o.get("risk_score", 0))) for o in objects]
+        if "critical" in levels:
+            return "critical"
+        if "beep" in levels:
+            return "beep"
+        return "safe"
+
+    events = []
+    with _conn() as conn:
+        if _IS_POSTGRES:
+            with conn.cursor() as cur:
+                # PostgreSQL: INTERVAL 문법으로 24시간 전 시점 계산
+                cur.execute(
+                    "SELECT event_id, timestamp, objects_json "
+                    "FROM detection_events "
+                    "WHERE session_id = %s "
+                    "  AND timestamp >= NOW() - INTERVAL '24 hours' "
+                    "ORDER BY id DESC LIMIT %s",
+                    (session_id, limit)
+                )
+                rows = cur.fetchall()
+            for row in rows:
+                # psycopg3 + dict_row: JSONB 컬럼은 이미 Python list로 파싱됨
+                objs = row["objects_json"] if isinstance(row["objects_json"], list) \
+                       else json.loads(row["objects_json"] or "[]")
+                events.append({
+                    "event_id":  row["event_id"],
+                    "timestamp": str(row["timestamp"]),
+                    "objects":   objs[:3],       # 대시보드 표시용 상위 3개만
+                    "risk":      _event_risk(objs),
+                })
+        else:
+            # SQLite: Python으로 24시간 전 시점을 계산해 ISO 문자열 비교
+            from datetime import timedelta
+            cutoff = (datetime.now() - timedelta(hours=24)).isoformat()
+            rows = conn.execute(
+                "SELECT event_id, timestamp, objects_json "
+                "FROM detection_events "
+                "WHERE session_id = ? AND timestamp >= ? "
+                "ORDER BY id DESC LIMIT ?",
+                (session_id, cutoff, limit)
+            ).fetchall()
+            for row in rows:
+                objs = json.loads(row[2] or "[]")
+                events.append({
+                    "event_id":  row[0],
+                    "timestamp": row[1],
+                    "objects":   objs[:3],
+                    "risk":      _event_risk(objs),
+                })
+
+    # 위험도별 건수 집계
+    summary = {"total": len(events), "critical": 0, "beep": 0, "safe": 0}
+    for e in events:
+        summary[e["risk"]] += 1
+
+    return {"events": events, "summary": summary}
+
+
+def save_gps_route(session_id: str, name: str | None = None) -> str | None:
+    """gps_history의 현재 좌표를 하나의 완성 경로로 저장하고 gps_history를 초기화.
+    저장된 좌표가 없으면 None 반환, 그 외에는 route_id 반환.
+    """
+    import uuid as _uuid
+    points = get_gps_track(session_id, limit=500)
+    if not points:
+        return None
+
+    route_id = _uuid.uuid4().hex
+    started_at = points[0]["timestamp"]
+    ended_at   = points[-1]["timestamp"]
+    points_json = json.dumps(points, ensure_ascii=False)
+
+    with _conn() as conn:
+        if _IS_POSTGRES:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO gps_routes "
+                    "(route_id, session_id, name, started_at, ended_at, point_count, points_json) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)",
+                    (route_id, session_id, name, started_at, ended_at, len(points), points_json),
+                )
+                cur.execute(
+                    "DELETE FROM gps_history WHERE session_id = %s", (session_id,)
+                )
+        else:
+            conn.execute(
+                "INSERT OR IGNORE INTO gps_routes "
+                "(route_id, session_id, name, started_at, ended_at, point_count, points_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (route_id, session_id, name, started_at, ended_at, len(points), points_json),
+            )
+            conn.execute(
+                "DELETE FROM gps_history WHERE session_id = ?", (session_id,)
+            )
+    return route_id
+
+
+def get_gps_routes(session_id: str, limit: int = 20) -> list[dict]:
+    """세션의 저장된 경로 목록 반환 (메타데이터만, 좌표 제외)."""
+    with _conn() as conn:
+        if _IS_POSTGRES:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT route_id, name, started_at, ended_at, point_count "
+                    "FROM gps_routes WHERE session_id = %s ORDER BY id DESC LIMIT %s",
+                    (session_id, limit),
+                )
+                rows = cur.fetchall()
+            return [{"route_id": r["route_id"], "name": r["name"],
+                     "started_at": str(r["started_at"]), "ended_at": str(r["ended_at"]),
+                     "point_count": r["point_count"]} for r in rows]
+        else:
+            rows = conn.execute(
+                "SELECT route_id, name, started_at, ended_at, point_count "
+                "FROM gps_routes WHERE session_id = ? ORDER BY id DESC LIMIT ?",
+                (session_id, limit),
+            ).fetchall()
+            return [{"route_id": r[0], "name": r[1], "started_at": r[2],
+                     "ended_at": r[3], "point_count": r[4]} for r in rows]
+
+
+def get_gps_route_points(route_id: str) -> list[dict]:
+    """특정 경로의 좌표 목록 반환."""
+    with _conn() as conn:
+        if _IS_POSTGRES:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT points_json FROM gps_routes WHERE route_id = %s", (route_id,)
+                )
+                row = cur.fetchone()
+            if not row:
+                return []
+            pts = row["points_json"]
+            return pts if isinstance(pts, list) else json.loads(pts)
+        else:
+            row = conn.execute(
+                "SELECT points_json FROM gps_routes WHERE route_id = ?", (route_id,)
+            ).fetchone()
+            return json.loads(row[0]) if row else []
 
 
 def get_gps_track(session_id: str, limit: int = 100) -> list[dict]:

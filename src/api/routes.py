@@ -544,9 +544,58 @@ async def save_gps_ping(
     lat: float = Form(0.0), lng: float = Form(0.0), request_id: str = Form("")
 ):
     session_id = _normalize_session_id(wifi_ssid, device_id)
-    if lat == 0.0 and lng == 0.0: return {"saved": False, "session_id": session_id, "reason": "empty_location"}
+    if lat == 0.0 and lng == 0.0:
+        return {"saved": False, "session_id": session_id, "reason": "empty_location"}
     db.save_gps(session_id, lat, lng)
+    gps = db.get_last_gps(session_id)
+    track = db.get_gps_track(session_id, limit=100)
+    events.publish(session_id, {
+        "session_id": session_id,
+        "objects": [],
+        "gps": gps,
+        "track": track,
+    })
     return {"saved": True, "session_id": session_id, "lat": lat, "lng": lng}
+
+
+@router.post("/gps/route/save", dependencies=[Depends(_verify_api_key)])
+async def save_gps_route(body: dict = Body(...)):
+    device_id = str(body.get("device_id", ""))
+    wifi_ssid = str(body.get("wifi_ssid", ""))
+    name = body.get("name")
+    session_id = _normalize_session_id(wifi_ssid, device_id)
+    route_id = db.save_gps_route(session_id, name=name)
+    if not route_id:
+        return {"saved": False, "reason": "no_gps_data"}
+    routes = db.get_gps_routes(session_id, limit=1)
+    meta = routes[0] if routes else {}
+    # 경로 저장 완료 → 대시보드에 live track 초기화 신호 전송
+    events.publish(session_id, {
+        "session_id": session_id,
+        "objects": [],
+        "gps": None,
+        "track": [],
+        "route_saved": True,
+    })
+    return {"saved": True, "route_id": route_id,
+            "point_count": meta.get("point_count", 0),
+            "started_at": meta.get("started_at"), "ended_at": meta.get("ended_at")}
+
+
+@router.get("/routes/{session_id}", dependencies=[Depends(_verify_api_key)])
+async def list_gps_routes(session_id: str):
+    req_session_id = _normalize_session_id(session_id)
+    routes = db.get_gps_routes(req_session_id, limit=20)
+    return {"session_id": req_session_id, "routes": routes}
+
+
+@router.get("/routes/{session_id}/{route_id}", dependencies=[Depends(_verify_api_key)])
+async def get_gps_route(session_id: str, route_id: str):
+    req_session_id = _normalize_session_id(session_id)
+    routes = db.get_gps_routes(req_session_id, limit=20)
+    meta = next((r for r in routes if r["route_id"] == route_id), None)
+    points = db.get_gps_route_points(route_id)
+    return {"route_id": route_id, "meta": meta, "points": points}
 
 @router.get("/status/{session_id}", dependencies=[Depends(_verify_api_key)])
 async def get_session_status(session_id: str):

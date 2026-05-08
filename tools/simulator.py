@@ -13,11 +13,12 @@
 import time
 import sys
 import requests
+from datetime import datetime
 
 # ── 설정 (여기만 수정하면 됩니다) ──────────────────────────────────────────────
 
 SERVER_URL = "https://voiceguide-1063164560758.asia-northeast3.run.app"
-SESSION_ID = "demo-device-01"   # 대시보드 세션 ID 입력창에 이 값 사용
+SESSION_ID = "demo-device-02"   # 대시보드 세션 ID 입력창에 이 값 사용
 API_KEY    = ""                  # .env의 API_KEY 값 (없으면 빈 문자열)
 INTERVAL   = 2.0                 # 좌표 전송 간격 (초)
 LOOP       = False               # True 이면 경로를 반복 순환
@@ -26,20 +27,28 @@ LOOP       = False               # True 이면 경로를 반복 순환
 # 실제 건물·경로에 맞게 좌표를 수정하세요.
 # 구글 지도에서 원하는 지점 우클릭 → 좌표 복사
 ROUTE = [
-    (37.496880, 127.028490, "출발: 건물 입구"),
-    (37.496920, 127.028510, "1층 복도 시작"),
-    (37.496960, 127.028530, "복도 중간"),
-    (37.497000, 127.028550, "복도 끝"),
-    (37.497040, 127.028560, "계단 앞"),
-    (37.497080, 127.028570, "계단 오르는 중"),
-    (37.497120, 127.028580, "2층 도착"),
-    (37.497160, 127.028590, "2층 복도"),
-    (37.497200, 127.028600, "목적지 도착"),
+    (37.653404, 127.043607, "출발: 아파트 입구"),
+    (37.653331, 127.044015, "아파트내1"),
+    (37.653539, 127.044069, "아파트내2"),
+    (37.653692, 127.043404, "아파트밖 골목길"),
+    (37.653371, 127.043303, "아파트밖 골목길2"),
+    (37.653091, 127.043114, "골목길1"),
+    (37.652998, 127.043355, "골목길2"),
+    (37.652929, 127.043605, "골목길3"),
+    (37.652859, 127.043738, "골목길4"),
+    (37.652768, 127.043840, "골목길5"),
+    (37.652573, 127.043941, "골목길6"),
+    (37.652442, 127.043966, "큰길"),
+    (37.652703, 127.045057, "큰길2"),
+    (37.652849, 127.045720, "상가 앞"),
+    (37.653078, 127.046838, "창동역 도착"),
 ]
 
 # ───────────────────────────────────────────────────────────────────────────────
 
 HEADERS = {"X-API-Key": API_KEY} if API_KEY else {}
+
+_collected: list[dict] = []  # 전송 성공한 좌표 누적 (경로 저장용)
 
 
 def send_gps(lat: float, lng: float, label: str) -> bool:
@@ -50,15 +59,41 @@ def send_gps(lat: float, lng: float, label: str) -> bool:
             headers=HEADERS,
             timeout=5,
         )
-        status = "✅" if resp.status_code == 200 else f"❌ {resp.status_code}"
+        ok = resp.status_code == 200
+        status = "✅" if ok else f"❌ {resp.status_code}"
         print(f"  {status}  {label}  ({lat:.6f}, {lng:.6f})")
-        return resp.status_code == 200
+        if ok:
+            _collected.append({"lat": lat, "lng": lng})
+        return ok
     except requests.exceptions.ConnectionError:
         print(f"  ❌ 서버 연결 실패 — {SERVER_URL} 확인")
         return False
     except Exception as e:
         print(f"  ❌ 오류: {e}")
         return False
+
+
+def save_route():
+    if not _collected:
+        return
+    name = f"데모 {datetime.now():%m/%d %H:%M}"
+    try:
+        resp = requests.post(
+            f"{SERVER_URL}/gps/route/save",
+            json={"device_id": SESSION_ID, "name": name},
+            headers=HEADERS,
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("saved"):
+                print(f"\n경로 저장 완료 — '{name}' ({data.get('point_count', 0)}개 포인트)")
+            else:
+                print(f"\n경로 저장 건너뜀: {data.get('reason', '')}")
+        else:
+            print(f"\n경로 저장 실패 ({resp.status_code})")
+    except Exception as e:
+        print(f"\n경로 저장 오류: {e}")
 
 
 def run():
@@ -77,6 +112,7 @@ def run():
         for lat, lng, label in ROUTE:
             if not send_gps(lat, lng, label):
                 print("\n서버 오류로 시뮬레이션을 중단합니다.")
+                save_route()
                 sys.exit(1)
             time.sleep(INTERVAL)
 
@@ -92,3 +128,5 @@ if __name__ == "__main__":
         run()
     except KeyboardInterrupt:
         print("\n\n사용자가 중단했습니다.")
+    finally:
+        save_route()

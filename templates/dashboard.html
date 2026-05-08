@@ -326,6 +326,26 @@
     text-align: right;
   }
 
+  /* ── 저장된 경로 선택 (GPS 카드 내부) */
+  .route-divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 8px 0;
+  }
+  .route-select {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 11px;
+    padding: 4px 6px;
+    outline: none;
+    cursor: pointer;
+    margin-top: 4px;
+  }
+  .route-select:focus { border-color: var(--accent); }
+
   /* ── 패널 상/하단 분할 ───────────────────────
      왼쪽 패널을 두 영역으로 나눈다.
      - panel-top  : 실시간 현황 (기존 내용)
@@ -579,6 +599,13 @@
         <span class="gps-label">경로 포인트</span>
         <span class="gps-value" id="trackCount">0</span>
       </div>
+      <div id="routePanel" style="display:none;">
+        <hr class="route-divider">
+        <div class="gps-label" style="margin-bottom:4px;">저장된 경로</div>
+        <select class="route-select" id="routeSelect" onchange="loadRouteTrack(this.value)">
+          <option value="">— 경로 선택 —</option>
+        </select>
+      </div>
     </div>
 
     <!-- 네비게이션 / 로드뷰 버튼 -->
@@ -600,7 +627,10 @@
         <div class="legend-dot" style="background:#6c63ff;"></div> 현재 위치
       </div>
       <div class="legend-item">
-        <div class="legend-dot" style="background:#48bfe3; opacity:0.6;"></div> 이동 경로
+        <div class="legend-dot" style="background:#48bfe3; opacity:0.6;"></div> 실시간 경로
+      </div>
+      <div class="legend-item">
+        <div class="legend-dot" style="background:#f4a261; opacity:0.8;"></div> 저장된 경로
       </div>
     </div>
 
@@ -641,6 +671,7 @@ const markerIcon = L.divIcon({
 
 let marker    = null;
 let trackLine = null;
+let routeLine = null;  // 저장된 경로 표시용 (주황색)
 let mapCentered = false;
 const teamMarkers = {};  // session_id → Leaflet marker
 
@@ -780,6 +811,11 @@ function renderObjects(objects) {
 }
 
 function renderGps(gps, track) {
+  // track이 비었으면 live polyline 제거 (경로 저장 완료 후 초기화)
+  if (!track || track.length === 0) {
+    if (trackLine) { map.removeLayer(trackLine); trackLine = null; }
+  }
+
   if (!gps || !Number.isFinite(Number(gps.lat)) || !Number.isFinite(Number(gps.lng))) {
     document.getElementById('gpsLat').textContent = '—';
     document.getElementById('gpsLng').textContent = '—';
@@ -895,6 +931,9 @@ function applyPushedStatus(data, sessionId) {
   renderObjects(data.objects);
   renderGps(data.gps, data.track);
 
+  // 경로 저장 완료 신호 수신 시 콤보박스 목록 새로고침
+  if (data.route_saved) loadRouteList();
+
   fetch(`${SERVER_BASE}/team-locations`)
     .then(r => r.json())
     .then(d => renderTeamLocations(d.locations ?? [], resolvedSession))
@@ -976,8 +1015,10 @@ function selectSession(s) {
   prevObjectCount = 0; mapCentered = false;
   if (marker)    { map.removeLayer(marker);    marker    = null; }
   if (trackLine) { map.removeLayer(trackLine); trackLine = null; }
+  if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
   connectEventStream();
-  refreshHistory(); // 세션 변경 시 24시간 내역도 즉시 새로고침
+  refreshHistory();
+  loadRouteList();
 }
 
 // ── 세션 ID 변경 시 리셋 ─────────────────────────────
@@ -986,8 +1027,57 @@ document.getElementById('sessionId').addEventListener('change', () => {
   mapCentered     = false;
   if (marker)    { map.removeLayer(marker);    marker    = null; }
   if (trackLine) { map.removeLayer(trackLine); trackLine = null; }
+  if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
   connectEventStream();
+  loadRouteList();
 });
+
+// ── 저장된 경로 목록 로딩 ────────────────────────────
+async function loadRouteList() {
+  const sessionId = document.getElementById('sessionId').value.trim() || '__default__';
+  const panel  = document.getElementById('routePanel');
+  const select = document.getElementById('routeSelect');
+  try {
+    const res  = await fetch(`${SERVER_BASE}/routes/${encodeURIComponent(sessionId)}`);
+    if (!res.ok) { panel.style.display = 'none'; return; }
+    const data = await res.json();
+    const routes = data.routes ?? [];
+    if (routes.length === 0) { panel.style.display = 'none'; return; }
+
+    select.innerHTML = '<option value="">— 경로 선택 —</option>' +
+      routes.map(r => {
+        const label = r.name || r.route_id.slice(0, 8);
+        const pts   = r.point_count ? ` (${r.point_count}pts)` : '';
+        return `<option value="${escapeHtml(r.route_id)}">${escapeHtml(label)}${pts}</option>`;
+      }).join('');
+    panel.style.display = 'block';
+  } catch (_) {
+    panel.style.display = 'none';
+  }
+}
+
+async function loadRouteTrack(routeId) {
+  if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+  if (!routeId) return;
+  const sessionId = document.getElementById('sessionId').value.trim() || '__default__';
+  try {
+    const res  = await fetch(`${SERVER_BASE}/routes/${encodeURIComponent(sessionId)}/${encodeURIComponent(routeId)}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const coords = (data.points ?? [])
+      .map(p => [Number(p.lat), Number(p.lng)])
+      .filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b));
+    if (coords.length < 2) return;
+    routeLine = L.polyline(coords, {
+      color: '#f4a261',
+      weight: 3,
+      opacity: 0.8,
+      dashArray: '6 4',
+      smoothFactor: 1,
+    }).addTo(map);
+    map.fitBounds(routeLine.getBounds(), { padding: [40, 40] });
+  } catch (_) {}
+}
 
 // ── 24시간 탐지 내역 ──────────────────────────────────
 // 폴링 주기: 30초 (앱의 /detect 호출 주기와 완전히 별개)
@@ -1081,6 +1171,7 @@ function refreshHistory() { fetchHistory(); }
 
 // ── 시작 ─────────────────────────────────────────────
 connectEventStream();
+loadRouteList();
 </script>
 </body>
 </html>
