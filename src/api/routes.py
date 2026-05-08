@@ -277,6 +277,7 @@ async def detect(
         db.save_gps(session_id, lat, lng)
 
     objects = _normalize_objects(payload.get("objects", []))
+    current_objects = list(objects)
     hazards = payload.get("hazards", [])
     if not isinstance(hazards, list):
         hazards = []
@@ -288,6 +289,7 @@ async def detect(
     _t_tracker = _time.monotonic()
     tracker = get_tracker(session_id)
     objects, motion_changes = tracker.update(objects)
+    nlg_objects = current_objects if mode in {"찾기", "질문", "들고있는것"} and current_objects else objects
     _tracker_ms = int((_time.monotonic() - _t_tracker) * 1000)
 
     should_persist = _should_persist_frame(session_id, objects, mode)
@@ -317,41 +319,41 @@ async def detect(
         )
 
     if mode == "들고있는것":
-        sentence = build_held_sentence(objects)
+        sentence = build_held_sentence(nlg_objects)
         response_payload = _with_perf({
             "mode": mode, "event_id": event_id, "session_id": session_id,
             "sentence": sentence, "alert_mode": "critical",
-            "objects": objects, "hazards": hazards, "changes": motion_changes,
+            "objects": nlg_objects, "hazards": hazards, "changes": motion_changes,
             "db_queued": db_enqueued,
-            "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
+            "depth_source": nlg_objects[0].get("depth_source", "bbox") if nlg_objects else "bbox",
         }, _t0, request_id, _detect_ms, _tracker_ms)
         _publish_dashboard_event(session_id, response_payload, db.get_last_gps(session_id), db.get_gps_track(session_id, limit=100))
         return response_payload
 
     if mode == "질문":
         tracked = tracker.get_current_state(max_age_s=3.0)
-        sentence = build_question_sentence(objects, hazards, scene, tracked, camera_orientation)
-        alert_mode = get_alert_mode(objects[0], is_hazard=bool(hazards)) if objects else ("critical" if hazards else "silent")
+        sentence = build_question_sentence(nlg_objects, hazards, scene, tracked, camera_orientation)
+        alert_mode = get_alert_mode(nlg_objects[0], is_hazard=bool(hazards)) if nlg_objects else ("critical" if hazards else "silent")
         response_payload = _with_perf({
             "mode": mode, "event_id": event_id, "session_id": session_id,
             "sentence": sentence, "alert_mode": alert_mode,
-            "objects": objects, "hazards": hazards, "changes": motion_changes,
+            "objects": nlg_objects, "hazards": hazards, "changes": motion_changes,
             "scene": scene, "tracked": tracked,
             "db_queued": db_enqueued,
-            "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
+            "depth_source": nlg_objects[0].get("depth_source", "bbox") if nlg_objects else "bbox",
         }, _t0, request_id, _detect_ms, _tracker_ms)
         _publish_dashboard_event(session_id, response_payload, db.get_last_gps(session_id), db.get_gps_track(session_id, limit=100))
         return response_payload
 
     if mode == "찾기":
         target = _extract_find_target(query_text)
-        sentence = build_find_sentence(target, objects, camera_orientation)
+        sentence = build_find_sentence(target, nlg_objects, camera_orientation)
         response_payload = _with_perf({
             "mode": mode, "event_id": event_id, "session_id": session_id,
             "sentence": sentence, "alert_mode": "critical",
-            "objects": objects, "hazards": hazards, "changes": all_changes,
+            "objects": nlg_objects, "hazards": hazards, "changes": all_changes,
             "db_queued": db_enqueued,
-            "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
+            "depth_source": nlg_objects[0].get("depth_source", "bbox") if nlg_objects else "bbox",
         }, _t0, request_id, _detect_ms, _tracker_ms)
         _publish_dashboard_event(session_id, response_payload, db.get_last_gps(session_id), db.get_gps_track(session_id, limit=100))
         return response_payload

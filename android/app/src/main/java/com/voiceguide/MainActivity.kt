@@ -802,6 +802,27 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
      * 매칭 없으면 "unknown" 반환 → handleSttResult에서 "다시 말씀해 주세요" 처리.
      */
     private fun classifyKeyword(text: String): String {
+        val normalized = text.replace("\\s+".toRegex(), "").lowercase(Locale.KOREAN)
+        if (listOf("이거뭐", "이게뭐", "이건뭐", "손에든", "손에뭐", "들고있는", "바로앞뭐")
+                .any { normalized.contains(it) }) {
+            return "들고있는것"
+        }
+        if (listOf("찾아", "어디있", "어딨", "어디야", "위치")
+                .any { normalized.contains(it) }) {
+            return "찾기"
+        }
+        if (listOf("지금뭐", "뭐가있", "주변", "상황", "앞에뭐")
+                .any { normalized.contains(it) }) {
+            return "질문"
+        }
+        if (listOf("멈춰", "그만", "중지", "스톱", "일시정지")
+                .any { normalized.contains(it) }) {
+            return "중지"
+        }
+        if (listOf("다시시작", "계속", "재시작")
+                .any { normalized.contains(it) }) {
+            return "재시작"
+        }
         for ((mode, keywords) in STT_KEYWORDS) {
             if (keywords.any { text.contains(it) }) return mode
         }
@@ -1392,8 +1413,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
                 val (voiceDetections, shouldBeep) = classify(voted)
 
-                // 문장은 항상 전체 voted 기준 (가까운 것부터 정렬, 최대 3개)
-                val sorted   = voted.sortedByDescending { it.w * it.h }
+                // 문장은 안정화된 위험도 기준으로 정렬한다. 같은 위험도에서는 큰 물체를 먼저 안내한다.
+                val sorted = voted.sortedWith(
+                    compareByDescending<Detection> { it.riskScore }
+                        .thenByDescending { it.w * it.h }
+                )
                 val sentence = when (effectiveMode) {
                     "찾기" -> SentenceBuilder.buildFind(findTarget, sorted)
                     "들고있는것" -> SentenceBuilder.buildHeld(sorted)
@@ -1424,7 +1448,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     }
                     else       -> {
                         Log.d("VG_DETECT", "→ 무음 (거리 멀거나 최근 안내 완료)")
-                        sendDetectionJsonToServer(voted, effectiveMode, requestId, imgW, imgH, preprocessMs, inferMs, dedupMs, totalMs, "주변에 장애물이 없어요.", "silent")
+                        sendDetectionJsonToServer(voted, effectiveMode, requestId, imgW, imgH, preprocessMs, inferMs, dedupMs, totalMs, sentence, "silent")
                     }
                 }
 
@@ -1522,6 +1546,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     .put("w", d.w.toDouble())
                     .put("h", d.h.toDouble())
                     .put("bbox_norm_xywh", JSONArray(listOf(x, y, w, h)))
+                    .put("distance_m", if (d.distanceM > 0f) d.distanceM.toDouble() else VoicePolicy.calcDistBboxM(d.w, d.h))
+                    .put("risk_score", d.riskScore.toDouble())
+                    .put("track_id", d.trackId)
+                    .put("vibration_pattern", d.vibrationPattern)
                     .put("depth_source", "on_device_bbox"))
             }
 
