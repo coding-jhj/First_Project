@@ -19,7 +19,7 @@ async def subscribe(session_id: str):
             _subscribers.pop(session_id, None)
 
 
-def publish(session_id: str, event: dict) -> None:
+async def publish(session_id: str, event: dict) -> None:
     payload = json.dumps(event, ensure_ascii=False)
     for queue in list(_subscribers.get(session_id, ())):
         if queue.full():

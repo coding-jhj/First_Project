@@ -18,7 +18,7 @@ import queue
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 
 # ── 모드 결정 ─────────────────────────────────────────────────────────────────
 DATABASE_URL = os.getenv("DATABASE_URL")  # Supabase: postgresql://user:pass@host/db
@@ -261,7 +261,7 @@ def get_snapshot(space_id: str, max_age_s: float | None = None) -> list[dict] | 
     cutoff = None
     if max_age_s is not None:
         from datetime import timedelta
-        cutoff = (datetime.now() - timedelta(seconds=max_age_s)).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=max_age_s)).isoformat()
     with _conn() as conn:
         if _IS_POSTGRES:
             with conn.cursor() as cur:
@@ -762,7 +762,7 @@ def save_detections(
 def get_recent_detections(session_id: str, max_age_s: float = 3.0) -> list[dict]:
     """최근 N초 이내 탐지 결과 반환 — 질문 응답 및 tracker 복원용."""
     from datetime import timedelta
-    cutoff = (datetime.now() - timedelta(seconds=max_age_s)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=max_age_s)).isoformat()
     with _conn() as conn:
         if _IS_POSTGRES:
             with conn.cursor() as cur:

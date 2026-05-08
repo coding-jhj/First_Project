@@ -39,11 +39,14 @@ val CLOCK_TO_DIRECTION = mapOf(
     "9시"  to "왼쪽",
     "10시" to "왼쪽 앞",
     "11시" to "왼쪽 앞",
-    "12시" to "바로",  // 정면 — 가장 위험 (Python templates.py CLOCK_TO_DIRECTION["12시"]와 동일)
+    "12시" to "바로 앞",  // 정면 — 가장 위험 (Python templates.py CLOCK_TO_DIRECTION["12시"]와 동일)
     "1시"  to "오른쪽 앞",
     "2시"  to "오른쪽 앞",
     "3시"  to "오른쪽",
-    "4시"  to "오른쪽"
+    "4시"  to "오른쪽",
+    "5시"  to "오른쪽 아래",
+    "6시"  to "바로 뒤",
+    "7시"  to "왼쪽 아래"
 )
 
 // 방향별 회피 행동 — 물체 반대 방향으로 피하도록 안내

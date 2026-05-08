@@ -34,10 +34,10 @@ class TfliteYoloDetector(context: Context) {
 
 
     init {
-        modelName = listOf("yolo11n_320.tflite", "yolo26n_float32.tflite").first { name ->
+        modelName = listOf("yolo11n_320.tflite", "yolo26n_float32.tflite").firstOrNull { name ->
             try { context.assets.open(name).close(); true }
             catch (_: Exception) { false }
-        }
+        } ?: throw IllegalStateException("TFLite 모델 파일이 없습니다. assets에 yolo26n_float32.tflite 또는 yolo11n_320.tflite가 필요합니다.")
         val modelBytes = context.assets.open(modelName).readBytes()
         modelBuffer = ByteBuffer.allocateDirect(modelBytes.size).order(ByteOrder.nativeOrder())
         modelBuffer.put(modelBytes)

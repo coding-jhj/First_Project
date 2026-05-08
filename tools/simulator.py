@@ -39,7 +39,7 @@ ROUTE = [
 
 # ───────────────────────────────────────────────────────────────────────────────
 
-HEADERS = {"X-Api-Key": API_KEY} if API_KEY else {}
+HEADERS = {"X-API-Key": API_KEY} if API_KEY else {}
 
 
 def send_gps(lat: float, lng: float, label: str) -> bool:

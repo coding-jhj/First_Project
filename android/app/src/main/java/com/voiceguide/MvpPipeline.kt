@@ -33,6 +33,7 @@ class MvpPipeline {
     private val tracks = mutableListOf<Track>()
     private var nextTrackId = 1
 
+    @Synchronized
     fun update(detections: List<Detection>): MvpFrame {
         tracks.forEach { it.missed += 1 }
 

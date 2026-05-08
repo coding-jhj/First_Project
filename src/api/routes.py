@@ -109,8 +109,8 @@ def _mark_persisted(session_id: str, objects: list[dict]) -> None:
     _last_snapshot[session_id] = (_object_signature(objects), _time.monotonic())
 
 
-def _publish_dashboard_event(session_id: str, payload: dict, gps: dict | None = None, track: list[dict] | None = None) -> None:
-    events.publish(session_id, {
+async def _publish_dashboard_event(session_id: str, payload: dict, gps: dict | None = None, track: list[dict] | None = None) -> None:
+    await events.publish(session_id, {
         "session_id": session_id,
         "objects": payload.get("objects", []),
         "gps": gps,
@@ -326,7 +326,7 @@ async def detect(
             "db_queued": db_enqueued,
             "depth_source": nlg_objects[0].get("depth_source", "bbox") if nlg_objects else "bbox",
         }, _t0, request_id, _detect_ms, _tracker_ms)
-        _publish_dashboard_event(session_id, response_payload, db.get_last_gps(session_id), db.get_gps_track(session_id, limit=100))
+        await _publish_dashboard_event(session_id, response_payload, db.get_last_gps(session_id), db.get_gps_track(session_id, limit=100))
         return response_payload
 
     if mode == "질문":
@@ -341,7 +341,7 @@ async def detect(
             "db_queued": db_enqueued,
             "depth_source": nlg_objects[0].get("depth_source", "bbox") if nlg_objects else "bbox",
         }, _t0, request_id, _detect_ms, _tracker_ms)
-        _publish_dashboard_event(session_id, response_payload, db.get_last_gps(session_id), db.get_gps_track(session_id, limit=100))
+        await _publish_dashboard_event(session_id, response_payload, db.get_last_gps(session_id), db.get_gps_track(session_id, limit=100))
         return response_payload
 
     if mode == "찾기":
@@ -354,7 +354,7 @@ async def detect(
             "db_queued": db_enqueued,
             "depth_source": nlg_objects[0].get("depth_source", "bbox") if nlg_objects else "bbox",
         }, _t0, request_id, _detect_ms, _tracker_ms)
-        _publish_dashboard_event(session_id, response_payload, db.get_last_gps(session_id), db.get_gps_track(session_id, limit=100))
+        await _publish_dashboard_event(session_id, response_payload, db.get_last_gps(session_id), db.get_gps_track(session_id, limit=100))
         return response_payload
 
     sentence = build_sentence(objects, all_changes, camera_orientation=camera_orientation)
@@ -378,7 +378,7 @@ async def detect(
         "db_queued": db_enqueued,
         "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
     }, _t0, request_id, _detect_ms, _tracker_ms)
-    _publish_dashboard_event(session_id, response_payload, db.get_last_gps(session_id), db.get_gps_track(session_id, limit=100))
+    await _publish_dashboard_event(session_id, response_payload, db.get_last_gps(session_id), db.get_gps_track(session_id, limit=100))
     return response_payload
 
 def _extract_find_target(text: str) -> str:
@@ -550,7 +550,7 @@ async def save_gps_ping(
 
 @router.get("/status/{session_id}", dependencies=[Depends(_verify_api_key)])
 async def get_session_status(session_id: str):
-    req_session_id = _normalize_session_id(session_id)
+    req_session_id = _normalize_session_id(device_id=session_id)
     gps = db.get_last_gps(req_session_id)
     tracker = get_tracker(req_session_id)
     current = tracker.get_current_state(max_age_s=5.0)
@@ -566,7 +566,7 @@ async def get_session_status(session_id: str):
 
 @router.get("/events/{session_id}", dependencies=[Depends(_verify_api_key)])
 async def stream_session_events(session_id: str):
-    req_session_id = _normalize_session_id(session_id)
+    req_session_id = _normalize_session_id(device_id=session_id)
 
     async def event_stream():
         initial = await get_session_status(req_session_id)
@@ -618,7 +618,7 @@ async def get_detection_history(session_id: str):
         summary      : 위험/주의/안전 건수 집계
         events       : 탐지 이벤트 목록 (최신순, 최대 50건)
     """
-    req_session_id = _normalize_session_id(session_id)
+    req_session_id = _normalize_session_id(device_id=session_id)
     # DB에서 24시간 내역 조회 (SQLite·PostgreSQL 공통 인터페이스)
     result = db.get_history_24h(req_session_id, limit=50)
     return {
