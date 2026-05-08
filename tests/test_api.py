@@ -94,7 +94,9 @@ def test_detect_json_persists_recent_detections():
     assert body["sentence"]
     assert body["objects"][0]["class_ko"] == "의자"
 
-    recent = db.get_recent_detections("test_detect_json_device", max_age_s=60)
+    from src.api.routes import _normalize_session_id
+    expected_session = _normalize_session_id(wifi_ssid="test_detect_json_wifi", device_id="test_detect_json_device")
+    recent = db.get_recent_detections(expected_session, max_age_s=60)
     assert recent
     assert recent[0]["class_ko"] == "의자"
 

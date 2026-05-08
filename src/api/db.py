@@ -706,45 +706,51 @@ def save_detections(
         return
     ts = datetime.now().isoformat()
     with _conn() as conn:
-        for d in detections:
-            if _IS_POSTGRES:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "INSERT INTO recent_detections "
-                        "(device_id, session_id, request_id, class_ko, confidence, "
-                        " cx, cy, w, h, zone, dist_m, is_vehicle, is_animal, "
-                        " mode, lat, lng, detected_at) "
-                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                        (device_id, session_id, request_id,
-                         d.get("class_ko",""), d.get("confidence", 0.0),
-                         d.get("cx", 0.0), d.get("cy", 0.0),
-                         d.get("w", 0.0),  d.get("h", 0.0),
-                         d.get("zone","12시"), d.get("dist_m", 0.0),
-                         d.get("is_vehicle", False), d.get("is_animal", False),
-                         mode, lat, lng, ts),
-                    )
-                    cur.execute(
-                        "DELETE FROM recent_detections WHERE session_id = %s AND id NOT IN "
-                        "(SELECT id FROM recent_detections WHERE session_id = %s "
-                        " ORDER BY id DESC LIMIT %s)",
-                        (session_id, session_id, _DETECTIONS_KEEP),
-                    )
-            else:
-                conn.execute(
+        if _IS_POSTGRES:
+            rows = [
+                (device_id, session_id, request_id,
+                 d.get("class_ko", ""), d.get("confidence", 0.0),
+                 d.get("cx", 0.0), d.get("cy", 0.0),
+                 d.get("w", 0.0),  d.get("h", 0.0),
+                 d.get("zone", "12시"), d.get("dist_m", 0.0),
+                 d.get("is_vehicle", False), d.get("is_animal", False),
+                 mode, lat, lng, ts)
+                for d in detections
+            ]
+            with conn.cursor() as cur:
+                cur.executemany(
                     "INSERT INTO recent_detections "
                     "(device_id, session_id, request_id, class_ko, confidence, "
                     " cx, cy, w, h, zone, dist_m, is_vehicle, is_animal, "
                     " mode, lat, lng, detected_at) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (device_id, session_id, request_id,
-                     d.get("class_ko",""), d.get("confidence", 0.0),
-                     d.get("cx", 0.0), d.get("cy", 0.0),
-                     d.get("w", 0.0),  d.get("h", 0.0),
-                     d.get("zone","12시"), d.get("dist_m", 0.0),
-                     int(d.get("is_vehicle", False)), int(d.get("is_animal", False)),
-                     mode, lat, lng, ts),
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    rows,
                 )
-        if not _IS_POSTGRES:
+                cur.execute(
+                    "DELETE FROM recent_detections WHERE session_id = %s AND id NOT IN "
+                    "(SELECT id FROM recent_detections WHERE session_id = %s "
+                    " ORDER BY id DESC LIMIT %s)",
+                    (session_id, session_id, _DETECTIONS_KEEP),
+                )
+        else:
+            rows = [
+                (device_id, session_id, request_id,
+                 d.get("class_ko", ""), d.get("confidence", 0.0),
+                 d.get("cx", 0.0), d.get("cy", 0.0),
+                 d.get("w", 0.0),  d.get("h", 0.0),
+                 d.get("zone", "12시"), d.get("dist_m", 0.0),
+                 int(d.get("is_vehicle", False)), int(d.get("is_animal", False)),
+                 mode, lat, lng, ts)
+                for d in detections
+            ]
+            conn.executemany(
+                "INSERT INTO recent_detections "
+                "(device_id, session_id, request_id, class_ko, confidence, "
+                " cx, cy, w, h, zone, dist_m, is_vehicle, is_animal, "
+                " mode, lat, lng, detected_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                rows,
+            )
             conn.execute(
                 "DELETE FROM recent_detections WHERE session_id = ? AND id NOT IN "
                 "(SELECT id FROM recent_detections WHERE session_id = ? "

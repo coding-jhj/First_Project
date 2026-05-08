@@ -293,10 +293,9 @@ async def detect(
     _tracker_ms = int((_time.monotonic() - _t_tracker) * 1000)
 
     should_persist = _should_persist_frame(session_id, objects, mode)
-    previous = db.get_snapshot(wifi_ssid) if should_persist and wifi_ssid else None
+    previous = db.get_snapshot(session_id) if should_persist else None
     space_changes = _space_changes(objects, previous) if previous and objects else []
     if objects and should_persist:
-        db.save_snapshot(wifi_ssid, objects)
         db.save_snapshot(session_id, objects)
         _mark_persisted(session_id, objects)
 
@@ -479,7 +478,7 @@ async def detect_from_json(body: dict):
         sentence = build_find_sentence(target, objects, camera_orientation)
         alert_mode = "critical"
     else:
-        previous = db.get_snapshot(wifi_ssid)
+        previous = db.get_snapshot(session_id)
         space_changes = _space_changes(objects, previous) if previous and objects else []
         all_changes = motion_changes + space_changes
         sentence  = build_sentence(objects, all_changes, camera_orientation=camera_orientation)
