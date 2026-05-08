@@ -3,7 +3,6 @@ package com.voiceguide
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.sqrt
 
 enum class VibrationPattern {
     NONE,
@@ -129,8 +128,7 @@ class MvpPipeline {
     }
 
     private fun bboxDistanceM(det: Detection): Float {
-        val area = (det.w * det.h).coerceAtLeast(0.0001f)
-        return sqrt(BBOX_CALIB_AREA / area).coerceIn(0.2f, 20f)
+        return VoicePolicy.calcDistBboxM(det.w, det.h).toFloat().coerceIn(0.2f, 15f)
     }
 
     private fun computeRisk(det: Detection): Float {
@@ -188,6 +186,5 @@ class MvpPipeline {
         private const val IOU_MATCH_THRESHOLD = 0.25f
         private const val MAX_MISSED_FRAMES = 12
         private const val EMA_ALPHA = 0.55f
-        private const val BBOX_CALIB_AREA = 0.06f
     }
 }

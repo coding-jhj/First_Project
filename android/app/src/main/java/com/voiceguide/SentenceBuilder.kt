@@ -27,6 +27,19 @@ object SentenceBuilder {
 
     fun clearStableClocks() { stableClock.clear() }
 
+    private fun directionFor(clock: String): String =
+        if (clock == "12시") "정면" else (CLOCK_TO_DIRECTION[clock] ?: clock)
+
+    private fun locationPhrase(clock: String, det: Detection): String {
+        val distStr = formatDist(det)
+        val dir = directionFor(clock)
+        return when {
+            clock == "12시" && (distStr == "코앞" || det.distanceM in 0.01f..0.75f) -> "바로 앞"
+            distStr == "코앞" -> "$dir 코앞"
+            else -> "$dir $distStr"
+        }
+    }
+
     fun build(detections: List<Detection>): String {
         if (detections.isEmpty()) return "주변에 장애물이 없어요."
 
@@ -41,16 +54,15 @@ object SentenceBuilder {
         if (nearVehicle != null) {
             val idx   = sortedByX.indexOf(nearVehicle)
             val clock = getStableClock(nearVehicle.classKo, nearVehicle.cx, idx)
-            val dir   = CLOCK_TO_DIRECTION[clock] ?: clock
-            return "위험! ${dir} 앞 ${nearVehicle.classKo}! 조심!"
+            val dir   = directionFor(clock)
+            return "위험! ${dir} ${nearVehicle.classKo}. 조심! 멈추세요!"
         }
 
         val parts = detections.take(2).mapIndexed { originalIdx, det ->
             val idx       = sortedByX.indexOf(det)
             val clock     = getStableClock(det.classKo, det.cx, idx)
-            val dir       = CLOCK_TO_DIRECTION[clock] ?: clock
-            val distStr   = formatDist(det.w, det.h)
-            val locStr    = if (distStr == "코앞" && dir == "바로 앞") "바로 코앞" else "$dir $distStr"
+            val dir       = directionFor(clock)
+            val locStr    = locationPhrase(clock, det)
             val ig        = josaIGa(det.classKo)
             val action    = DIRECTION_ACTION[clock] ?: ""
             val areaRatio = det.w * det.h
@@ -59,17 +71,17 @@ object SentenceBuilder {
 
             val base = when {
                 det.classKo in VoicePolicy.vehicleKo() ->
-                    "위험! ${dir} 앞 ${det.classKo}! 조심!"
+                    "위험! ${dir} ${det.classKo}. 조심! 멈추세요!"
                 isAnimal ->
-                    "조심! ${locStr}에, ${det.classKo}${ig} 있어요. 천천히 $action."
+                    "조심하세요. ${locStr}에 ${det.classKo}${ig} 있어요. 천천히 $action."
                 det.classKo in VoicePolicy.everydayKo() ->
-                    "${locStr}에, ${det.classKo}${ig} 있어요."
+                    "${locStr}에 ${det.classKo}${ig} 있어요."
                 isCaution ->
-                    "${locStr}에, ${det.classKo}${ig} 있어요. $action."
+                    "${locStr}에 ${det.classKo}${ig} 있어요. $action."
                 areaRatio > VoicePolicy.cautionAreaRatio() ->
-                    "${locStr}에, ${det.classKo}${ig} 있어요. $action."
+                    "${locStr}에 ${det.classKo}${ig} 있어요. $action."
                 else ->
-                    "${locStr}에, ${det.classKo}${ig} 있어요."
+                    "${locStr}에 ${det.classKo}${ig} 있어요."
             }
 
             if (originalIdx == 0) base
@@ -88,9 +100,7 @@ object SentenceBuilder {
         if (found != null) {
             val idx     = sortedByX.indexOf(found)
             val clock   = getStableClock(found.classKo, found.cx, idx)
-            val dir     = CLOCK_TO_DIRECTION[clock] ?: clock
-            val distStr = formatDist(found.w, found.h)
-            val locStr  = if (distStr == "코앞" && dir == "바로 앞") "바로 코앞" else "$dir $distStr"
+            val locStr  = locationPhrase(clock, found)
             val un      = josaUnNeun(target)
             val base    = "${target}${un} ${locStr}에 있어요."
 
@@ -104,9 +114,7 @@ object SentenceBuilder {
             return if (closerHazard != null) {
                 val hIdx     = sortedByX.indexOf(closerHazard)
                 val hClock   = getStableClock(closerHazard.classKo, closerHazard.cx, hIdx)
-                val hDir     = CLOCK_TO_DIRECTION[hClock] ?: hClock
-                val hDistStr = formatDist(closerHazard.w, closerHazard.h)
-                val hLocStr  = if (hDistStr == "코앞" && hDir == "바로 앞") "바로 코앞" else "$hDir $hDistStr"
+                val hLocStr  = locationPhrase(hClock, closerHazard)
                 val hIg      = josaIGa(closerHazard.classKo)
                 "$base 단, ${hLocStr}에 ${closerHazard.classKo}${hIg} 있으니 주의하세요."
             } else {
@@ -163,6 +171,10 @@ object SentenceBuilder {
         }
         return "4시"
     }
+
+    fun formatDist(det: Detection): String =
+        if (det.distanceM > 0f) VoicePolicy.formatDistMeters(det.distanceM.toDouble())
+        else VoicePolicy.formatDistBbox(det.w, det.h)
 
     fun formatDist(w: Float, h: Float): String = VoicePolicy.formatDistBbox(w, h)
 
