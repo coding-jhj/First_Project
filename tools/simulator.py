@@ -5,6 +5,8 @@
 DETECT_ENABLED = True 이면 경로 중 지정된 좌표에서 YOLO 추론을 실행해
 탐지 결과도 함께 서버에 전송, 대시보드 물체 카드에 실시간 반영됩니다.
 
+웨이포인트 사이를 STEPS_PER_LEG 개로 선형 보간하여 지도에서 자연스러운 이동을 연출합니다.
+
 사용법:
     python tools/simulator.py
 
@@ -22,11 +24,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # ── 설정 (여기만 수정하면 됩니다) ──────────────────────────────────────────────
 
-SERVER_URL = "https://voiceguide-1063164560758.asia-northeast3.run.app"
-SESSION_ID = "demo-device-02"   # 대시보드 세션 ID 입력창에 이 값 사용
-API_KEY    = ""                  # .env의 API_KEY 값 (없으면 빈 문자열)
-INTERVAL   = 2.0                 # 좌표 전송 간격 (초)
-LOOP       = False               # True 이면 경로를 반복 순환
+SERVER_URL    = "https://voiceguide-1063164560758.asia-northeast3.run.app"
+SERIAL        = "SN-001"                # 데모 시리얼 넘버 (로깅용, 세션 ID와 무관)
+SESSION_ID    = "demo-device-02"        # 대시보드 세션 ID 입력창에 이 값 사용
+API_KEY       = ""                      # .env의 API_KEY 값 (없으면 빈 문자열)
+INTERVAL      = 1.0                     # 좌표 전송 간격 (초)
+STEPS_PER_LEG = 21                      # 구간당 보간 점수 — 14구간×21×1초 ≈ 5분
+DETECT_EVERY  = 5                       # N번째 GPS 전송마다 탐지 데이터 전송
+LOOP          = False                   # True 이면 경로를 반복 순환
 
 # ── 더미 장면 탐지 설정 ─────────────────────────────────────────────────────────
 DETECT_ENABLED = True            # False 로 바꾸면 GPS만 전송 (기존 동작)
@@ -92,6 +97,33 @@ _collected: list[dict] = []   # 전송 성공한 좌표 누적 (경로 저장용
 _detect_ready = False          # YOLO 모델 로드 성공 여부
 
 
+# ── 경로 보간 ─────────────────────────────────────────────────────────────────
+
+def interpolate_route(route: list, steps: int) -> list[tuple]:
+    """웨이포인트 사이를 steps 개 좌표로 선형 보간하여 촘촘한 경로를 반환한다.
+
+    반환값: [(lat, lng, label, leg_idx, is_waypoint), ...]
+      - leg_idx    : 원래 ROUTE 인덱스 (WAYPOINT_SCENES 매핑에 사용)
+      - is_waypoint: 원래 웨이포인트 위치이면 True (터미널 출력용)
+    """
+    dense = []
+    for i in range(len(route) - 1):
+        lat1, lng1, label = route[i]
+        lat2, lng2, _     = route[i + 1]
+        for t in range(steps):
+            frac = t / steps
+            dense.append((
+                lat1 + (lat2 - lat1) * frac,
+                lng1 + (lng2 - lng1) * frac,
+                label if t == 0 else "",
+                i,
+                t == 0,
+            ))
+    lat, lng, label = route[-1]
+    dense.append((lat, lng, label, len(route) - 1, True))
+    return dense
+
+
 # ── YOLO 모델 초기화 ──────────────────────────────────────────────────────────
 
 def _init_detect() -> bool:
@@ -121,7 +153,7 @@ def _init_detect() -> bool:
 
 # ── GPS 전송 ──────────────────────────────────────────────────────────────────
 
-def send_gps(lat: float, lng: float, label: str) -> bool:
+def send_gps(lat: float, lng: float, label: str, silent: bool = False) -> bool:
     try:
         resp = requests.post(
             f"{SERVER_URL}/gps",
@@ -130,8 +162,9 @@ def send_gps(lat: float, lng: float, label: str) -> bool:
             timeout=5,
         )
         ok = resp.status_code == 200
-        status = "✅" if ok else f"❌ {resp.status_code}"
-        print(f"  {status}  {label}  ({lat:.6f}, {lng:.6f})")
+        if not silent:
+            status = "✅" if ok else f"❌ {resp.status_code}"
+            print(f"  {status}  {label}  ({lat:.6f}, {lng:.6f})")
         if ok:
             _collected.append({"lat": lat, "lng": lng})
         return ok
@@ -202,11 +235,15 @@ def save_route():
 # ── 메인 실행 ─────────────────────────────────────────────────────────────────
 
 def run():
-    print(f"\nVoiceGuide GPS 시뮬레이터")
+    dense     = interpolate_route(ROUTE, STEPS_PER_LEG)
+    total_sec = len(dense) * INTERVAL
+
+    print(f"\nVoiceGuide GPS 시뮬레이터 — 데모 모드")
     print(f"  서버     : {SERVER_URL}")
-    print(f"  세션 ID  : {SESSION_ID}")
-    print(f"  전송 간격: {INTERVAL}초")
-    print(f"  경로     : {len(ROUTE)}개 좌표")
+    print(f"  세션 ID  : {SESSION_ID}  [시리얼: {SERIAL}]")
+    print(f"  전송 간격: {INTERVAL}초  /  구간당 보간: {STEPS_PER_LEG}점")
+    print(f"  총 좌표  : {len(dense)}개  →  예상 {int(total_sec // 60)}분 {int(total_sec % 60)}초")
+    print(f"  탐지 전송: {DETECT_EVERY}번째 포인트마다")
     print(f"  반복     : {'켜짐' if LOOP else '꺼짐'}")
     _init_detect()
     print(f"\n대시보드 세션 ID 입력창에 '{SESSION_ID}' 를 입력하세요.\n")
@@ -215,15 +252,15 @@ def run():
     while True:
         if LOOP:
             print(f"── 경로 {round_num}회차 ──────────────────")
-        for idx, (lat, lng, label) in enumerate(ROUTE):
-            if not send_gps(lat, lng, label):
+
+        for point_idx, (lat, lng, label, leg_idx, is_wp) in enumerate(dense):
+            if not send_gps(lat, lng, label, silent=not is_wp):
                 print("\n서버 오류로 시뮬레이션을 중단합니다.")
                 save_route()
                 sys.exit(1)
 
-            # 탐지가 설정된 좌표에서만 YOLO 추론 + 전송
-            if _detect_ready:
-                scene = WAYPOINT_SCENES.get(idx)
+            if _detect_ready and point_idx % DETECT_EVERY == 0:
+                scene = WAYPOINT_SCENES.get(leg_idx)
                 if scene:
                     try:
                         import dummy_scenes
@@ -235,7 +272,7 @@ def run():
             time.sleep(INTERVAL)
 
         if not LOOP:
-            print("\n시뮬레이션 완료.")
+            print(f"\n시뮬레이션 완료 (총 {len(dense)}개 포인트 전송).")
             break
         round_num += 1
         print()
