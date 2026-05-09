@@ -1131,18 +1131,36 @@ async function loadRouteList() {
   const panel  = document.getElementById('routePanel');
   const select = document.getElementById('routeSelect');
   try {
-    const res  = await fetch(`${SERVER_BASE}/routes/${encodeURIComponent(sessionId)}`);
-    if (!res.ok) { panel.style.display = 'none'; return; }
-    const data = await res.json();
-    const routes = data.routes ?? [];
-    if (routes.length === 0) { panel.style.display = 'none'; return; }
+    // 저장된 경로 + 현재 실시간 트랙을 병렬로 조회
+    const [routeRes, statusRes] = await Promise.all([
+      fetch(`${SERVER_BASE}/routes/${encodeURIComponent(sessionId)}`),
+      fetch(`${SERVER_BASE}/status/${encodeURIComponent(sessionId)}`),
+    ]);
 
-    select.innerHTML = '<option value="">— 경로 선택 —</option>' +
-      routes.map(r => {
-        const label = r.name || r.route_id.slice(0, 8);
-        const pts   = r.point_count ? ` (${r.point_count}pts)` : '';
-        return `<option value="${escapeHtml(r.route_id)}">${escapeHtml(label)}${pts}</option>`;
-      }).join('');
+    const routes = routeRes.ok ? ((await routeRes.json()).routes ?? []) : [];
+    const track  = statusRes.ok ? ((await statusRes.json()).track ?? []) : [];
+
+    // 현재 트랙도 없고 저장된 경로도 없으면 숨김
+    if (routes.length === 0 && track.length < 2) {
+      panel.style.display = 'none';
+      return;
+    }
+
+    let options = '<option value="">— 경로 선택 —</option>';
+
+    // 현재 실시간 트랙이 있으면 맨 위에 고정 옵션으로 추가
+    if (track.length >= 2) {
+      options += `<option value="__live__">📍 현재 이동 경로 (${track.length}pts)</option>`;
+    }
+
+    // 저장된 경로 목록
+    options += routes.map(r => {
+      const label = r.name || r.route_id.slice(0, 8);
+      const pts   = r.point_count ? ` (${r.point_count}pts)` : '';
+      return `<option value="${escapeHtml(r.route_id)}">${escapeHtml(label)}${pts}</option>`;
+    }).join('');
+
+    select.innerHTML = options;
     panel.style.display = 'block';
   } catch (_) {
     panel.style.display = 'none';
@@ -1153,23 +1171,40 @@ async function loadRouteTrack(routeId) {
   if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
   if (!routeId) return;
   const sessionId = document.getElementById('sessionId').value.trim() || '__default__';
-  try {
-    const res  = await fetch(`${SERVER_BASE}/routes/${encodeURIComponent(sessionId)}/${encodeURIComponent(routeId)}`);
-    if (!res.ok) return;
-    const data = await res.json();
-    const coords = (data.points ?? [])
-      .map(p => [Number(p.lat), Number(p.lng)])
-      .filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b));
-    if (coords.length < 2) return;
-    routeLine = L.polyline(coords, {
-      color: '#f4a261',
-      weight: 3,
-      opacity: 0.8,
-      dashArray: '6 4',
-      smoothFactor: 1,
-    }).addTo(map);
-    map.fitBounds(routeLine.getBounds(), { padding: [40, 40] });
-  } catch (_) {}
+
+  let coords = [];
+
+  if (routeId === '__live__') {
+    // 현재 실시간 트랙 — status 엔드포인트에서 가져옴
+    try {
+      const res  = await fetch(`${SERVER_BASE}/status/${encodeURIComponent(sessionId)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      coords = (data.track ?? [])
+        .map(p => [Number(p.lat), Number(p.lng)])
+        .filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b));
+    } catch (_) { return; }
+  } else {
+    // 저장된 경로
+    try {
+      const res  = await fetch(`${SERVER_BASE}/routes/${encodeURIComponent(sessionId)}/${encodeURIComponent(routeId)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      coords = (data.points ?? [])
+        .map(p => [Number(p.lat), Number(p.lng)])
+        .filter(([a, b]) => Number.isFinite(a) && Number.isFinite(b));
+    } catch (_) { return; }
+  }
+
+  if (coords.length < 2) return;
+  routeLine = L.polyline(coords, {
+    color: '#f4a261',
+    weight: 3,
+    opacity: 0.8,
+    dashArray: '6 4',
+    smoothFactor: 1,
+  }).addTo(map);
+  map.fitBounds(routeLine.getBounds(), { padding: [40, 40] });
 }
 
 // ── 24시간 탐지 내역 ──────────────────────────────────
