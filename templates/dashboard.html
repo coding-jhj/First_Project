@@ -599,6 +599,16 @@
         <span class="gps-label">경로 포인트</span>
         <span class="gps-value" id="trackCount">0</span>
       </div>
+      <div style="margin-top:8px;">
+        <button onclick="saveCurrentRoute()" id="btnSaveRoute" style="
+          width:100%;background:var(--surface2);border:1px solid var(--border);
+          border-radius:6px;color:var(--muted);font-size:11px;font-weight:600;
+          padding:5px 8px;cursor:pointer;transition:border-color 0.15s,color 0.15s;"
+          onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--text)'"
+          onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">
+          💾 현재 경로 저장
+        </button>
+      </div>
       <div id="routePanel" style="display:none;">
         <hr class="route-divider">
         <div class="gps-label" style="margin-bottom:4px;">저장된 경로</div>
@@ -1168,6 +1178,34 @@ setInterval(fetchHistory, HISTORY_POLL_MS);
 
 // 세션 변경 시 내역도 즉시 갱신
 function refreshHistory() { fetchHistory(); }
+
+// ── 현재 경로 저장 ───────────────────────────────────
+async function saveCurrentRoute() {
+  const sessionId = document.getElementById('sessionId').value.trim() || '__default__';
+  const btn = document.getElementById('btnSaveRoute');
+  btn.disabled = true;
+  btn.textContent = '저장 중...';
+  const name = `${sessionId} ${new Date().toLocaleString('ko-KR', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})}`;
+  try {
+    const res = await fetch(`${SERVER_BASE}/gps/route/save`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({device_id: sessionId, name}),
+    });
+    const data = await res.json();
+    if (data.saved) {
+      showToast(`경로 저장 완료 — ${name} (${data.point_count ?? 0}pts)`);
+      await loadRouteList();
+    } else {
+      showToast(`저장 건너뜀: ${data.reason || 'GPS 데이터 없음'}`);
+    }
+  } catch(e) {
+    showToast('경로 저장 중 오류 발생');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '💾 현재 경로 저장';
+  }
+}
 
 // ── 시작 ─────────────────────────────────────────────
 connectEventStream();
