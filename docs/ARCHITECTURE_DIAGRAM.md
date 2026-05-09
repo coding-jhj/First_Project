@@ -1,4 +1,4 @@
-# VoiceGuide Architecture
+# VoiceGuide Architecture Diagrams
 
 > 시각장애인 보행 보조를 위한 Android 온디바이스 탐지 + FastAPI 상태 동기화 시스템  
 > 기준일: 2026-05-09  
@@ -17,10 +17,11 @@ VoiceGuide는 **사용자 안전에 필요한 판단과 안내를 Android에서 
 ## 2. 전체 구조
 
 ```mermaid
+%%{init: {"flowchart": {"nodeSpacing": 80, "rankSpacing": 100, "curve": "basis"}, "themeVariables": {"fontSize": "18px", "fontFamily": "Inter, Noto Sans KR, Arial", "primaryTextColor": "#111827", "lineColor": "#374151"}}}%%
 flowchart LR
     User["사용자"] --> App["Android 앱"]
 
-    subgraph Android["Android - Kotlin"]
+    subgraph Android["Android - Kotlin / CameraX"]
         Camera["CameraX<br/>ImageAnalysis"]
         Detector["TfliteYoloDetector<br/>YOLO TFLite"]
         Stabilizer["후처리<br/>NMS / vote / IoU tracking / EMA"]
@@ -38,7 +39,7 @@ flowchart LR
 
     subgraph Storage["Storage"]
         DB["SQLite 또는 PostgreSQL"]
-        Dashboard["templates/dashboard.html"]
+        Dashboard["templates/dashboard.html<br/>Leaflet + SSE"]
     end
 
     App --> Camera --> Detector --> Stabilizer --> LocalGuide
@@ -50,6 +51,15 @@ flowchart LR
     Routes --> SSE --> Dashboard
     Routes -->|GET /api/policy| PolicyClient
     DB --> Dashboard
+
+    classDef android fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#111827;
+    classDef server fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#111827;
+    classDef storage fill:#fff8e1,stroke:#f9a825,stroke-width:2px,color:#111827;
+    classDef output fill:#fce4ec,stroke:#ad1457,stroke-width:2px,color:#111827;
+    class Camera,Detector,Stabilizer,PolicyClient android;
+    class Routes,Tracker,NLG,Writer,SSE server;
+    class DB,Dashboard storage;
+    class LocalGuide output;
 ```
 
 ---
@@ -72,7 +82,7 @@ flowchart LR
 
 ---
 
-## 4. Android 처리 흐름
+## 4. Android 1프레임 처리 흐름
 
 ```mermaid
 sequenceDiagram
@@ -241,7 +251,7 @@ sequenceDiagram
 
 ## 9. 모드와 음성 명령
 
-Android는 STT 결과를 분류해 모드를 바꾼다.
+Android는 STT 결과를 분류해 현재 사용 중인 모드로 연결한다.
 
 | 모드 | 예시 | 처리 |
 |---|---|---|
@@ -263,8 +273,6 @@ Android는 STT 결과를 분류해 모드를 바꾼다.
 정책의 기준은 서버의 `src/config/policy.json`이다.
 
 Android는 앱 시작 또는 필요 시 `/api/policy`로 정책을 받아 캐시한다. 서버에 접근할 수 없으면 `android/app/src/main/assets/policy_default.json`을 사용한다.
-
-정책에는 다음 정보가 들어간다.
 
 | 항목 | 예시 역할 |
 |---|---|
@@ -332,13 +340,6 @@ python test_simulation.py
 
 ### Android 빌드
 
-```bash
-cd android
-./gradlew assembleDebug
-```
-
-Windows PowerShell에서는:
-
 ```powershell
 cd android
 .\gradlew.bat assembleDebug
@@ -396,9 +397,10 @@ VoiceGuide/
 ├─ tools/
 ├─ train/
 ├─ docs/
+│  ├─ ARCHITECTURE_DIAGRAM.md
+│  └─ CURRENT_STATUS_REPORT.md
 ├─ Dockerfile
-├─ requirements.txt
-└─ ARCHITECTURE.md
+└─ requirements.txt
 ```
 
 ---
@@ -407,12 +409,10 @@ VoiceGuide/
 
 처음 온 개발자는 아래 순서로 보면 빠르다.
 
-1. 이 문서 `ARCHITECTURE.md`
+1. 이 문서 `docs/ARCHITECTURE_DIAGRAM.md`
 2. `android/app/src/main/java/com/voiceguide/MainActivity.kt`
 3. `android/app/src/main/java/com/voiceguide/MvpPipeline.kt`
 4. `src/api/routes.py`
 5. `src/api/db.py`
 6. `templates/dashboard.html`
 7. `docs/CURRENT_STATUS_REPORT.md`
-
-더 자세한 다이어그램은 `docs/ARCHITECTURE_DIAGRAMS.md`를 참고한다.
