@@ -627,12 +627,10 @@ async def list_sessions():
 
 @router.get("/team-locations", dependencies=[Depends(_verify_api_key)])
 async def get_team_locations():
-    from datetime import datetime, timedelta
-    cutoff = (datetime.now() - timedelta(minutes=30)).isoformat()
     locations = []
     for s in db.get_recent_sessions(limit=20):
         gps = db.get_last_gps(s)
-        if gps and gps.get("timestamp", "") >= cutoff:
+        if gps and gps.get("lat") and gps.get("lng"):
             locations.append({"session_id": s, "lat": gps["lat"], "lng": gps["lng"]})
     return {"locations": locations}
 

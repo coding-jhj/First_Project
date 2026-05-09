@@ -672,6 +672,7 @@ def save_gps(session_id: str, lat: float, lng: float):
 
 
 def get_last_gps(session_id: str) -> dict | None:
+    """gps_history → gps_routes(마지막 경로 끝점) 순으로 최근 위치 반환."""
     with _conn() as conn:
         if _IS_POSTGRES:
             with conn.cursor() as cur:
@@ -680,33 +681,65 @@ def get_last_gps(session_id: str) -> dict | None:
                     "WHERE session_id = %s ORDER BY id DESC LIMIT 1",
                     (session_id,))
                 row = cur.fetchone()
-            return {"lat": row["lat"], "lng": row["lng"],
-                    "timestamp": row["timestamp"]} if row else None
+            if row:
+                return {"lat": row["lat"], "lng": row["lng"], "timestamp": row["timestamp"]}
+            # gps_history 없으면 저장된 경로의 마지막 포인트 사용
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT points_json, ended_at FROM gps_routes "
+                    "WHERE session_id = %s ORDER BY id DESC LIMIT 1",
+                    (session_id,))
+                row = cur.fetchone()
+            if not row:
+                return None
+            pts = row["points_json"] if isinstance(row["points_json"], list) \
+                  else json.loads(row["points_json"] or "[]")
+            if not pts:
+                return None
+            p = pts[-1]
+            return {"lat": p["lat"], "lng": p["lng"], "timestamp": str(row["ended_at"])}
         else:
             row = conn.execute(
                 "SELECT lat, lng, timestamp FROM gps_history "
                 "WHERE session_id = ? ORDER BY id DESC LIMIT 1",
                 (session_id,)).fetchone()
-            return {"lat": row[0], "lng": row[1],
-                    "timestamp": row[2]} if row else None
+            if row:
+                return {"lat": row[0], "lng": row[1], "timestamp": row[2]}
+            row = conn.execute(
+                "SELECT points_json, ended_at FROM gps_routes "
+                "WHERE session_id = ? ORDER BY id DESC LIMIT 1",
+                (session_id,)).fetchone()
+            if not row:
+                return None
+            pts = json.loads(row[0] or "[]")
+            if not pts:
+                return None
+            p = pts[-1]
+            return {"lat": p["lat"], "lng": p["lng"], "timestamp": row[1]}
 
 
 def get_recent_sessions(limit: int = 10) -> list[str]:
-    """GPS 데이터가 있는 최근 세션 ID 목록 반환 (대시보드 세션 선택용)."""
+    """GPS 이력 또는 저장된 경로가 있는 최근 세션 ID 목록 반환 (대시보드 세션 선택용)."""
     with _conn() as conn:
         if _IS_POSTGRES:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT session_id FROM gps_history "
-                    "GROUP BY session_id "
-                    "ORDER BY MAX(id) DESC LIMIT %s", (limit,))
+                    "SELECT session_id FROM ("
+                    "  SELECT session_id, MAX(id) AS last_id FROM gps_history GROUP BY session_id"
+                    "  UNION"
+                    "  SELECT session_id, MAX(id) AS last_id FROM gps_routes  GROUP BY session_id"
+                    ") t GROUP BY session_id ORDER BY MAX(last_id) DESC LIMIT %s",
+                    (limit,))
                 rows = cur.fetchall()
             return [r["session_id"] for r in rows]
         else:
             rows = conn.execute(
-                "SELECT session_id FROM gps_history "
-                "GROUP BY session_id "
-                "ORDER BY MAX(id) DESC LIMIT ?", (limit,)).fetchall()
+                "SELECT session_id FROM ("
+                "  SELECT session_id, MAX(id) AS last_id FROM gps_history GROUP BY session_id"
+                "  UNION"
+                "  SELECT session_id, MAX(id) AS last_id FROM gps_routes  GROUP BY session_id"
+                ") GROUP BY session_id ORDER BY MAX(last_id) DESC LIMIT ?",
+                (limit,)).fetchall()
             return [r[0] for r in rows]
 
 
