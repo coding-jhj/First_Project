@@ -68,7 +68,7 @@ async def get_voice_policy(
     policy_str = json.dumps(policy_dict, sort_keys=True)
     etag = hashlib.md5(policy_str.encode("utf-8")).hexdigest()
     client_etag = if_none_match.strip('"') if if_none_match else None
-
+    
     if client_etag == etag:
         return Response(status_code=304)
 
@@ -382,20 +382,9 @@ async def detect(
     return response_payload
 
 def _extract_find_target(text: str) -> str:
-    """
-    찾기 명령어에서 대상 물체 이름 추출.
-    "의자 찾아줘" → "의자", "이거 뭐야" → "" (확인 의도 → 빈 target)
-
-    명령 동사/확인 패턴을 순서대로 제거하고 남은 것이 대상 물체.
-    """
-    verbs = [
-        "찾아줘", "찾아", "어디있어", "어디 있어", "어디야",
-        "어딘지", "어디에 있어", "어디에 있나", "있는지 알려줘",
-        "뭔지 알려줘", "뭐야", "뭐지", "뭔지", "뭔데", "이거", "이게", "이건",
-    ]
+    verbs = ["찾아줘", "찾아", "어디있어", "어디 있어", "어디야", "어딘지", "어디에 있어", "어디에 있나", "있는지 알려줘"]
     label = text
-    for v in sorted(verbs, key=len, reverse=True):  # 긴 패턴부터 제거 (부분 겹침 방지)
-        label = label.replace(v, "")
+    for v in verbs: label = label.replace(v, "")
     return label.strip()
 
 @router.post("/detect_json", dependencies=[Depends(_verify_api_key)])

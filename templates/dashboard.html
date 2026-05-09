@@ -101,6 +101,16 @@
     display: grid;
     grid-template-columns: 340px 1fr;
     overflow: hidden;
+    min-height: 0;
+  }
+
+  /* 중앙: 지도(상단) + 실시간 위험도(하단) */
+  .center-column {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+    min-width: 0;
   }
 
   /* ── 왼쪽 패널 ────────────────────────────── */
@@ -222,10 +232,55 @@
   }
   .empty-state svg { opacity: 0.3; }
 
-  /* ── 오른쪽: 지도 영역 ────────────────────── */
+  /* ── 지도 영역 ────────────────────────────── */
   .map-container {
     position: relative;
     background: var(--bg);
+    flex: 8;
+    min-height: 0;
+  }
+
+  .analysis-panel {
+    flex: 2;
+    min-height: 0;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 14px 18px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .analysis-panel .section-title { margin-bottom: 0; }
+  #riskBarChart {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .risk-bar-row {
+    font-size: 12px;
+  }
+  .risk-bar-label {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 4px;
+    gap: 8px;
+  }
+  .risk-bar-label span:first-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .risk-bar-track {
+    background: var(--surface2);
+    border-radius: 4px;
+    height: 8px;
+    overflow: hidden;
+  }
+  .risk-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.35s ease;
   }
 
   #map {
@@ -237,6 +292,12 @@
   /* Leaflet 다크 테마 오버라이드 */
   .leaflet-tile { filter: brightness(0.85) saturate(0.8) hue-rotate(180deg) invert(1); }
   .leaflet-container { background: #111; }
+
+  /* 줌 등 좌상단 컨트롤: 커스텀 범례( top-left 오버레이 ) 아래로 */
+  .map-container .leaflet-top.leaflet-left {
+    top: 55px;
+    left: 10px;
+  }
 
   /* 지도 위 오버레이 카드 */
   .map-overlay {
@@ -266,8 +327,8 @@
   .gps-label { color: var(--muted); }
   .gps-value { font-family: monospace; color: var(--accent2); }
 
-  .map-overlay.bottom-left {
-    bottom: 24px; left: 16px;
+  .map-overlay.top-left {
+    top: 16px; left: 16px;
     display: flex;
     gap: 8px;
   }
@@ -284,37 +345,6 @@
     border-radius: 50%;
     flex-shrink: 0;
   }
-
-  /* 네비게이션 버튼 그룹 */
-  .nav-buttons {
-    position: absolute;
-    z-index: 400;
-    top: 16px; left: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .nav-btn {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 8px 14px;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text);
-    cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
-    text-decoration: none;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    white-space: nowrap;
-  }
-  .nav-btn:hover { background: var(--surface2); border-color: var(--accent); }
-  .nav-btn.naver  { border-color: #03c75a33; color: #03c75a; }
-  .nav-btn.kakao  { border-color: #fee50033; color: #fee500; }
-  .nav-btn.street { border-color: #4285f433; color: #4285f4; }
 
   /* 타임스탬프 + FPS */
   .last-update {
@@ -580,7 +610,8 @@
 
   </div>
 
-  <!-- 오른쪽: 지도 -->
+  <!-- 중앙: 지도 + 실시간 위험도 -->
+  <div class="center-column">
   <div class="map-container">
     <div id="map"></div>
 
@@ -608,21 +639,8 @@
       </div>
     </div>
 
-    <!-- 네비게이션 / 로드뷰 버튼 -->
-    <div class="nav-buttons" id="navButtons" style="display:none;">
-      <a id="btnNaver" class="nav-btn naver" href="#" target="_blank">
-        🗺️ 네이버 지도로 열기
-      </a>
-      <a id="btnKakao" class="nav-btn kakao" href="#" target="_blank">
-        🗺️ 카카오맵으로 열기
-      </a>
-      <a id="btnStreet" class="nav-btn street" href="#" target="_blank">
-        📸 Google 로드뷰
-      </a>
-    </div>
-
     <!-- 범례 -->
-    <div class="map-overlay bottom-left">
+    <div class="map-overlay top-left">
       <div class="legend-item">
         <div class="legend-dot" style="background:#6c63ff;"></div> 현재 위치
       </div>
@@ -636,6 +654,14 @@
 
     <div class="last-update" id="lastUpdate">—</div>
   </div>
+
+  <div class="analysis-panel">
+    <div class="section-title">실시간 위험도 분석</div>
+    <div id="riskBarChart">
+      <div style="color:var(--muted); font-size:12px;">탐지 데이터 대기 중...</div>
+    </div>
+  </div>
+  </div><!-- /center-column -->
 
 </main>
 
@@ -654,6 +680,9 @@ const map = L.map('map', { zoomControl: true, attributionControl: false })
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19
 }).addTo(map);
+
+window.addEventListener('resize', () => map.invalidateSize());
+requestAnimationFrame(() => { map.invalidateSize(); });
 
 // 현재 위치 마커
 const markerIcon = L.divIcon({
@@ -736,6 +765,10 @@ const ICONS = {
 function getIcon(name) { return ICONS[name] || '📦'; }
 
 // ── 위험도 판단 ───────────────────────────────────────
+// 서버(db 히스토리·API)와 동일: risk_score ≥0.7 위험, ≥0.4 주의, 그 외 안전
+const RISK_CRITICAL = 0.7;
+const RISK_BEEP = 0.4;
+
 function getRisk(obj) {
   const d  = obj.distance_m ?? 99;
   const kn = obj.class_ko ?? '';
@@ -750,6 +783,67 @@ function getRisk(obj) {
 
 function riskLabel(r) {
   return { critical: '위험', beep: '주의', silent: '안전' }[r] ?? '—';
+}
+
+/** 0~1 점수 → 등급 (서버와 동일 임계값) */
+function riskTierFromScore(score) {
+  const s = Math.max(0, Math.min(1, Number(score)));
+  if (s >= RISK_CRITICAL) return 'critical';
+  if (s >= RISK_BEEP) return 'beep';
+  return 'silent';
+}
+
+/** 목록·뱃지·통계: 서버 risk_score 우선, 없을 때만 거리·클래스 휴리스틱 */
+function riskTierForObject(obj) {
+  const rs = obj.risk_score;
+  if (rs != null && Number.isFinite(Number(rs))) return riskTierFromScore(Number(rs));
+  return getRisk(obj);
+}
+
+/** 서버 risk_score(0~1) 우선, 없으면 휴리스틱 등급을 대략 점수로 환산 */
+function objectRiskScore(obj) {
+  const rs = obj.risk_score;
+  if (rs != null && Number.isFinite(Number(rs))) {
+    return Math.max(0, Math.min(1, Number(rs)));
+  }
+  const tier = getRisk(obj);
+  if (tier === 'critical') return 0.85;
+  if (tier === 'beep') return 0.5;
+  return 0.15;
+}
+
+function updateRiskChart(objects) {
+  const container = document.getElementById('riskBarChart');
+  if (!container) return;
+
+  if (!objects || objects.length === 0) {
+    container.innerHTML =
+      '<div style="color:var(--muted);font-size:12px;">탐지된 물체 없음</div>';
+    return;
+  }
+
+  const ranked = [...objects]
+    .map(o => ({ o, score: objectRiskScore(o) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8);
+
+  container.innerHTML = ranked.map(({ o, score }) => {
+    const pct = Math.round(score * 100);
+    const tier = riskTierFromScore(score);
+    const color = tier === 'critical' ? 'var(--danger)' : tier === 'beep' ? 'var(--warn)' : 'var(--safe)';
+    const dir = o.direction ?? '—';
+    const name = escapeHtml(o.class_ko ?? '알 수 없음');
+    return `
+      <div class="risk-bar-row">
+        <div class="risk-bar-label">
+          <span title="${name}">${name} <span style="color:var(--muted);font-weight:400;">(${escapeHtml(dir)})</span></span>
+          <span style="color:${color};font-weight:700;">${pct}%</span>
+        </div>
+        <div class="risk-bar-track">
+          <div class="risk-bar-fill" style="background:${color};width:${pct}%;"></div>
+        </div>
+      </div>`;
+  }).join('');
 }
 
 function distLabel(d) {
@@ -776,12 +870,13 @@ function renderObjects(objects) {
     document.getElementById('statCritical').textContent = 0;
     document.getElementById('statBeep').textContent     = 0;
     document.getElementById('statSafe').textContent     = 0;
+    updateRiskChart([]);
     return;
   }
 
   let critical = 0, beep = 0, safe = 0;
   const cards = objects.map(obj => {
-    const risk = getRisk(obj);
+    const risk = riskTierForObject(obj);
     if (risk === 'critical') critical++;
     else if (risk === 'beep') beep++;
     else safe++;
@@ -808,6 +903,7 @@ function renderObjects(objects) {
   document.getElementById('statCritical').textContent = critical;
   document.getElementById('statBeep').textContent     = beep;
   document.getElementById('statSafe').textContent     = safe;
+  updateRiskChart(objects);
 }
 
 function renderGps(gps, track) {
@@ -820,7 +916,6 @@ function renderGps(gps, track) {
     document.getElementById('gpsLat').textContent = '—';
     document.getElementById('gpsLng').textContent = '—';
     document.getElementById('trackCount').textContent = 0;
-    document.getElementById('navButtons').style.display = 'none';
     return;
   }
 
@@ -862,18 +957,6 @@ function renderGps(gps, track) {
     map.setView(pos, 17);
     mapCentered = true;
   }
-
-  // 네비게이션·로드뷰 버튼 URL 업데이트
-  document.getElementById('navButtons').style.display = 'flex';
-  // 네이버 지도: 현재 위치 중심으로 열기
-  document.getElementById('btnNaver').href =
-    `https://map.naver.com/v5/?c=${lng},${lat},15,0,0,0,dh`;
-  // 카카오맵: 현재 위치 중심으로 열기
-  document.getElementById('btnKakao').href =
-    `https://map.kakao.com/link/map/현재위치,${lat},${lng}`;
-  // Google Street View (로드뷰 대체): 현재 좌표로
-  document.getElementById('btnStreet').href =
-    `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lng}`;
 }
 
 // ── 폴링 ─────────────────────────────────────────────
