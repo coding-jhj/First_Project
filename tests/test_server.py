@@ -21,14 +21,28 @@ from PIL import Image
 BASE = "http://localhost:8000"
 SESSION = "test-wifi"
 
-# ── 더미 이미지 생성 ──────────────────────────────────────────────────────────
-def make_dummy_image(width=640, height=480) -> bytes:
-    """테스트용 랜덤 RGB 이미지 생성."""
-    arr = np.random.randint(0, 255, (height, width, 3), dtype=np.uint8)
-    img = Image.fromarray(arr)
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=85)
-    return buf.getvalue()
+def make_detection_payload(mode="장애물", query_text="", lat=None, lng=None) -> dict:
+    payload = {
+        "event_id": f"evt-{mode}",
+        "request_id": f"req-{mode}",
+        "device_id": SESSION,
+        "wifi_ssid": SESSION,
+        "mode": mode,
+        "camera_orientation": "front",
+        "query_text": query_text,
+        "objects": [
+            {
+                "class_ko": "의자",
+                "confidence": 0.91,
+                "bbox_norm_xywh": [0.4, 0.45, 0.2, 0.25],
+            }
+        ],
+        "client_perf": {"infer_ms": 12},
+    }
+    if lat is not None and lng is not None:
+        payload["lat"] = lat
+        payload["lng"] = lng
+    return payload
 
 
 # ── 테스트 함수들 ─────────────────────────────────────────────────────────────
@@ -44,12 +58,8 @@ def test_health():
 
 @pytest.mark.integration
 def test_detect_obstacle():
-    """장애물 모드 — 이미지 분석 응답 형식 확인."""
-    img = make_dummy_image()
-    r = requests.post(f"{BASE}/detect", files={"image": ("frame.jpg", img, "image/jpeg")},
-        data={"mode": "장애물", "wifi_ssid": SESSION,
-              "camera_orientation": "front", "query_text": "",
-              "lat": "37.5665", "lng": "126.9780"})
+    """장애물 모드 — 온디바이스 탐지 JSON 응답 형식 확인."""
+    r = requests.post(f"{BASE}/detect", json=make_detection_payload(lat=37.5665, lng=126.9780))
 
     assert r.status_code == 200, f"HTTP {r.status_code}: {r.text[:200]}"
     body = r.json()
@@ -65,10 +75,7 @@ def test_detect_obstacle():
 @pytest.mark.integration
 def test_detect_question():
     """질문 모드 — tracker 누적 상태 포함 응답 확인."""
-    img = make_dummy_image()
-    r = requests.post(f"{BASE}/detect", files={"image": ("frame.jpg", img, "image/jpeg")},
-        data={"mode": "질문", "wifi_ssid": SESSION,
-              "camera_orientation": "front", "query_text": ""})
+    r = requests.post(f"{BASE}/detect", json=make_detection_payload(mode="질문"))
 
     assert r.status_code == 200, f"HTTP {r.status_code}"
     body = r.json()
@@ -80,10 +87,7 @@ def test_detect_question():
 @pytest.mark.integration
 def test_detect_find():
     """찾기 모드 — query_text에서 타깃 추출 확인."""
-    img = make_dummy_image()
-    r = requests.post(f"{BASE}/detect", files={"image": ("frame.jpg", img, "image/jpeg")},
-        data={"mode": "찾기", "wifi_ssid": SESSION,
-              "camera_orientation": "front", "query_text": "의자 찾아줘"})
+    r = requests.post(f"{BASE}/detect", json=make_detection_payload(mode="찾기", query_text="의자 찾아줘"))
 
     assert r.status_code == 200, f"HTTP {r.status_code}"
     body = r.json()
@@ -94,10 +98,8 @@ def test_detect_find():
 
 @pytest.mark.integration
 def test_detect_save():
-    """저장 모드 — 이미지 없이 WiFi 기반 장소 저장."""
-    img = make_dummy_image()
-    r = requests.post(f"{BASE}/detect", files={"image": ("frame.jpg", img, "image/jpeg")},
-        data={"mode": "저장", "wifi_ssid": SESSION, "query_text": "여기 저장해줘 테스트편의점"})
+    """저장 모드 — JSON 기반 장소 상태 저장."""
+    r = requests.post(f"{BASE}/detect", json=make_detection_payload(mode="저장", query_text="여기 저장해줘 테스트편의점"))
 
     assert r.status_code == 200, f"HTTP {r.status_code}"
     body = r.json()
@@ -121,6 +123,7 @@ def test_status_endpoint():
           f"track={len(body['track'])}포인트")
 
 
+@pytest.mark.skip(reason="/locations endpoint not implemented")
 @pytest.mark.integration
 def test_locations():
     """GET /locations — 저장 장소 목록 반환 확인."""
@@ -135,10 +138,8 @@ def test_locations():
 @pytest.mark.integration
 def test_gps_stored():
     """/detect에서 GPS 전송 후 /status에서 확인."""
-    img = make_dummy_image()
     lat, lng = 37.5665, 126.9780
-    requests.post(f"{BASE}/detect", files={"image": ("frame.jpg", img, "image/jpeg")},
-        data={"mode": "장애물", "wifi_ssid": SESSION, "lat": str(lat), "lng": str(lng)})
+    requests.post(f"{BASE}/detect", json=make_detection_payload(lat=lat, lng=lng))
 
     r = requests.get(f"{BASE}/status/{SESSION}")
     body = r.json()

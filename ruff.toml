@@ -1,6 +1,4 @@
-# Ruff: depth_anything_v2 벤더 트리는 업스트림 스타일(한 줄 복문 등) 유지
 [lint]
 
 [lint.per-file-ignores]
-"depth_anything_v2/**" = ["E701", "E702", "E402"]
 "legacy/**" = ["E701", "E702", "E402"]

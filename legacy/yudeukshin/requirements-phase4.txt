@@ -1,8 +1,0 @@
-# Phase 4 검증 스크립트용 의존성 (프로젝트 전체와 병합해 사용)
-opencv-python-headless
-numpy
-torch
-ultralytics
-ddgs
-pillow
-easyocr

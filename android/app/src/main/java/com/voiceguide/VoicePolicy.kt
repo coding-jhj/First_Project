@@ -22,7 +22,9 @@ object VoicePolicy {
         val vehicleKo: Set<String>, val animalKo: Set<String>, val cautionKo: Set<String>,
         val everydayKo: Set<String>, val criticalKo: Set<String>, val voteBypassKo: Set<String>,
         val vehicleCriticalM: Double, val animalCriticalM: Double,
-        val bboxCalibArea: Float, val nearVehicleAreaRatio: Float, val cautionAreaRatio: Float,
+        val bboxCalibArea: Float,
+        val bboxCalibAreaByClass: Map<String, Float>,
+        val nearVehicleAreaRatio: Float, val cautionAreaRatio: Float,
         val findHazardAreaRatio: Float, val findHazardAreaMultiplier: Float,
         val heldAreaInHand: Float, val heldAreaFront: Float, val heldAreaNear: Float,
         val clampMinM: Double, val clampMaxM: Double, val closeFaceM: Double, val halfMeterUntilM: Double,
@@ -96,13 +98,19 @@ object VoicePolicy {
         return "약 $r${s.meterSuffix}"
     }
 
-    fun formatDistBbox(w: Float, h: Float): String {
+    fun calcDistBboxM(classKo: String, w: Float, h: Float): Double {
         val s = requireSnap()
         val area = w * h
-        val calib = s.bboxCalibArea.toDouble()
-        val dist = if (area > 0f) sqrt(calib / area) else 99.0
-        return formatDistMeters(dist)
+        val calib = (s.bboxCalibAreaByClass[classKo] ?: s.bboxCalibArea).toDouble()
+        return if (area > 0f) sqrt(calib / area) else 99.0
     }
+
+    fun calcDistBboxM(w: Float, h: Float): Double = calcDistBboxM("", w, h)
+
+    fun formatDistBbox(classKo: String, w: Float, h: Float): String =
+        formatDistMeters(calcDistBboxM(classKo, w, h))
+
+    fun formatDistBbox(w: Float, h: Float): String = formatDistBbox("", w, h)
 
     private fun parsePolicy(raw: String): Snap {
         val root = JSONObject(raw)
@@ -126,6 +134,7 @@ object VoicePolicy {
             vehicleCriticalM = alert.getDouble("vehicle_critical_m"),
             animalCriticalM = alert.getDouble("animal_critical_m"),
             bboxCalibArea = od.getDouble("bbox_calib_area").toFloat(),
+            bboxCalibAreaByClass = parseBboxCalibByClass(od),
             nearVehicleAreaRatio = od.getDouble("near_vehicle_area_ratio").toFloat(),
             cautionAreaRatio = od.getDouble("caution_area_ratio").toFloat(),
             findHazardAreaRatio = od.getDouble("find_hazard_area_ratio").toFloat(),
@@ -142,5 +151,12 @@ object VoicePolicy {
             heldFrontMaxM = held.getDouble("immediate_front_max_m"),
             heldNearMaxM = held.getDouble("near_max_m"),
         )
+    }
+
+    private fun parseBboxCalibByClass(od: JSONObject): Map<String, Float> {
+        val byClass = od.optJSONObject("bbox_calib_area_by_class") ?: return emptyMap()
+        val result = mutableMapOf<String, Float>()
+        byClass.keys().forEach { key -> result[key] = byClass.getDouble(key).toFloat() }
+        return result
     }
 }

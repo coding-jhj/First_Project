@@ -32,13 +32,11 @@ import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -52,8 +50,8 @@ import kotlin.math.abs
  *
  * 앱의 모든 기능을 총괄합니다:
  *   - CameraX로 1초마다 이미지 캡처
- *   - ONNX 온디바이스 추론 (서버 없이 폰 단독 동작)
- *   - 서버 연동 시 Depth V2 정밀 거리 추정
+ *   - TFLite 온디바이스 추론 (서버 없이 폰 단독 동작)
+ *   - 서버 연동 시 온디바이스 탐지 결과 JSON 동기화
  *   - STT로 음성 명령 인식 (11가지 모드)
  *   - TTS로 한국어 음성 안내
  *   - 위험도 낮은 알림은 비프음으로만 (경고 피로 방지)
@@ -62,7 +60,7 @@ import kotlin.math.abs
  *
  * 전체 흐름:
  *   onCreate → TTS 초기화 → "시작할까요?" 음성 → "네" → 카메라 권한 요청
- *   → 카메라 시작 → 1초마다 캡처 → ONNX 또는 서버 추론 → TTS 안내
+ *   → 카메라 시작 → 1초마다 캡처 → TFLite 온디바이스 추론 → TTS 안내
  */
 class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEventListener {
 
@@ -102,6 +100,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private val detectionHistory = ArrayDeque<Set<String>>()
     private val VOTE_WINDOW    = 3
     private val VOTE_MIN_COUNT = 2
+    @Volatile private var lastMvpUpdateTime = 0L
+    @Volatile private var lastMvpSignature = ""
 
     private val classLastSpoken = mutableMapOf<String, Long>()
     private val CLASS_COOLDOWN_MS = 5000L  // 음성 안내 후 같은 사물 재발화 간격
@@ -116,6 +116,34 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         return detections.filter { d ->
             d.classKo in VoicePolicy.voteBypassKo() || (counts[d.classKo] ?: 0) >= VOTE_MIN_COUNT
         }
+    }
+
+    private fun shouldRunMvpUpdate(mode: String, overrideMode: String?, now: Long): Boolean {
+        if (overrideMode != null || mode == "질문" || mode == "들고있는것") return true
+        if (lastMvpUpdateTime == 0L || now - lastMvpUpdateTime >= MVP_UPDATE_INTERVAL_MS) {
+            lastMvpUpdateTime = now
+            return true
+        }
+        return false
+    }
+
+    private fun buildMvpSignature(detections: List<Detection>, mode: String): String {
+        if (detections.isEmpty()) return "$mode:$findTarget:empty"
+        return detections.take(3).joinToString(
+            separator = "|",
+            prefix = "$mode:$findTarget:"
+        ) { d ->
+            val xBucket = (d.cx * 8f).toInt()
+            val yBucket = (d.cy * 8f).toInt()
+            val areaBucket = (d.w * d.h * 20f).toInt()
+            "${d.classKo}:$xBucket:$yBucket:$areaBucket"
+        }
+    }
+
+    private fun consumeMvpChange(signature: String, force: Boolean): Boolean {
+        if (!force && signature == lastMvpSignature) return false
+        lastMvpSignature = signature
+        return true
     }
 
     /**
@@ -158,6 +186,41 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         return result
     }
 
+    private fun compactForServer(detections: List<Detection>): List<Detection> {
+        return detections
+            .filter { it.confidence >= SERVER_CONFIDENCE_MIN || it.classKo in VoicePolicy.voteBypassKo() }
+            .sortedWith(compareByDescending<Detection> { if (it.classKo in VoicePolicy.voteBypassKo()) 1 else 0 }
+                .thenByDescending { it.w * it.h }
+                .thenByDescending { it.confidence })
+            .take(SERVER_OBJECT_LIMIT)
+    }
+
+    private fun detectionUploadSignature(detections: List<Detection>): String {
+        return detections.joinToString("|") { d ->
+            val areaBucket = ((d.w * d.h) * 100f).toInt()
+            val xBucket = (d.cx * 10f).toInt()
+            "${d.classKo}:$xBucket:$areaBucket"
+        }
+    }
+
+    private fun shouldUploadDetectionJson(detections: List<Detection>, mode: String): Boolean {
+        val now = System.currentTimeMillis()
+        val signature = detectionUploadSignature(detections)
+        if (mode == "질문" || mode == "찾기" || mode == "들고있는것" ||
+            frameSeq.get() % SERVER_FORCE_SEND_FRAMES == 0) {
+            lastDetectionUploadSignature = signature
+            lastDetectionUploadTime = now
+            return true
+        }
+        if (now - lastDetectionUploadTime < SERVER_UPLOAD_INTERVAL_MS) return false
+
+        if (signature == lastDetectionUploadSignature) return false
+
+        lastDetectionUploadSignature = signature
+        lastDetectionUploadTime = now
+        return true
+    }
+
     /** 두 bbox의 IoU(교집합/합집합 비율) 계산. 0~1 범위. */
     private fun iouOverlap(a: Detection, b: Detection): Float {
         val ax1 = a.cx - a.w / 2f;  val ax2 = a.cx + a.w / 2f
@@ -170,32 +233,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         val inter = (ix2 - ix1) * (iy2 - iy1)
         return inter / (a.w * a.h + b.w * b.h - inter)
     }
-    private fun axisAlignedObbPoints(x: Float, y: Float, w: Float, h: Float): List<Float> = listOf(
-        x, y,
-        x + w, y,
-        x + w, y + h,
-        x, y + h
-    ).map { it.coerceIn(0f, 1f) }
-
-    private fun parseObbPoints(arr: JSONArray?): List<Float>? {
-        if (arr == null) return null
-        val out = ArrayList<Float>(8)
-        if (arr.length() >= 8 && arr.opt(0) is Number) {
-            for (i in 0 until 8) out.add(arr.optDouble(i).toFloat().coerceIn(0f, 1f))
-            return out
-        }
-        if (arr.length() >= 4) {
-            for (i in 0 until 4) {
-                val point = arr.optJSONArray(i) ?: return null
-                if (point.length() < 2) return null
-                out.add(point.optDouble(0).toFloat().coerceIn(0f, 1f))
-                out.add(point.optDouble(1).toFloat().coerceIn(0f, 1f))
-            }
-            return out
-        }
-        return null
-    }
-
     // 질문 응답 직후 periodic TTS 억제 — 겹침 방지 (3초간 periodic silent 처리)
     @Volatile private var suppressPeriodicUntil = 0L
     // FPS 측정 — 마지막 요청 시각과 서버 응답시간(ms) 기록
@@ -211,7 +248,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     // ── HTTP 클라이언트 (서버 연동 — 선택 사항) ────────────────────────
     // connectTimeout: 서버 연결 최대 대기 5초
-    // readTimeout: 서버 응답 최대 대기 8초 (YOLO+Depth 추론 시간 고려)
+    // readTimeout: 서버 응답 최대 대기 8초 (JSON 저장/대시보드 갱신 시간 고려)
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(8, TimeUnit.SECONDS)
@@ -242,13 +279,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     @Volatile private var isListening = false      // STT 활성 중 → TTS 차단
     @Volatile private var autoListenEnabled = false // TTS 끝나면 자동 재청취
 
-    // ── ElevenLabs MediaPlayer (겹침 방지용 단일 인스턴스) ───────────────
-    private var currentMediaPlayer: android.media.MediaPlayer? = null
-    @Volatile private var isElevenLabsSpeaking = false
     @Volatile private var pendingStatusText = ""  // TTS 재생 시작 시점에 tvStatus 동기화
-    private val ttsExecutor = Executors.newSingleThreadExecutor()
-    // 요청 ID: 네트워크 응답이 왔을 때 최신 요청인지 확인 (stale 재생 방지)
-    private val ttsRequestId = java.util.concurrent.atomic.AtomicInteger(0)
 
     // ── 특정 버스 대기 ──────────────────────────────────────────────────
 
@@ -261,31 +292,39 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     @Volatile private var currentLat = 0.0  // 현재 GPS 위도 (서버 /detect 전송용)
     @Volatile private var currentLng = 0.0  // 현재 GPS 경도
     @Volatile private var lastGpsSentTime = 0L
+    @Volatile private var lastDetectionUploadTime = 0L
+    @Volatile private var lastDetectionUploadSignature = ""
     private var locationManager: android.location.LocationManager? = null
     private lateinit var fusedLocationClient: com.google.android.gms.location.FusedLocationProviderClient
     private val locationListener = android.location.LocationListener { loc ->
         updateCurrentLocation(loc, "listener:${loc.provider}")
     }
 
-    // ── ONNX 온디바이스 추론 ───────────────────────────────────────────
-    private var yoloDetector: YoloDetector? = null
-    private val stairsDetector = StairsDetector()
+    // ── TFLite 온디바이스 추론 ─────────────────────────────────────────
+    private var tfliteDetector: TfliteYoloDetector? = null
+    private val mvpPipeline = MvpPipeline()
 
     companion object {
         private const val PERM_CODE          = 100  // 카메라 + 마이크 (앱 시작 시)
         private const val PERM_CODE_LOCATION = 101  // GPS — 위치 권한 요청 시
         private const val PREFS_NAME       = "voiceguide"  // SharedPreferences 이름
         private const val PREF_URL         = "server_url"  // 저장된 서버 URL 키
+        private const val PREF_FORCE_ON_DEVICE = "force_on_device"  // 서버 URL이 있어도 온디바이스 우선
         private const val PREF_DEVICE_ID   = "device_id"   // 앱 설치별 대시보드 세션 ID
         private const val DEFAULT_SERVER_URL =
             "https://voiceguide-1063164560758.asia-northeast3.run.app"
         private const val PREF_LOCATIONS   = "saved_locations"  // 저장 장소 JSON 배열 키
         private const val INTERVAL_MS      = 50L           // 캡처 간격: 50ms — isSending 게이트가 실제 fps 제어
-        private const val MAX_ON_DEVICE_IN_FLIGHT = 3      // 온디바이스 동시 추론 최대 수
+        private const val MAX_ON_DEVICE_IN_FLIGHT = 1      // TFLite 안정성 우선: 단일 in-flight
         private const val MAX_SERVER_IN_FLIGHT    = 4      // 서버 동시 요청 최대 수
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
         private const val FAIL_WARN_COUNT  = 3             // 연속 3회 실패 시 경고
         private const val GPS_SEND_INTERVAL_MS = 3000L     // 대시보드 위치 갱신 최소 간격
+        private const val MVP_UPDATE_INTERVAL_MS = 750L    // vote/dedup/MVP/TTS/JSON 갱신 주기
+        private const val SERVER_UPLOAD_INTERVAL_MS = 250L // 서버 JSON 최소 전송 간격
+        private const val SERVER_FORCE_SEND_FRAMES = 5     // 변화가 없어도 N프레임마다 대시보드 갱신
+        private const val SERVER_OBJECT_LIMIT = 5          // Android -> 서버 객체 수 상한
+        private const val SERVER_CONFIDENCE_MIN = 0.45f    // 낮은 확신도 객체 전송 차단
         private const val CSV_LOG_ENABLED  = true          // 성능 CSV 로깅 (항상 활성화)
     }
 
@@ -327,7 +366,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         fusedLocationClient = com.google.android.gms.location.LocationServices
             .getFusedLocationProviderClient(this)
         initSpeechRecognizer()
-        tryInitYoloDetector()
+        tryInitTfliteDetector()
         refreshPolicyFromServerAsync()
 
         // Google Assistant shortcut intent 처리
@@ -381,8 +420,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         return saved.ifBlank { DEFAULT_SERVER_URL }
     }
 
-    private fun getConfiguredServerUrl(): String =
-        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_URL, "")?.trim() ?: ""
+    private fun getConfiguredServerUrl(): String {
+        val saved = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getString(PREF_URL, "")?.trim() ?: ""
+        return saved.ifBlank { DEFAULT_SERVER_URL }
+    }
+
+    private fun isForceOnDeviceEnabled(): Boolean =
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(PREF_FORCE_ON_DEVICE, false)
 
     private fun getDeviceSessionId(): String {
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
@@ -412,13 +456,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             text = "디버그 모드 (FPS / 추론속도)"
             isChecked = debugVisible
         }
-
+        val swForceOnDevice = android.widget.Switch(ctx).apply {
+            text = "온디바이스 우선"
+            isChecked = isForceOnDeviceEnabled()
+        }
         layout.addView(tvUrlLabel)
         layout.addView(etUrl)
         layout.addView(android.widget.Space(ctx).apply {
             minimumHeight = 32
         })
         layout.addView(swDebug)
+        layout.addView(swForceOnDevice)
 
         try {
             androidx.appcompat.app.AlertDialog.Builder(ctx)
@@ -429,6 +477,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                         .edit()
                         .putString(PREF_URL, url)
+                        .putBoolean(PREF_FORCE_ON_DEVICE, swForceOnDevice.isChecked)
                         .apply()
                     debugVisible = swDebug.isChecked
                     val tvDebug = findViewById<android.widget.TextView>(R.id.tvDebug)
@@ -466,7 +515,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         // 앱 종료 시 모든 리소스 해제 (메모리 누수 방지)
         tts.shutdown()
         speechRecognizer.destroy()
-        yoloDetector?.close()         // ONNX 세션 닫기
+        tfliteDetector?.close()
         cameraExecutor.shutdown()     // 카메라 스레드 종료
         handler.removeCallbacksAndMessages(null)  // 예약된 루프 전부 취소
         super.onDestroy()
@@ -586,9 +635,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }
         // TTS 즉시 중단 후 STT 시작 (간섭 방지)
         tts.stop()
-        currentMediaPlayer?.let { try { if (it.isPlaying) it.stop(); it.release() } catch (_: Exception) {} }
-        currentMediaPlayer = null
-        isElevenLabsSpeaking = false
         isListening = true
         val intent = android.content.Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             // WEB_SEARCH: 짧은 명령어에 최적화 (FREE_FORM보다 인식률 높음)
@@ -756,23 +802,47 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
      * 매칭 없으면 "unknown" 반환 → handleSttResult에서 "다시 말씀해 주세요" 처리.
      */
     private fun classifyKeyword(text: String): String {
+        val normalized = text.replace("\\s+".toRegex(), "").lowercase(Locale.KOREAN)
+        if (listOf("이거뭐", "이게뭐", "이건뭐", "손에든", "손에뭐", "들고있는", "바로앞뭐")
+                .any { normalized.contains(it) }) {
+            return "들고있는것"
+        }
+        if (listOf("찾아", "어디있", "어딨", "어디야", "위치")
+                .any { normalized.contains(it) }) {
+            return "찾기"
+        }
+        if (listOf("지금뭐", "뭐가있", "주변", "상황", "앞에뭐")
+                .any { normalized.contains(it) }) {
+            return "질문"
+        }
+        if (listOf("멈춰", "그만", "중지", "스톱", "일시정지")
+                .any { normalized.contains(it) }) {
+            return "중지"
+        }
+        if (listOf("다시시작", "계속", "재시작")
+                .any { normalized.contains(it) }) {
+            return "재시작"
+        }
         for ((mode, keywords) in STT_KEYWORDS) {
             if (keywords.any { text.contains(it) }) return mode
         }
         return "unknown"
     }
 
-    // ── ONNX 온디바이스 추론 초기화 ────────────────────────────────────
+    // ── TFLite 온디바이스 추론 초기화 ──────────────────────────────────
 
-    private fun tryInitYoloDetector() {
+    private fun tryInitTfliteDetector() {
         // 백그라운드 스레드에서 초기화 (모델 로딩이 느려서 UI 스레드에서 하면 앱 멈춤)
         Thread {
             try {
-                yoloDetector = YoloDetector(this)  // assets에서 ONNX 로드
-                runOnUiThread { tvStatus.text = "온디바이스 준비 완료 — 분석 시작을 누르세요" }
-            } catch (_: Exception) {
-                // assets에 yolo11n.onnx 없는 경우 → 서버 모드 안내
-                runOnUiThread { tvStatus.text = "ONNX 모델 없음 — 서버 URL을 입력하세요" }
+                tfliteDetector = TfliteYoloDetector(this)
+                runOnUiThread {
+                    tvStatus.text = "온디바이스 준비 완료 — 분석 시작을 누르세요"
+                }
+            } catch (e: Exception) {
+                // assets에 yolo26n_float32.tflite가 없는 경우 → 온디바이스 추론 불가
+                Log.e("VG_PERF", "YOLO detector init failed", e)
+                runOnUiThread { tvStatus.text = "온디바이스 모델 없음 — assets 모델 파일을 확인하세요" }
             }
         }.start()
     }
@@ -955,7 +1025,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build()
             imageAnalysis = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setTargetResolution(android.util.Size(480, 360))
+                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                .setTargetResolution(android.util.Size(320, 320))
                 .build()
                 .also { analysis ->
                     analysis.setAnalyzer(cameraExecutor) { imageProxy ->
@@ -995,7 +1066,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         btnToggle.backgroundTintList = android.content.res.ColorStateList.valueOf(0xFFDC2626.toInt())
         tvStatus.text  = "분석 중..."
         startGpsUpdates()
-        scheduleFallbackCapture()
         scheduleWatchdog()
         scheduleAutoListen()
     }
@@ -1036,19 +1106,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         }, INTERVAL_MS)
     }
 
-    private fun scheduleFallbackCapture() {
-        handler.postDelayed({
-            if (!isAnalyzing.get()) return@postDelayed
-            val streamStalled = lastStreamFrameTime == 0L ||
-                System.currentTimeMillis() - lastStreamFrameTime > 1500L
-            if (streamStalled && inFlightCount.get() == 0) {
-                Log.w("VG_FLOW", "stream analyzer stalled; using ImageCapture fallback")
-                captureAndProcess()
-            }
-            scheduleFallbackCapture()
-        }, 1000L)
-    }
-
     private fun scheduleWatchdog() {
         // Watchdog: 6초 동안 성공 응답이 없으면 음성으로 경고
         handler.postDelayed({
@@ -1062,14 +1119,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     }
 
     private fun analyzeStreamFrame(imageProxy: ImageProxy) {
+        var acquiredInFlight = false
         try {
             if (!isAnalyzing.get()) return
             checkRevisit()
 
             val now = System.currentTimeMillis()
             if (now - lastStreamFrameTime < INTERVAL_MS) return
-            val route = if (shouldUseOnDeviceDetector()) "on_device" else "server"
-            val maxInFlight = if (route == "server") MAX_SERVER_IN_FLIGHT else MAX_ON_DEVICE_IN_FLIGHT
+            val route = if (shouldUseOnDeviceDetector()) "on_device" else "unavailable"
+            val maxInFlight = MAX_ON_DEVICE_IN_FLIGHT
             if (inFlightCount.getAndIncrement() >= maxInFlight) {
                 inFlightCount.decrementAndGet()
                 if (now - lastStreamSkipLogTime > 1000L) {
@@ -1078,92 +1136,21 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 }
                 return
             }
+            acquiredInFlight = true
             lastStreamFrameTime = now
 
             val requestId = nextRequestId()
-            val file = imageProxyToJpegFile(imageProxy)
-            Log.d("VG_FLOW", "request_id=$requestId route=$route mode=$currentMode stream_file=${file.length()}B")
-            if (route == "on_device") processOnDevice(file, requestId)
-            else sendToServer(file, requestId)
+            Log.d("VG_FLOW", "request_id=$requestId route=$route mode=$currentMode stream=${imageProxy.width}x${imageProxy.height} format=${imageProxy.format} rotation=${imageProxy.imageInfo.rotationDegrees}")
+            if (route == "on_device") processOnDevice(imageProxy, requestId)
+            else {
+                handleFail()
+            }
         } catch (e: Exception) {
-            if (inFlightCount.get() > 0) inFlightCount.decrementAndGet()
             Log.e("VG_FLOW", "stream analysis failed", e)
-            handleFail()
+            if (acquiredInFlight) handleFail()
         } finally {
             imageProxy.close()
         }
-    }
-
-    private fun imageProxyToJpegFile(imageProxy: ImageProxy): File {
-        val nv21 = yuv420ToNv21(imageProxy)
-        val yuvImage = android.graphics.YuvImage(
-            nv21,
-            android.graphics.ImageFormat.NV21,
-            imageProxy.width,
-            imageProxy.height,
-            null
-        )
-        val jpegBytes = ByteArrayOutputStream().use { out ->
-            yuvImage.compressToJpeg(
-                android.graphics.Rect(0, 0, imageProxy.width, imageProxy.height),
-                75,
-                out
-            )
-            out.toByteArray()
-        }
-
-        val rotation = imageProxy.imageInfo.rotationDegrees
-        val outFile = File.createTempFile("vg_stream_", ".jpg", cacheDir)
-        if (rotation == 0) {
-            outFile.writeBytes(jpegBytes)
-            return outFile
-        }
-
-        val raw = android.graphics.BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
-        val matrix = android.graphics.Matrix().apply { postRotate(rotation.toFloat()) }
-        val rotated = android.graphics.Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, matrix, true)
-        outFile.outputStream().use { stream ->
-            rotated.compress(android.graphics.Bitmap.CompressFormat.JPEG, 75, stream)
-        }
-        raw.recycle()
-        rotated.recycle()
-        return outFile
-    }
-
-    private fun yuv420ToNv21(imageProxy: ImageProxy): ByteArray {
-        val image = imageProxy.image ?: throw IllegalStateException("ImageProxy has no image")
-        val width = image.width
-        val height = image.height
-        val ySize = width * height
-        val uvSize = width * height / 2
-        val nv21 = ByteArray(ySize + uvSize)
-
-        val yPlane = image.planes[0]
-        val uPlane = image.planes[1]
-        val vPlane = image.planes[2]
-
-        var out = 0
-        val yBuffer = yPlane.buffer
-        for (row in 0 until height) {
-            val rowStart = row * yPlane.rowStride
-            yBuffer.position(rowStart)
-            yBuffer.get(nv21, out, width)
-            out += width
-        }
-
-        val uBuffer = uPlane.buffer
-        val vBuffer = vPlane.buffer
-        val chromaHeight = height / 2
-        val chromaWidth = width / 2
-        for (row in 0 until chromaHeight) {
-            for (col in 0 until chromaWidth) {
-                val vIndex = row * vPlane.rowStride + col * vPlane.pixelStride
-                val uIndex = row * uPlane.rowStride + col * uPlane.pixelStride
-                nv21[out++] = vBuffer.get(vIndex)
-                nv21[out++] = uBuffer.get(uIndex)
-            }
-        }
-        return nv21
     }
 
     private fun captureAndProcess() {
@@ -1180,13 +1167,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                     inFlightCount.incrementAndGet()
                     val requestId = nextRequestId()
-                    val route = if (shouldUseOnDeviceDetector()) "on_device" else "server"
+                    val route = if (shouldUseOnDeviceDetector()) "on_device" else "unavailable"
                     Log.d("VG_FLOW", "request_id=$requestId route=$route mode=$currentMode file=${file.length()}B")
                     if (route == "on_device") processOnDevice(file, requestId)
-                    else sendToServer(file, requestId)
+                    else {
+                        file.delete()
+                        handleFail()
+                    }
                 }
                 override fun onError(e: ImageCaptureException) {
-                    inFlightCount.decrementAndGet()
                     Log.e("VG_FLOW", "capture failed", e)
                     handleFail()
                 }
@@ -1197,10 +1186,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         "and-${System.currentTimeMillis()}-${frameSeq.incrementAndGet()}"
 
     private fun shouldUseOnDeviceDetector(): Boolean {
-        if (yoloDetector == null) return false
-        if (!isNetworkAvailable()) return currentMode == "장애물" || currentMode == "찾기"
-        if (getConfiguredServerUrl().isNotBlank()) return false
-        return currentMode == "장애물" || currentMode == "찾기"
+        if (tfliteDetector == null) return false
+        if (isForceOnDeviceEnabled()) return true
+        return true
+    }
+
+    private fun rejectServerInferenceFallback(imageFile: File, requestId: String) {
+        Log.w("VG_FLOW", "request_id=$requestId server image inference disabled; waiting for on-device detector")
+        imageFile.delete()
+        handleFail()
     }
 
     private fun isNetworkAvailable(): Boolean {
@@ -1218,8 +1212,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
     /**
      * 질문 모드 전용 즉시 캡처.
-     * 서버에 mode="질문" 전송 → tracker 누적 상태 포함 포괄 응답을 받음.
-     * isSending 체크를 우회해서 항상 즉시 실행 (사용자 직접 질문이므로).
+     * 온디바이스로 탐지한 뒤 JSON을 서버에 전송하고, 서버가 없으면 로컬 안내를 사용한다.
      */
     private fun captureAndProcessAsQuestion() {
         val file = File.createTempFile("vg_q_", ".jpg", cacheDir)
@@ -1228,9 +1221,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             cameraExecutor,
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    sendToServerWithMode(file, "질문", nextRequestId())
+                    inFlightCount.incrementAndGet()
+                    processOnDevice(file, nextRequestId(), "질문")
                 }
                 override fun onError(e: ImageCaptureException) {
+                    file.delete()
                     speak("사진을 찍지 못했어요.")
                 }
             })
@@ -1247,134 +1242,92 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
             cameraExecutor,
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
-                    sendToServerWithMode(file, "들고있는것", nextRequestId())
+                    val requestId = nextRequestId()
+                    inFlightCount.incrementAndGet()
+                    processOnDevice(file, requestId, "들고있는것")
                 }
                 override fun onError(e: ImageCaptureException) {
+                    file.delete()
                     speak("사진을 찍지 못했어요.")
                 }
             })
     }
 
-    /**
-     * 특정 모드로 서버에 전송. 질문 모드 등 currentMode를 바꾸지 않고 1회성 전송 시 사용.
-     */
-    private fun sendToServerWithMode(imageFile: File, mode: String, requestId: String) {
-        val serverUrl = getSavedServerUrl().trimEnd('/')
-        if (serverUrl.isEmpty()) {
-            imageFile.delete()
-            speak("서버가 연결되어 있지 않아요. 서버 URL을 입력해 주세요.")
-            return
-        }
-        Thread {
-            try {
-                val reqStart = System.currentTimeMillis()
-                Log.d("VG_GPS", "send question lat=$currentLat lng=$currentLng")
-                val bodyBuilder = MultipartBody.Builder().setType(MultipartBody.FORM)
-                    .addFormDataPart("image", "frame.jpg",
-                        imageFile.asRequestBody("image/jpeg".toMediaType()))
-                    .addFormDataPart("camera_orientation", cameraOrientation)
-                    .addFormDataPart("wifi_ssid", getWifiSsid())
-                    .addFormDataPart("device_id", getDeviceSessionId())
-                    .addFormDataPart("mode", mode)
-                    .addFormDataPart("query_text", "")
-                    .addFormDataPart("request_id", requestId)
-                if (hasValidLocation()) {
-                    bodyBuilder
-                        .addFormDataPart("lat", currentLat.toString())
-                        .addFormDataPart("lng", currentLng.toString())
-                }
-                val body = bodyBuilder.build()
-                val response = httpClient.newCall(
-                    Request.Builder().url("$serverUrl/detect").post(body).build()
-                ).execute()
-                val roundTripMs = System.currentTimeMillis() - reqStart
-                val json     = JSONObject(response.body?.string() ?: "{}")
-                val sentence = json.optString("sentence", "확인하지 못했어요.")
-                val processMs = json.optInt("process_ms", -1)
-                val perf = json.optJSONObject("perf")
-                Log.d("VG_LINK",
-                    "request_id=$requestId mode=$mode status=${response.code} total=${roundTripMs}ms " +
-                    "server=${processMs}ms perf=${perf?.toString() ?: "{}"}")
-                // 질문 응답 후 3초간 periodic capture의 TTS 억제
-                suppressPeriodicUntil = System.currentTimeMillis() + 3000L
-                val alertMode = json.optString("alert_mode", "normal")
-                handleSuccess(sentence, alertMode)  // dedup 로직 통합 (직접 speak() 우회 방지)
-            } catch (e: Exception) {
-                Log.e("VG_LINK", "request_id=$requestId mode=$mode server request failed", e)
-                runOnUiThread { speak("서버 연결에 실패했어요.") }
-            } finally {
-                imageFile.delete()
-            }
-        }.start()
-    }
-
-    /**
-     * 서버 전송 전 이미지 최적화 — FPS 개선 핵심
-     *
-     * 원본 이미지(예: 4000×3000, JPEG 90%) → 480px 폭, JPEG 65%로 변환
-     * 전송 크기 약 40~60% 감소 → 네트워크 지연 단축 → 체감 FPS 향상
-     * YOLO 입력은 어차피 640×640으로 리사이즈되므로 품질 손실 없음
-     */
-    private fun optimizeImageForUpload(file: File): File {
-        return try {
-            val bmp = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
-                ?: return file
-
-            val maxW = 480
-            val scaled = if (bmp.width > maxW) {
-                val ratio = maxW.toFloat() / bmp.width
-                val newH  = (bmp.height * ratio).toInt()
-                android.graphics.Bitmap.createScaledBitmap(bmp, maxW, newH, true)
-                    .also { if (it != bmp) bmp.recycle() }
-            } else bmp
-
-            val out = File.createTempFile("vg_opt_", ".jpg", cacheDir)
-            out.outputStream().use { stream ->
-                scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, 65, stream)
-            }
-            scaled.recycle()
-            file.delete()
-            out
-        } catch (_: Exception) {
-            file
-        }
-    }
-
     // ── 온디바이스 추론 ─────────────────────────────────────────────────
 
-    private fun processOnDevice(imageFile: File, requestId: String) {
-        Thread {
-            val t0 = System.currentTimeMillis()
+    private fun processOnDevice(imageFile: File, requestId: String, overrideMode: String? = null) {
+        processOnDeviceInternal(imageFile, null, requestId, 0L, overrideMode)
+    }
+
+    private fun processOnDevice(imageProxy: ImageProxy, requestId: String, overrideMode: String? = null) {
+        processOnDeviceInternal(null, imageProxy, requestId, 0L, overrideMode)
+    }
+
+    private fun processOnDeviceInternal(
+        imageFile: File?,
+        imageProxy: ImageProxy?,
+        requestId: String,
+        initialPreprocessMs: Long,
+        overrideMode: String? = null
+    ) {
+        val work = Runnable {
             var bmp: android.graphics.Bitmap? = null
             try {
+                val effectiveMode = overrideMode ?: currentMode
                 val tDecode = System.currentTimeMillis()
-                bmp = decodeBitmapUpright(imageFile)
-                val decodeMs = System.currentTimeMillis() - tDecode
+                val frameBitmap = if (imageProxy == null) {
+                    decodeBitmapUpright(imageFile ?: throw IllegalStateException("missing image file"))
+                } else {
+                    null
+                }
+                bmp = frameBitmap
+                val decodeMs = initialPreprocessMs + if (frameBitmap != null) {
+                    System.currentTimeMillis() - tDecode
+                } else {
+                    0L
+                }
 
-                val imgW = bmp.width
-                val imgH = bmp.height
+                val rotation = imageProxy?.imageInfo?.rotationDegrees ?: 0
+                val imgW = if (imageProxy != null) {
+                    if (rotation % 180 == 0) imageProxy.width else imageProxy.height
+                } else {
+                    frameBitmap!!.width
+                }
+                val imgH = if (imageProxy != null) {
+                    if (rotation % 180 == 0) imageProxy.height else imageProxy.width
+                } else {
+                    frameBitmap!!.height
+                }
 
-                val tInfer = System.currentTimeMillis()
-                val detector = yoloDetector
+                val detector = tfliteDetector
                     ?: throw IllegalStateException("YOLO detector is not initialized")
-                // YOLO + StairsDetector 병렬 실행 (둘 다 bitmap 읽기만 하므로 thread-safe)
-                val yoloFuture   = java.util.concurrent.CompletableFuture.supplyAsync { detector.detect(bmp) }
-                val stairsFuture = java.util.concurrent.CompletableFuture.supplyAsync { stairsDetector.detect(bmp) }
-                val yoloDetections  = yoloFuture.get()
-                val stairsDetection = stairsFuture.get()
-                val rawDetections = stairsDetection?.let { yoloDetections + it } ?: yoloDetections
-                val inferMs = System.currentTimeMillis() - tInfer
+                val detectorResult = if (imageProxy != null) {
+                    detector.detect(imageProxy)
+                } else {
+                    detector.detect(frameBitmap!!)
+                }
+                val preprocessMs = decodeMs + detectorResult.preprocessMs
+                val yoloDetections = detectorResult.detections
+                val rawDetections = yoloDetections
+                val inferMs = detectorResult.inferMs
 
-                val tDedup = System.currentTimeMillis()
-                // 투표 필터 → 같은 클래스 중복 bbox 제거(IoU 기반) 순서로 처리
-                val voted = removeDuplicates(voteOnly(rawDetections))
-                val dedupMs = System.currentTimeMillis() - tDedup
+                val now = System.currentTimeMillis()
+                val shouldRunMvp = shouldRunMvpUpdate(effectiveMode, overrideMode, now)
+                val tMvp = System.currentTimeMillis()
+                val mvpFrame = if (shouldRunMvp) {
+                    // YOLO postprocess(NMS)는 매 프레임, 안정화/vote/dedup/MVP는 주기적으로만 수행한다.
+                    mvpPipeline.update(removeDuplicates(voteOnly(rawDetections)))
+                } else {
+                    null
+                }
+                val voted = mvpFrame?.detections ?: rawDetections
+                val mvpMs = if (shouldRunMvp) System.currentTimeMillis() - tMvp else 0L
+                val dedupMs = detectorResult.postprocessMs + mvpMs
 
-                val totalMs = System.currentTimeMillis() - t0
-
+                val totalMs = preprocessMs + inferMs + dedupMs
                 // 구조화 성능 로그 — Logcat에서 tag:VG_PERF 로 필터
                 android.util.Log.d("VG_PERF",
-                    "request_id|$requestId|route|on_device|decode|$decodeMs|infer|$inferMs|dedup|$dedupMs|total|$totalMs|objs|${voted.size}")
+                    "request_id|$requestId|route|on_device|model|${detector.modelName}|provider|${detector.executionProvider}|preprocess|$preprocessMs|infer|$inferMs|postprocess|$dedupMs|mvp|${if (shouldRunMvp) "run" else "skip"}|total|$totalMs|objs|${voted.size}")
 
                 // FPS < 10 이면 경고 로그
                 val estimatedFps = if (totalMs > 0) 1000f / totalMs else 0f
@@ -1387,13 +1340,14 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     val fps = calcFps()
                     val spark = buildSparkline()
                     lastFpsText = "${fps}fps $spark | 📱 ${inferMs}ms"
-                    tvMode.text = "[$currentMode] $lastFpsText"
+                    tvMode.text = "[$effectiveMode] $lastFpsText"
                     if (debugVisible) {
                         val tv = findViewById<android.widget.TextView>(R.id.tvDebug)
-                        tv.text = "경로   : ONNX\n" +
+                        tv.text = "경로   : ${detector.executionProvider}\n" +
                                   "요청ID : ${requestId.takeLast(6)}\n" +
+                                  "모델   : ${detector.modelName}\n" +
                                   "FPS    : ${fps}\n" +
-                                  "디코딩 : ${decodeMs}ms\n" +
+                                  "전처리 : ${preprocessMs}ms\n" +
                                   "추론   : ${inferMs}ms\n" +
                                   "후처리 : ${dedupMs}ms\n" +
                                   "전체   : ${totalMs}ms\n" +
@@ -1401,17 +1355,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     }
                 }
 
-                bmp.recycle(); bmp = null
+                bmp?.recycle(); bmp = null
                 // imageFile은 finally에서 삭제 (catch의 서버 fallback이 먼저 파일 필요)
 
                 Log.d("VG_DETECT", "=== 탐지 결과 ===")
-                Log.d("VG_DETECT", "raw: ${rawDetections.size}개 (yolo=${yoloDetections.size}, stairs=${if (stairsDetection != null) 1 else 0}) → dedup: ${voted.size}개")
+                Log.d("VG_DETECT", "raw: ${rawDetections.size}개(yolo=${yoloDetections.size}) → dedup: ${voted.size}개")
                 voted.forEachIndexed { i, d ->
                     Log.d("VG_DETECT", "  [$i] ${d.classKo} | conf=${String.format("%.2f", d.confidence)} | cx=${String.format("%.2f", d.cx)} | w=${String.format("%.2f", d.w)} h=${String.format("%.2f", d.h)} | area=${String.format("%.3f", d.w * d.h)}")
                 }
 
                 // 찾기 모드에서 대상 물체에 흰색 박스 표시
-                val markedDetections = if (currentMode == "찾기" && findTarget.isNotEmpty()) {
+                val markedDetections = if (effectiveMode == "찾기" && findTarget.isNotEmpty()) {
                     voted.map { it.copy(isFound = it.classKo.contains(findTarget)) }
                 } else voted
                 runOnUiThread {
@@ -1422,19 +1376,51 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     }
                 }
 
+                if (!shouldRunMvp) {
+                    imageFile?.delete()
+                    finishOnDeviceFrameWithoutNotification(requestId, "mvp_throttled")
+                    return@Runnable
+                }
+
+                val stableMvpFrame = mvpFrame ?: throw IllegalStateException("missing MVP frame")
+                val mvpSignature = buildMvpSignature(voted, effectiveMode)
+                val mvpChanged = consumeMvpChange(mvpSignature, force = overrideMode != null)
+                if (!mvpChanged) {
+                    Log.d("VG_DETECT", "→ MVP unchanged; skip SentenceBuilder/TTS/vibration/server JSON")
+                    imageFile?.delete()
+                    finishOnDeviceFrameWithoutNotification(requestId, "mvp_unchanged")
+                    return@Runnable
+                }
+
                 if (voted.isEmpty()) {
                     Log.d("VG_DETECT", "→ 장애물 없음")
-                    imageFile.delete()
-                    handleSuccess("주변에 장애물이 없어요.")
-                    return@Thread
+                    imageFile?.delete()
+                    sendDetectionJsonToServer(
+                        detections = voted,
+                        mode = effectiveMode,
+                        requestId = requestId,
+                        imgW = imgW,
+                        imgH = imgH,
+                        decodeMs = preprocessMs,
+                        inferMs = inferMs,
+                        dedupMs = dedupMs,
+                        totalMs = totalMs,
+                        fallbackSentence = "주변에 장애물이 없어요.",
+                        fallbackAlertMode = "silent",
+                    )
+                    return@Runnable
                 }
 
                 val (voiceDetections, shouldBeep) = classify(voted)
 
-                // 문장은 항상 전체 voted 기준 (가까운 것부터 정렬, 최대 3개)
-                val sorted   = voted.sortedByDescending { it.w * it.h }
-                val sentence = when (currentMode) {
+                // 문장은 안정화된 위험도 기준으로 정렬한다. 같은 위험도에서는 큰 물체를 먼저 안내한다.
+                val sorted = voted.sortedWith(
+                    compareByDescending<Detection> { it.riskScore }
+                        .thenByDescending { it.w * it.h }
+                )
+                val sentence = when (effectiveMode) {
                     "찾기" -> SentenceBuilder.buildFind(findTarget, sorted)
+                    "들고있는것" -> SentenceBuilder.buildHeld(sorted)
                     else  -> SentenceBuilder.build(sorted)
                 }
 
@@ -1445,37 +1431,185 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     voiceDetections.isNotEmpty() -> {
                         markClassesSpoken(voiceDetections)
                         val mode = when {
-                            currentMode == "찾기"                              -> "critical"
+                            effectiveMode == "찾기"                              -> "critical"
                             voiceDetections.any { it.classKo in VoicePolicy.voteBypassKo() } -> "critical"
                             else                                               -> "normal"
                         }
                         Log.d("VG_DETECT", "→ 음성 출력 (mode=$mode)")
-                        handleSuccess(sentence, mode)
+                        performVibrationFeedback(stableMvpFrame.vibrationPattern)
+                        sendDetectionJsonToServer(voted, effectiveMode, requestId, imgW, imgH, preprocessMs, inferMs, dedupMs, totalMs, sentence, mode)
                     }
                     shouldBeep -> {
                         Log.d("VG_DETECT", "→ 비프음")
-                        handleSuccess(sentence, "beep")
+                        performVibrationFeedback(stableMvpFrame.vibrationPattern)
+                        sendDetectionJsonToServer(voted, effectiveMode, requestId, imgW, imgH, preprocessMs, inferMs, dedupMs, totalMs, sentence, "beep")
                     }
                     else       -> {
                         Log.d("VG_DETECT", "→ 무음 (거리 멀거나 최근 안내 완료)")
-                        handleSuccess("주변에 장애물이 없어요.")
+                        sendDetectionJsonToServer(voted, effectiveMode, requestId, imgW, imgH, preprocessMs, inferMs, dedupMs, totalMs, sentence, "silent")
                     }
                 }
-                imageFile.delete()
+
+                imageFile?.delete()
             } catch (e: Exception) {
                 Log.e("VG_DETECT", "request_id=$requestId On-device detection failed", e)
                 bmp?.recycle()
-                if (isServerFallbackAvailable()) {
-                    sendToServer(imageFile, requestId)  // 온디바이스 실패 → 서버 시도 (서버도 실패시 handleFail)
-                } else {
-                    imageFile.delete()
-                    handleFail()
-                }
+                imageFile?.delete()
+                handleFail()
             }
-        }.start()
+        }
+        if (imageProxy != null) work.run() else Thread(work).start()
+    }
+
+    private fun sendDetectionJsonToServer(
+        detections: List<Detection>,
+        mode: String,
+        requestId: String,
+        imgW: Int,
+        imgH: Int,
+        decodeMs: Long,
+        inferMs: Long,
+        dedupMs: Long,
+        totalMs: Long,
+        fallbackSentence: String,
+        fallbackAlertMode: String,
+        forceUpload: Boolean = true,
+    ) {
+        val serverUrl = getSavedServerUrl().trimEnd('/')
+        if (serverUrl.isEmpty() || !isNetworkAvailable()) {
+            handleSuccess(fallbackSentence, fallbackAlertMode)
+            return
+        }
+
+        try {
+            val serverDetections = compactForServer(detections)
+            if (!forceUpload && !shouldUploadDetectionJson(serverDetections, mode)) {
+                Log.d("VG_LINK", "request_id=$requestId skip unchanged detection upload objects=${serverDetections.size}")
+                handleSuccess(fallbackSentence, fallbackAlertMode)
+                return
+            }
+            if (forceUpload) {
+                lastDetectionUploadSignature = detectionUploadSignature(serverDetections)
+                lastDetectionUploadTime = System.currentTimeMillis()
+            }
+
+            handleSuccess(fallbackSentence, fallbackAlertMode)
+            Thread {
+                uploadDetectionJson(
+                    serverUrl = serverUrl,
+                    detections = detections,
+                    serverDetections = serverDetections,
+                    mode = mode,
+                    requestId = requestId,
+                    imgW = imgW,
+                    imgH = imgH,
+                    decodeMs = decodeMs,
+                    inferMs = inferMs,
+                    dedupMs = dedupMs,
+                    totalMs = totalMs,
+                )
+            }.start()
+        } catch (e: Exception) {
+            Log.e("VG_LINK", "request_id=$requestId detection JSON scheduling failed", e)
+            handleSuccess(fallbackSentence, fallbackAlertMode)
+        }
+    }
+
+    private fun uploadDetectionJson(
+        serverUrl: String,
+        detections: List<Detection>,
+        serverDetections: List<Detection>,
+        mode: String,
+        requestId: String,
+        imgW: Int,
+        imgH: Int,
+        decodeMs: Long,
+        inferMs: Long,
+        dedupMs: Long,
+        totalMs: Long,
+    ) {
+        try {
+
+            val objects = JSONArray()
+            serverDetections.forEach { d ->
+                val x = (d.cx - d.w / 2f).coerceIn(0f, 1f)
+                val y = (d.cy - d.h / 2f).coerceIn(0f, 1f)
+                val w = d.w.coerceIn(0f, 1f)
+                val h = d.h.coerceIn(0f, 1f)
+                objects.put(JSONObject()
+                    .put("class_ko", d.classKo)
+                    .put("confidence", d.confidence.toDouble())
+                    .put("cx", d.cx.toDouble())
+                    .put("cy", d.cy.toDouble())
+                    .put("w", d.w.toDouble())
+                    .put("h", d.h.toDouble())
+                    .put("bbox_norm_xywh", JSONArray(listOf(x, y, w, h)))
+                    .put("distance_m", if (d.distanceM > 0f) d.distanceM.toDouble() else VoicePolicy.calcDistBboxM(d.w, d.h))
+                    .put("risk_score", d.riskScore.toDouble())
+                    .put("track_id", d.trackId)
+                    .put("vibration_pattern", d.vibrationPattern)
+                    .put("depth_source", "on_device_bbox"))
+            }
+
+            val payload = JSONObject()
+                .put("event_id", requestId)
+                .put("request_id", requestId)
+                .put("device_id", getDeviceSessionId())
+                .put("wifi_ssid", getWifiSsid())
+                .put("mode", mode)
+                .put("camera_orientation", cameraOrientation)
+                .put("query_text", if (mode == "찾기") findTarget else "")
+                .put("image_width", imgW)
+                .put("image_height", imgH)
+                .put("objects", objects)
+                .put("hazards", JSONArray())
+                .put("scene", JSONObject())
+                .put("client_perf", JSONObject()
+                    .put("decode_ms", decodeMs)
+                    .put("infer_ms", inferMs)
+                    .put("dedup_ms", dedupMs)
+                    .put("total_ms", totalMs))
+            if (hasValidLocation()) {
+                payload.put("lat", currentLat)
+                payload.put("lng", currentLng)
+            }
+
+            val reqStart = System.currentTimeMillis()
+            val body = payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+            val response = httpClient.newCall(
+                Request.Builder().url("$serverUrl/detect").post(body).build()
+            ).execute()
+            val roundTripMs = System.currentTimeMillis() - reqStart
+            sendGpsHeartbeat("detect-json")
+            val json = JSONObject(response.body?.string() ?: "{}")
+            val processMs = json.optInt("process_ms", -1)
+            lastProcessMs = processMs
+            Log.d("VG_LINK",
+                "request_id=$requestId route=json status=${response.code} total=${roundTripMs}ms " +
+                "server=${processMs}ms objects=${serverDetections.size}/${detections.size}")
+        } catch (e: Exception) {
+            Log.e("VG_LINK", "request_id=$requestId detection JSON upload failed", e)
+        }
     }
 
     /** JPEG 파일의 EXIF 회전 태그를 읽어 실제 화면 방향으로 비트맵을 회전한다. */
+    private fun performVibrationFeedback(pattern: VibrationPattern) {
+        if (pattern == VibrationPattern.NONE) return
+        val timings = when (pattern) {
+            VibrationPattern.SHORT -> longArrayOf(0, 45)
+            VibrationPattern.DOUBLE -> longArrayOf(0, 55, 65, 55)
+            VibrationPattern.URGENT -> longArrayOf(0, 90, 60, 90, 60, 140)
+            VibrationPattern.NONE -> return
+        }
+        val vibrator = getSystemService(VIBRATOR_SERVICE) as android.os.Vibrator
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            vibrator.vibrate(android.os.VibrationEffect.createWaveform(timings, -1))
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(timings, -1)
+        }
+    }
+
     private fun decodeBitmapUpright(file: File): android.graphics.Bitmap {
         val exif = android.media.ExifInterface(file.absolutePath)
         val degrees = when (exif.getAttributeInt(
@@ -1495,143 +1629,84 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         return rotated
     }
 
-    // ── 서버 전송 (선택 — URL 입력 시 Depth V2 정확도 향상) ──────────────
+    // ── 온디바이스 탐지 결과 JSON 전송 (새 아키텍처) ─────────────────────────
 
-    private fun sendToServer(imageFile: File, requestId: String) {
-        val serverUrl = getSavedServerUrl().trimEnd('/')
-        if (serverUrl.isEmpty()) {
-            imageFile.delete()
-            handleFail()
-            return
-        }
-        // 이 요청의 seq — 응답이 오래된 것이면 UI 반영 생략
-        val mySeq = requestId.substringAfterLast('-').toIntOrNull() ?: Int.MAX_VALUE
-
+    /**
+     * 온디바이스 추론 결과를 JSON으로 서버에 비동기 전송.
+     * TTS 흐름을 차단하지 않도록 fire & forget 방식으로 실행.
+     * 서버는 이미지 처리 없이 DB 저장 + tracker 업데이트만 수행.
+     */
+    private fun sendDetectionsJson(detections: List<Detection>, requestId: String) {
+        val serverUrl = getConfiguredServerUrl().trimEnd('/').ifBlank { return }
         Thread {
             try {
-                val reqStart = System.currentTimeMillis()
-                lastRequestTime = reqStart
-
-                val optimized = optimizeImageForUpload(imageFile)
-                val uploadBytes = optimized.length()
-                // 업로드 이미지 크기 — 서버 bbox 좌표 스케일링에 사용
-                val dimOpts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                android.graphics.BitmapFactory.decodeFile(optimized.absolutePath, dimOpts)
-                val uploadImgW = if (dimOpts.outWidth > 0) dimOpts.outWidth else 640
-                val uploadImgH = if (dimOpts.outHeight > 0) dimOpts.outHeight else 480
-                Log.d("VG_GPS", "send detect lat=$currentLat lng=$currentLng")
-
-                val bodyBuilder = MultipartBody.Builder().setType(MultipartBody.FORM)
-                    .addFormDataPart("image", "frame.jpg",
-                        optimized.asRequestBody("image/jpeg".toMediaType()))
-                    .addFormDataPart("camera_orientation", cameraOrientation)
-                    .addFormDataPart("wifi_ssid", getWifiSsid())
-                    .addFormDataPart("device_id", getDeviceSessionId())
-                    .addFormDataPart("mode", currentMode)
-                    .addFormDataPart("query_text", findTarget)
-                    .addFormDataPart("request_id", requestId)
-                if (hasValidLocation()) {
-                    bodyBuilder
-                        .addFormDataPart("lat", currentLat.toString())
-                        .addFormDataPart("lng", currentLng.toString())
-                }
-                val body = bodyBuilder.build()
-
-                val response = httpClient.newCall(
-                    Request.Builder().url("$serverUrl/detect").post(body).build()
-                ).execute()
-
-                // 전체 왕복 시간 = 네트워크 + 서버 처리
-                val roundTripMs = System.currentTimeMillis() - reqStart
-                sendGpsHeartbeat("detect")
-                val json        = JSONObject(response.body?.string() ?: "{}")
-                val sentence    = json.optString("sentence", "주변에 장애물이 없어요.")
-                val alertMode   = json.optString("alert_mode", "critical")
-                val processMs   = json.optInt("process_ms", -1)  // 서버 내부 처리 시간
-                val responseRequestId = json.optString("request_id", requestId)
-                val perf = json.optJSONObject("perf")
-                lastProcessMs   = processMs
-
-                // FPS + 처리시간 UI 업데이트
-                val netMs = if (processMs > 0) roundTripMs - processMs else roundTripMs
-                val objectCount = json.optJSONArray("objects")?.length() ?: 0
-                val perfText = perf?.toString() ?: "{}"
-                Log.d("VG_LINK",
-                    "request_id=$requestId response_id=$responseRequestId mode=$currentMode " +
-                    "status=${response.code} upload=${uploadBytes}B total=${roundTripMs}ms " +
-                    "server=${processMs}ms net=${netMs}ms objects=$objectCount perf=$perfText")
-                Log.d("VG_PERF",
-                    "request_id|$requestId|route|server|server_ms|$processMs|net_ms|$netMs|total|$roundTripMs|bytes|$uploadBytes")
-                runOnUiThread {
-                    val fps = calcFps()
-                    lastFpsText = "${fps}fps | 서버:${processMs}ms 네트:${netMs}ms"
-                    tvMode.text = "[$currentMode] $lastFpsText"
-                    if (debugVisible) {
-                        val tv = findViewById<android.widget.TextView>(R.id.tvDebug)
-                        tv.text = "경로   : SERVER\n" +
-                                  "요청ID : ${requestId.takeLast(6)}\n" +
-                                  "FPS    : ${fps}\n" +
-                                  "서버   : ${processMs}ms\n" +
-                                  "네트워크: ${netMs}ms\n" +
-                                  "왕복   : ${roundTripMs}ms\n" +
-                                  "업로드 : ${uploadBytes / 1024}KB"
+                val body = org.json.JSONObject().apply {
+                    put("device_id",   getDeviceSessionId())
+                    put("session_id",  getDeviceSessionId())
+                    put("wifi_ssid",   getWifiSsid())
+                    put("request_id",  requestId)
+                    put("mode",        currentMode)
+                    put("camera_orientation", cameraOrientation)
+                    if (hasValidLocation()) {
+                        put("lat", currentLat)
+                        put("lng", currentLng)
                     }
+                    put("detections", org.json.JSONArray().also { arr ->
+                        detections.forEach { d ->
+                            arr.put(org.json.JSONObject().apply {
+                                put("class_ko",   d.classKo)
+                                put("confidence", d.confidence.toDouble())
+                                put("cx",         d.cx.toDouble())
+                                put("cy",         d.cy.toDouble())
+                                put("w",          d.w.toDouble())
+                                put("h",          d.h.toDouble())
+                                put("zone",       SentenceBuilder.getClock(d.cx))
+                                put("dist_m",     if (d.distanceM > 0f) d.distanceM.toDouble() else VoicePolicy.calcDistBboxM(d.w, d.h))
+                                put("track_id",   d.trackId)
+                                put("risk_score", d.riskScore.toDouble())
+                                put("vibration_pattern", d.vibrationPattern)
+                                put("is_vehicle", d.classKo in VoicePolicy.vehicleKo())
+                                put("is_animal",  d.classKo in VoicePolicy.animalKo())
+                            })
+                        }
+                    })
                 }
-
-                // 서버 응답 bbox로 바운딩 박스 오버레이 업데이트
-                val serverDetections = mutableListOf<Detection>()
-                val objArray = json.optJSONArray("objects")
-                if (objArray != null) {
-                    for (i in 0 until objArray.length()) {
-                        val obj = objArray.optJSONObject(i) ?: continue
-                        val normXywh = obj.optJSONArray("bbox_norm_xywh") ?: continue
-                        if (normXywh.length() < 4) continue
-                        val x1n = normXywh.optDouble(0).toFloat()
-                        val y1n = normXywh.optDouble(1).toFloat()
-                        val wn  = normXywh.optDouble(2).toFloat()
-                        val hn  = normXywh.optDouble(3).toFloat()
-                        val classKo = obj.optString("class_ko", "")
-                        if (classKo.isEmpty() || wn <= 0f || hn <= 0f) continue
-                        val obbPoints = parseObbPoints(obj.optJSONArray("obb_norm_xyxyxyxy"))
-                            ?: axisAlignedObbPoints(x1n, y1n, wn, hn)
-                        serverDetections.add(Detection(
-                            classKo    = classKo,
-                            confidence = obj.optDouble("confidence", 0.9).toFloat(),
-                            cx         = x1n + wn / 2f,
-                            cy         = y1n + hn / 2f,
-                            w          = wn,
-                            h          = hn,
-                            obbPoints  = obbPoints
-                        ))
-                    }
-                }
-                // 더 최신 응답이 이미 반영됐으면 이 응답은 UI 갱신 생략
-                val isLatest = lastAppliedSeq.accumulateAndGet(mySeq) { cur, new -> if (new > cur) new else cur } == mySeq
-                if (isLatest) {
-                    runOnUiThread {
-                        if (serverDetections.isEmpty()) boundingBoxOverlay.clearDetections()
-                        else boundingBoxOverlay.setDetections(serverDetections, uploadImgW, uploadImgH)
-                    }
-                    handleSuccess(sentence, alertMode)
-                } else {
-                    Log.d("VG_FLOW", "stale response seq=$mySeq < applied=${lastAppliedSeq.get()}, skip UI")
-                    inFlightCount.decrementAndGet()
-                }
+                val reqBody = body.toString()
+                    .toByteArray(Charsets.UTF_8)
+                    .toRequestBody("application/json; charset=utf-8".toMediaType())
+                httpClient.newCall(
+                    Request.Builder()
+                        .url("$serverUrl/detect_json")
+                        .post(reqBody)
+                        .build()
+                ).execute().close()
             } catch (e: Exception) {
-                Log.e("VG_LINK", "request_id=$requestId server request failed", e)
-                handleFail()
-            } finally {
-                imageFile.delete()
+                Log.d("VG_JSON", "detect_json 전송 실패 (무시): ${e.message}")
             }
         }.start()
     }
 
     // ── 결과 처리 & Failsafe ────────────────────────────────────────────
 
+    private fun releaseInFlight() {
+        while (true) {
+            val current = inFlightCount.get()
+            if (current <= 0) return
+            if (inFlightCount.compareAndSet(current, current - 1)) return
+        }
+    }
+
+    private fun finishOnDeviceFrameWithoutNotification(requestId: String, reason: String) {
+        consecutiveFails.set(0)
+        lastSuccessTime = System.currentTimeMillis()
+        releaseInFlight()
+        Log.d("VG_FLOW", "request_id=$requestId finish without side effects reason=$reason")
+    }
+
     private fun handleSuccess(sentence: String, alertMode: String = "critical") {
         consecutiveFails.set(0)
         lastSuccessTime = System.currentTimeMillis()
-        inFlightCount.decrementAndGet()
+        releaseInFlight()
         if (!isAnalyzing.get()) return  // 분석 중지 후 in-flight 요청 결과 무시
 
         // 질문 응답 직후 periodic TTS 억제 — critical은 항상 통과
@@ -1641,11 +1716,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         runOnUiThread {
             tvDetected.text = "인식: $sentence"
             if (sentence == "주변에 장애물이 없어요.") {
-                if (!isSpeaking()) tvStatus.text = "장애물 없음"
+                tvStatus.text = "장애물 없음"
                 return@runOnUiThread
             }
             lastDetectionTime = System.currentTimeMillis()
-            // tvStatus는 실제 발화/비프 시점에만 업데이트 — 텍스트·목소리 동기화
+            // tvStatus는 항상 최신 탐지 결과로 업데이트 — silent여도 텍스트는 표시
+            tvStatus.text = sentence
             when (effectiveMode) {
                 "critical" -> {
                     val now = System.currentTimeMillis()
@@ -1654,7 +1730,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         if (!isVehicleDanger && isSpeaking()) return@runOnUiThread
                         lastSentence     = sentence
                         lastCriticalTime = now
-                        pendingStatusText = sentence  // onStart/ElevenLabs play 시점에 UI 업데이트
+                        pendingStatusText = sentence
                         tts.setSpeechRate(1.0f)
                         if (isVehicleDanger) {
                             speakBuiltIn(sentence, immediate = true)
@@ -1671,7 +1747,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         speak(sentence)
                     }
                 }
-                "silent" -> { /* 무음 — 텍스트도 유지 */ }
+                "silent" -> { /* TTS 억제 — tvStatus는 위에서 이미 업데이트됨 */ }
                 else -> {
                     if (sentence != lastSentence && !isSpeaking()) {
                         lastSentence      = sentence
@@ -1685,7 +1761,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     }
 
     private fun handleFail() {
-        inFlightCount.decrementAndGet()
+        releaseInFlight()
         val fails = consecutiveFails.incrementAndGet()
         if (fails == FAIL_WARN_COUNT) {
             runOnUiThread {
@@ -1750,44 +1826,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         tts.speak(text, TextToSpeech.QUEUE_FLUSH, params, "vg")
     }
 
-    private fun speakElevenLabs(text: String, serverUrl: String) {
-        currentMediaPlayer?.let { try { if (it.isPlaying) it.stop(); it.release() } catch (_: Exception) {} }
-        currentMediaPlayer = null
-        isElevenLabsSpeaking = true
-        val myId = ttsRequestId.incrementAndGet()
-        ttsExecutor.execute {
-            try {
-                val body = okhttp3.FormBody.Builder().add("text", text).build()
-                val req = okhttp3.Request.Builder().url("$serverUrl/tts").post(body).build()
-                val resp = httpClient.newCall(req).execute()
-                if (ttsRequestId.get() != myId) { isElevenLabsSpeaking = false; return@execute }
-                if (!resp.isSuccessful) { isElevenLabsSpeaking = false; handler.post { speakBuiltIn(text) }; return@execute }
-                val tmpFile = File(cacheDir, "tts_$myId.mp3")
-                tmpFile.writeBytes(resp.body!!.bytes())
-                if (ttsRequestId.get() != myId) { isElevenLabsSpeaking = false; tmpFile.delete(); return@execute }
-                val mp = android.media.MediaPlayer()
-                mp.setDataSource(tmpFile.absolutePath)
-                mp.setAudioAttributes(android.media.AudioAttributes.Builder()
-                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA).build())
-                mp.prepare()
-                mp.setOnCompletionListener {
-                    isElevenLabsSpeaking = false
-                    tmpFile.delete()
-                    it.release()
-                    handler.post { scheduleAutoListen() }
-                }
-                currentMediaPlayer = mp
-                val pending = pendingStatusText
-                if (pending.isNotEmpty()) { pendingStatusText = ""; runOnUiThread { tvStatus.text = pending } }
-                mp.start()
-            } catch (_: Exception) {
-                isElevenLabsSpeaking = false
-                if (ttsRequestId.get() == myId) handler.post { speakBuiltIn(text) }
-            }
-        }
-    }
-
-    private fun isSpeaking(): Boolean = ttsBusy.get() || isElevenLabsSpeaking
+    private fun isSpeaking(): Boolean = ttsBusy.get()
 
     /** 직전 프레임과의 시간 간격으로 FPS 계산 + 스파크라인 업데이트 */
     private fun calcFps(): String {

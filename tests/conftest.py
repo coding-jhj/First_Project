@@ -4,9 +4,8 @@ import numpy as np
 
 
 def pytest_configure(config):
-    # 커스텀 마커 등록 — pytest -m integration / pytest -m demo 로 선택 실행 가능
+    # 커스텀 마커 등록 — pytest -m integration 로 선택 실행 가능
     config.addinivalue_line("markers", "integration: 실행 중인 서버 필요 (pytest -m integration)")
-    config.addinivalue_line("markers", "demo: Gradio/pygame 등 데모 라이브러리 필요 (pytest -m demo)")
 
 
 @pytest.fixture(scope="session")
@@ -15,7 +14,7 @@ def sample_image_bytes() -> bytes:
     # scope="session": 테스트 세션당 1회만 생성 → 모든 테스트 파일에서 재사용 (속도 최적화)
     img = np.random.randint(80, 200, (480, 640, 3), dtype=np.uint8)  # 노이즈 이미지 — YOLO 실제 탐지 없음
     _, buf = cv2.imencode(".jpg", img)   # JPEG 바이트로 인코딩
-    return buf.tobytes()                 # bytes 반환 — FastAPI UploadFile과 동일 포맷
+    return buf.tobytes()                 # 비전 단위 테스트용 JPEG bytes
 
 
 @pytest.fixture(scope="session")

@@ -38,16 +38,9 @@ android {
     }
 
     aaptOptions {
-        noCompress "onnx"  // ONNX 모델 파일 압축 제외 — 압축 시 로드 실패 방지
+        noCompress "tflite"  // 모델 파일 압축 제외 — 압축 시 로드 실패 방지
     }
 
-    packagingOptions {
-        // ONNX Runtime 네이티브 라이브러리 중복 선언 충돌 해결 (의존성 여러 개 포함 시 발생)
-        pickFirst 'lib/x86/libonnxruntime.so'
-        pickFirst 'lib/x86_64/libonnxruntime.so'
-        pickFirst 'lib/armeabi-v7a/libonnxruntime.so'
-        pickFirst 'lib/arm64-v8a/libonnxruntime.so'
-    }
 }
 
 dependencies {
@@ -62,13 +55,15 @@ dependencies {
     implementation "androidx.camera:camera-lifecycle:${camerax_version}"
     implementation "androidx.camera:camera-view:${camerax_version}"
 
-    // OkHttp: 서버 /detect API HTTP 요청 (multipart/form-data 이미지 전송)
+    // OkHttp: 서버 /detect API HTTP 요청 (온디바이스 탐지 JSON 전송)
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 
     // Google Play Services Location: GPS/Network/Fused 위치 획득
     implementation 'com.google.android.gms:play-services-location:21.2.0'
 
-    // ONNX Runtime — 온디바이스 YOLO 추론 (서버 없이 폰 단독 동작)
-    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.19.0'
+    // TFLite FP32 YOLO26n 온디바이스 추론
+    implementation 'org.tensorflow:tensorflow-lite:2.17.0'
+    implementation 'org.tensorflow:tensorflow-lite-gpu-api:2.17.0'
+    implementation 'org.tensorflow:tensorflow-lite-gpu:2.17.0'
 
 }

@@ -4,7 +4,6 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
@@ -103,35 +102,12 @@ class BoundingBoxOverlay @JvmOverloads constructor(
             boxPaint.color  = color
             textPaint.color = color
 
-            val obb = det.obbPoints
-            val bounds = if (obb != null && obb.size >= 8) {
-                val path = Path()
-                val xs = ArrayList<Float>(4)
-                val ys = ArrayList<Float>(4)
-                for (i in 0 until 4) {
-                    val x = offsetX + obb[i * 2] * displayW
-                    val y = offsetY + obb[i * 2 + 1] * displayH
-                    xs.add(x)
-                    ys.add(y)
-                    if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-                }
-                path.close()
-                canvas.drawPath(path, boxPaint)
-                RectF(
-                    xs.minOrNull() ?: 0f,
-                    ys.minOrNull() ?: 0f,
-                    xs.maxOrNull() ?: 0f,
-                    ys.maxOrNull() ?: 0f
-                )
-            } else {
-                val left   = offsetX + (det.cx - det.w / 2f) * displayW
-                val top    = offsetY + (det.cy - det.h / 2f) * displayH
-                val right  = offsetX + (det.cx + det.w / 2f) * displayW
-                val bottom = offsetY + (det.cy + det.h / 2f) * displayH
-                val rect = RectF(left, top, right, bottom)
-                canvas.drawRect(rect, boxPaint)
-                rect
-            }
+            val left   = offsetX + (det.cx - det.w / 2f) * displayW
+            val top    = offsetY + (det.cy - det.h / 2f) * displayH
+            val right  = offsetX + (det.cx + det.w / 2f) * displayW
+            val bottom = offsetY + (det.cy + det.h / 2f) * displayH
+            val bounds = RectF(left, top, right, bottom)
+            canvas.drawRect(bounds, boxPaint)
 
             // 클래스명만 표시 (confidence % 제거 — 사용자에게 의미 없는 디버그 정보)
             val label = det.classKo

@@ -123,6 +123,20 @@ def _format_dist(dist_m: float) -> str:
     return f"약 {r}{suf}"
 
 
+def _direction(abs_clock: str) -> str:
+    return "정면" if abs_clock == "12시" else CLOCK_TO_DIRECTION.get(abs_clock, abs_clock)
+
+
+def _loc(abs_clock: str, dist_m: float) -> str:
+    direction = _direction(abs_clock)
+    dist_str = _format_dist(dist_m)
+    if abs_clock == "12시" and (dist_str == "코앞" or dist_m <= 0.75):
+        return "바로 앞"
+    if dist_str == "코앞":
+        return f"{direction} 코앞"
+    return f"{direction} {dist_str}"
+
+
 # ── 주요 물체 문장 생성 (위험도 1순위) ────────────────────────────────────────
 
 def _primary(obj: dict, abs_clock: str) -> str:
@@ -144,10 +158,8 @@ def _primary(obj: dict, abs_clock: str) -> str:
     dist_m     = obj.get("distance_m", 0.0)
     name       = obj["class_ko"]
     ig         = _i_ga(name)
-    direction  = CLOCK_TO_DIRECTION.get(abs_clock, abs_clock)
-    dist_str   = _format_dist(dist_m)
-    # "바로 앞" + "코앞" 중복 방지: "바로 앞 코앞에" → "바로 코앞에"
-    loc_str    = "바로 코앞" if dist_str == "코앞" and direction == "바로 앞" else f"{direction} {dist_str}"
+    direction  = _direction(abs_clock)
+    loc_str    = _loc(abs_clock, dist_m)
     is_vehicle = obj.get("is_vehicle", name in vehicle_ko)
     is_animal  = obj.get("is_animal",  name in animal_ko)
     is_hazard  = obj.get("is_hazard", False)
@@ -160,7 +172,7 @@ def _primary(obj: dict, abs_clock: str) -> str:
     )
 
     if is_critical:
-        return f"위험! {direction} 앞 {name}! 조심!"
+        return f"위험! {direction} {name}. 조심! 멈추세요!"
 
     # 생활 물체: 액션 없이 위치만 안내
     if name in everyday_ko:
@@ -180,9 +192,7 @@ def _secondary(obj: dict, abs_clock: str) -> str:
     """
     dist_m     = obj.get("distance_m", 0.0)
     name       = obj["class_ko"]
-    direction  = CLOCK_TO_DIRECTION.get(abs_clock, abs_clock)
-    dist_str   = _format_dist(dist_m)
-    loc_str    = "바로 코앞" if dist_str == "코앞" and direction == "바로 앞" else f"{direction} {dist_str}"
+    loc_str    = _loc(abs_clock, dist_m)
     vehicle_ko = _policy.class_set("vehicle_ko")
     v_m = float(_policy.alert_thresholds()["vehicle_critical_m"])
     is_vehicle = obj.get("is_vehicle", name in vehicle_ko)
@@ -203,7 +213,7 @@ def build_sentence(
     장애물/확인 모드의 메인 안내 문장 생성.
 
     Args:
-        objects: detect_and_depth()가 반환한 탐지 물체 (위험도 순 정렬됨)
+        objects: Android 온디바이스 YOLO 결과를 서버에서 정규화한 탐지 물체
         changes: tracker가 감지한 변화 메시지 ["가방이 가까워지고 있어요"]
         camera_orientation: 폰 방향 (front/back/left/right)
 
@@ -257,9 +267,8 @@ def build_find_sentence(
     if found:
         obj       = found[0]
         abs_clock = get_absolute_clock(obj["direction"], camera_orientation)
-        direction = CLOCK_TO_DIRECTION.get(abs_clock, abs_clock)
-        dist_str  = _format_dist(obj.get("distance_m", 0.0))
-        return f"{target}{un} {direction} {dist_str}에 있어요."
+        loc_str = _loc(abs_clock, obj.get("distance_m", 0.0))
+        return f"{target}{un} {loc_str}에 있어요."
 
     return f"{target}{ig} 없어요. 다른 곳을 보여주세요."
 
@@ -300,13 +309,12 @@ def build_question_sentence(
         for i, obj in enumerate(tracked_state[:2]):
             abs_clock = get_absolute_clock(obj.get("direction", "12시"), camera_orientation)
             name = obj["class_ko"]
-            dist_str = _format_dist(obj["distance_m"])
-            direction = CLOCK_TO_DIRECTION.get(abs_clock, abs_clock)
+            loc_str = _loc(abs_clock, obj["distance_m"])
             ig = _i_ga(name)
             if i == 0:
-                parts.append(f"최근에 {direction} {dist_str}에서 {name}{ig} 보였어요.")
+                parts.append(f"최근에 {loc_str}에서 {name}{ig} 보였어요.")
             else:
-                parts.append(f"{direction} {dist_str}에 {name}도 있었어요.")
+                parts.append(f"{loc_str}에 {name}도 있었어요.")
 
     # 3. 신호등 정보
     if scene.get("traffic_light_msg"):

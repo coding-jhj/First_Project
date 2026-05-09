@@ -12,10 +12,7 @@ libs = [
     ("numpy",              "1.26.4"),
     ("ultralytics",        "8.4.33"),
     ("cv2",                "4.10.0"),
-    ("gradio",             "4.44.1"),
     ("fastapi",            "0.115.5"),
-    ("speech_recognition", "3.10.4"),
-    ("gtts",               "2.5.3"),
 ]
 
 print(f"Python: {sys.version}\n")

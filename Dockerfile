@@ -5,51 +5,29 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# OpenCV 실행에 필요한 시스템 라이브러리
-# libgomp1: YOLO/Torch OpenMP 병렬처리 / libgl1: OpenCV imshow (서버에선 불필요하지만 import에 필요)
+# FastAPI JSON 라우터 실행에 필요한 최소 시스템 라이브러리
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgomp1 \
     libglib2.0-0 \
-    libgl1 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Python 의존성 설치
-# Cloud Run 서버에서 불필요한 로컬 전용 패키지 제외:
-#   pyaudio      - portaudio 시스템 라이브러리 필요 (서버 미사용)
-#   pygame       - SDL2 시스템 라이브러리 필요 (서버 미사용)
-#   gradio       - 로컬 데모 UI (서버 미사용)
-#   huggingface_hub / websockets - gradio 의존성
-#   SpeechRecognition - 로컬 STT (서버 미사용)
-#   ddgs         - 파인튜닝 데이터 수집 도구 (서버 미사용)
-#   easyocr      - 버스 OCR 실험 기능 (서버 미사용)
-#   onnxscript   - ONNX 내보내기 도구 (서버 미사용)
+# Cloud Run 서버에서 불필요한 모델 준비/학습 도구 제외:
+#   torch/torchvision/ultralytics/opencv/numpy/Pillow - Android ONNX 모델 준비용
+#   ddgs         - 파인튜닝 데이터 수집 도구
+#   onnx/onnxscript - ONNX 내보내기 도구
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
-    grep -vE "^(pyaudio|pygame|gradio|huggingface_hub|websockets|SpeechRecognition|ddgs|easyocr|onnxscript)" \
+    grep -vE "^(torch|torchvision|numpy|ultralytics|opencv-python-headless|Pillow|ddgs|onnx|onnxscript)" \
         requirements.txt > /tmp/requirements-prod.txt && \
     pip install --no-cache-dir -r /tmp/requirements-prod.txt
 
-# 소스 코드 복사 (모델 파일·학습 데이터는 .dockerignore로 제외)
+# 소스 코드 복사
 COPY src/ ./src/
 COPY templates/ ./templates/
 
-# YOLO 모델 빌드 시 미리 다운로드 (첫 요청 지연 방지)
-# 없으면 첫 요청 시 ultralytics가 자동 다운로드
-ARG SERVER_YOLO_MODEL=yolo26s.pt
-ENV SERVER_YOLO_MODEL=${SERVER_YOLO_MODEL}
-RUN python -c "import os; from ultralytics import YOLO; YOLO(os.environ.get('SERVER_YOLO_MODEL', 'yolo26s.pt'))" 2>/dev/null || echo "YOLO model will be downloaded on first request"
-
-# Depth 모델은 크기(99MB)로 인해 제외 → bbox fallback 사용
-# 모델이 필요하면 Cloud Run에서 GCS 마운트 또는 COPY 추가
-
 # Cloud Run은 PORT 환경변수를 자동 주입 (기본 8080)
-# 로그가 버퍼 없이 즉시 Cloud Logging에 출력됨
 ENV PORT=8080
 ENV PYTHONUNBUFFERED=1
-ENV DEPTH_ENABLED=0
 
 # 단일 워커: Cloud Run은 인스턴스 수평 확장으로 동시성 처리
 CMD uvicorn src.api.main:app --host 0.0.0.0 --port ${PORT}

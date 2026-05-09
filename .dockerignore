@@ -8,11 +8,13 @@ __pycache__/
 *.log
 *.csv
 
-# 큰 모델 파일 (서버 컨테이너에 COPY 안 하므로 업로드 불필요)
-*.pt
+# ONNX는 Android 전용 — 서버 불필요
 *.onnx
 *.onnx.data
-*.pth
+
+# yolo26s.pt / depth_anything_v2_vits.pth 는 Dockerfile에서 COPY 필요 → 제외 안 함
+# models/ 하위 파일만 제외 (사용 안 하는 실험용 가중치)
+models/
 
 # 개발용 폴더
 train/

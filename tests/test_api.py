@@ -22,17 +22,32 @@ def test_policy_endpoint():
 
 
 def test_detect_endpoint_exists():
-    # 이미지 없이도 422(Validation Error) 이상의 응답이 오면 라우트 등록 확인됨
-    response = client.post("/detect", data={"wifi_ssid": "test_ssid"})
-    assert response.status_code in (200, 422)
+    # /detect는 온디바이스 탐지 결과 JSON을 받는다.
+    response = client.post("/detect", json={"device_id": "test_device", "objects": []})
+    assert response.status_code == 200
 
 
-def test_detect_response_schema(sample_jpeg_bytes):
-    # 정상 이미지 전송 시 응답 필드 구조가 Android 앱 기대 스키마와 일치하는지 확인
+def test_detect_response_schema():
+    # 정상 탐지 JSON 전송 시 응답 필드 구조가 Android 앱 기대 스키마와 일치하는지 확인
+    payload = {
+        "event_id": "evt-test-1",
+        "request_id": "req-test-1",
+        "device_id": "test_device",
+        "wifi_ssid": "test_wifi",
+        "mode": "장애물",
+        "camera_orientation": "front",
+        "objects": [
+            {
+                "class_ko": "의자",
+                "confidence": 0.91,
+                "bbox_norm_xywh": [0.4, 0.45, 0.2, 0.25],
+            }
+        ],
+        "client_perf": {"infer_ms": 12},
+    }
     response = client.post(
         "/detect",
-        files={"image": ("test.jpg", sample_jpeg_bytes, "image/jpeg")},
-        data={"wifi_ssid": "test_wifi"},
+        json=payload,
     )
     assert response.status_code == 200
     body = response.json()
@@ -40,12 +55,50 @@ def test_detect_response_schema(sample_jpeg_bytes):
     assert "objects"      in body   # YOLO 탐지 물체 목록
     assert "hazards"      in body   # 바닥 위험 감지 필드 추가됨
     assert "changes"      in body   # 공간 기억 변화 목록
-    assert "depth_source" in body   # "v2" 또는 "bbox" — 거리 추정 방법
+    assert "depth_source" in body   # on-device bbox 기반 거리 추정 방법
+    assert "event_id"     in body
+    assert "session_id"   in body
     assert isinstance(body["sentence"], str)
     assert isinstance(body["objects"],  list)
     assert isinstance(body["hazards"],  list)
     assert isinstance(body["changes"],  list)
     assert len(body["sentence"]) > 0  # 빈 문장 반환 금지
+    assert body["objects"][0]["depth_source"] == "on_device_bbox"
+
+
+def test_detect_json_persists_recent_detections():
+    payload = {
+        "device_id": "test_detect_json_device",
+        "wifi_ssid": "test_detect_json_wifi",
+        "request_id": "req-detect-json-1",
+        "mode": "장애물",
+        "camera_orientation": "front",
+        "lat": 37.5665,
+        "lng": 126.9780,
+        "detections": [
+            {
+                "class_ko": "의자",
+                "confidence": 0.91,
+                "cx": 0.5,
+                "cy": 0.55,
+                "w": 0.2,
+                "h": 0.25,
+                "zone": "12시",
+                "dist_m": 1.5,
+            }
+        ],
+    }
+    response = client.post("/detect_json", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sentence"]
+    assert body["objects"][0]["class_ko"] == "의자"
+
+    from src.api.routes import _normalize_session_id
+    expected_session = _normalize_session_id(wifi_ssid="test_detect_json_wifi", device_id="test_detect_json_device")
+    recent = db.get_recent_detections(expected_session, max_age_s=60)
+    assert recent
+    assert recent[0]["class_ko"] == "의자"
 
 
 def test_spaces_snapshot_endpoint():
@@ -54,17 +107,6 @@ def test_spaces_snapshot_endpoint():
     response = client.post("/spaces/snapshot", json=payload)
     assert response.status_code == 200
     assert response.json() == {"saved": True}
-
-
-def test_stt_endpoint_exists():
-    """STT 엔드포인트가 존재하는지 확인 (마이크 없어도 응답 와야 함)."""
-    # 서버에 마이크가 없어도 speech_recognition 미설치 fallback으로 응답해야 함
-    response = client.post("/stt")
-    assert response.status_code == 200
-    body = response.json()
-    assert "text"    in body    # 인식된 텍스트 (마이크 없으면 빈 문자열)
-    assert "mode"    in body    # 분류된 모드 (마이크 없으면 "unknown")
-    assert "success" in body    # 성공 여부 플래그
 
 
 def test_protected_status_requires_api_key(monkeypatch):

@@ -11,6 +11,8 @@ models/
 *.onnx
 *.onnx.data
 *.tflite
+!android/app/src/main/assets/yolo26n_float32.tflite
+!android/app/src/main/assets/yolo11n_320.tflite
 
 # Python 캐시
 __pycache__/

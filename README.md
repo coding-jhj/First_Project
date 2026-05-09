@@ -1,126 +1,167 @@
-﻿# VoiceGuide
+# VoiceGuide — 시각장애인 보행 보조 앱
 
-VoiceGuide는 시각장애인 보행 보조를 목표로 한 Android 앱입니다. 카메라로 주변 장애물을 탐지하고, 방향과 대략적 거리를 한국어 음성으로 안내합니다.
+> KDT AI Human 3팀 | 2026-04-24 ~ 2026-05-13
 
-이 저장소의 기준은 "기능을 많이 적기"가 아니라 "실제로 실행하고 설명할 수 있는 기능만 문서에 적기"입니다.
+시각장애인이 혼자 이동할 때, 카메라로 앞의 장애물을 감지하고 **진동과 음성으로 즉시 안내**하는 Android 앱입니다.
 
-## 현재 MVP
+---
 
-| 상태 | 기능 | 기준 |
-|---|---|---|
-| 핵심 MVP 1 | 장애물 안내 | 주변 장애물을 탐지하고 방향, 대략 거리, 회피 안내를 말한다 |
-| 핵심 MVP 2 | 물건찾기 | "가방 찾아줘"처럼 요청한 물체가 보이면 방향과 대략 거리를 말한다 |
-| 핵심 MVP 3 | 물건 확인 | "이거 뭐야?"처럼 카메라가 향한 물체가 무엇인지 말한다 |
-| 공통 기반 | Android ONNX + TTS | 서버가 없어도 기본 3개 기능은 온디바이스로 유지한다 |
-| 서버 보조 | GCP 서버 연동 | `/health`, `/status`, `/dashboard` 연결 상태를 확인한다 |
-| 실험 기능 | OCR, 옷 매칭, SOS, 하차 알림, 신호등, 공간 기억, GPS 대시보드 | 발표에서는 확장/실험 기능으로만 설명 |
+## 지금 동작하는 것 (MVP)
 
-안전 관련 표현은 과장하지 않습니다. "정확한 거리 측정" 대신 "대략적 거리 추정", "안전 보장" 대신 "보행 보조 정보 제공"이라고 설명합니다.
-
-## 실행 진입점
-
-| 목적 | 진입점 | 담당 |
-|---|---|---|
-| Android 앱 | `android/` | 김재현 |
-| 서버 API | `src.api.main:app` | 정환주, 임명광 보조 |
-| 서버 라우터 | `src/api/routes.py` | 정환주 |
-| DB/tracker | `src/api/db.py`, `src/api/tracker.py` | 정환주, 임명광 보조 |
-| 프론트엔드/대시보드 | `templates/dashboard.html`, README 첫 화면 | 정환주 |
-| Vision/ML | `src/vision/`, `src/depth/`, `train/`, `tools/benchmark.py` | 신유득 |
-| NLG | `src/nlg/` | 임명광 |
-| Voice/Q&A | `src/voice/`, `docs/06_PRESENTATION_AND_QA.md` | 문수찬 |
-
-중복 서버였던 `server_db/`, `server_db_modified/`은 현재 본 서버가 아닙니다. 참고 코드는 `legacy/` 아래에 보관하며, Android와 GCP 배포는 `src/api/main.py`만 사용합니다.
-
-## 실행 방법
-
-### 서버 (GCP Cloud Run)
-
-현재 배포 주소: `https://voiceguide-1063164560758.asia-northeast3.run.app`
-
-| 엔드포인트 | 용도 |
+| 기능 | 상태 |
 |---|---|
-| `/health` | 서버, DB, Depth fallback 상태 확인 |
-| `/detect` | Android 이미지 분석 요청 |
-| `/status/{session_id}` | 현재 추적 객체와 GPS 상태 확인 |
-| `/dashboard` | 시연용 대시보드 |
+| 장애물 탐지 (장애물 모드) | ✅ 동작 |
+| 위험도 기반 진동 패턴 (NONE/SHORT/DOUBLE/URGENT) | ✅ 동작 |
+| 음성 안내 문장 TTS | ✅ 동작 |
+| 물건 찾기 모드 ("의자 찾아줘") | ✅ 동작 |
+| 질문 응답 모드 ("지금 뭐 있어?") | ✅ 동작 |
+| 들고있는것 모드 | ✅ 동작 |
+| 서버 전송 + DB 저장 | ✅ 동작 |
+| 대시보드 실시간 현황 | ✅ 동작 |
+| 대시보드 24시간 탐지 내역 | ✅ 동작 |
+| 이동 경로 지도 시각화 | ✅ 동작 |
+| 오프라인 동작 (서버 없이 진동 + 로컬 TTS) | ✅ 동작 |
 
-로컬 실행:
+---
 
-```bat
-cd /d C:\VoiceGuide\VoiceGuide
+## 아키텍처
+
+```
+Android (Kotlin)
+ └─ CameraX
+     └─ TfliteYoloDetector.kt
+         └─ yolo11n_320.tflite (TFLite GPU / XNNPACK)
+             └─ removeDuplicates() → voteOnly() (3프레임 중 2회 이상 확정)
+                 └─ MvpPipeline.kt (IoU 트래킹 · EMA · riskScore · 진동 패턴)
+                     ├─ 진동 즉시 출력
+                     ├─ SentenceBuilder.kt → 로컬 TTS 즉시 발화
+                     │
+                     ├─ (백그라운드) POST /detect → DB 저장 + tracker 업데이트
+                     └─ (fire-and-forget) POST /detect_json → tracker/recent_detections
+
+FastAPI 서버 (GCP Cloud Run)
+ ├─ SessionTracker: EMA 평활화, 접근 감지
+ ├─ sentence.py: NLG 문장 생성 (대시보드 표시용)
+ ├─ db.py: detection_events · GPS · recent_detections 저장
+ └─ events.py: SSE → 대시보드 실시간 브로드캐스트
+```
+
+**TTS 음성은 로컬 SentenceBuilder가 생성합니다. 서버 응답을 기다리지 않습니다.**  
+서버는 이미지를 받거나 YOLO 추론을 수행하지 않습니다.
+
+---
+
+## 기술 스택
+
+| 영역 | 기술 |
+|---|---|
+| Android | Kotlin, CameraX, TensorFlow Lite |
+| 온디바이스 모델 | yolo11n_320.tflite (기본), yolo26n_float32.tflite (fallback) |
+| TTS / STT | Android 내장 |
+| 백엔드 | Python 3.10+, FastAPI |
+| DB | SQLite (로컬) / PostgreSQL Supabase (운영) |
+| 배포 | GCP Cloud Run |
+| 대시보드 | Leaflet.js, SSE |
+
+---
+
+## 서버 실행
+
+```bash
+pip install -r requirements.txt
+cp .env.example .env
 uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 ```
 
-GCP 배포:
+서버에 ML 모델이 필요하지 않습니다.
 
-```bat
-gcloud run deploy voiceguide --source . --region asia-northeast3 --memory 2Gi --cpu 2 --timeout 120 --allow-unauthenticated --port 8080
+### 배포된 서버
+
+```
+https://voiceguide-1063164560758.asia-northeast3.run.app
+GET /health      →  서버 + DB 상태 확인
+GET /dashboard   →  실시간 대시보드
 ```
 
-배포 후 동작 확인:
+---
 
-```bat
-python tools\probe_server_link.py --base https://voiceguide-1063164560758.asia-northeast3.run.app
-```
+## Android 앱 실행
 
-### Android 앱
-
-자세한 빌드·실행 방법은 [docs/02_RUN_AND_SETUP.md](docs/02_RUN_AND_SETUP.md)를 참고합니다.
-
-요약:
 1. Android Studio에서 `android/` 폴더 열기
-2. `android/app/src/main/res/values/strings.xml`의 `server_url`을 현재 GCP 주소로 수정
-3. 기기 연결 후 Run (또는 APK 빌드 후 설치)
+2. Gradle Sync
+3. USB로 기기 연결 (USB 디버깅 활성화)
+4. Run (`Shift+F10`)
+5. 앱 설정(⚙) → 서버 URL 입력
 
-## 팀 역할
+서버 URL 없이 실행하면 로컬 TTS + 진동만 동작합니다 (오프라인 모드).
 
-| 이름 | 역할 | 책임 코드/문서 |
-|---|---|---|
-| 정환주 | 팀장, 서버, 프론트엔드 | 일정·MVP 결정, README/docs 최종 검수, `src/api/`, `templates/`, GCP 배포 |
-| 신유득 | Vision, ML | `src/vision/`, `src/depth/`, `src/ocr/`, `train/`, 평가 결과 |
-| 김재현 | Android, UX | `android/app/`, UI 안정화, 권한/발열/TTS 겹침 점검 |
-| 임명광 | NLG, 서버 도움 | `src/nlg/`, 서버 응답 문장, API 문서 보조 |
-| 문수찬 | Voice, Q&A 시트 | `src/voice/`, STT/TTS 검증, 발표 Q&A 시트 |
+---
 
-역할별 작업 지침은 [docs/05_TEAM_PROGRESS.md](docs/05_TEAM_PROGRESS.md)를 기준으로 봅니다.
+## 대시보드
 
-## 코드 흐름
-
-```text
-Android MainActivity
-  -> 온디바이스 우선: YoloDetector.kt -> SentenceBuilder.kt -> Android TTS
-  -> 서버 사용 시: POST /detect
-       -> src/api/routes.py
-       -> src/depth/depth.py: detect_and_depth()
-       -> src/vision/detect.py: detect_objects()
-       -> src/depth/hazard.py: detect_floor_hazards()
-       -> src/api/tracker.py: SessionTracker.update()
-       -> src/api/db.py: snapshot/GPS 저장
-       -> src/nlg/sentence.py: build_sentence()
-       -> Android TTS
+```
+GET /dashboard
 ```
 
-전체 흐름 요약은 [docs/01_PROJECT_OVERVIEW.md](docs/01_PROJECT_OVERVIEW.md)와 [docs/04_ANDROID_AND_ON_DEVICE.md](docs/04_ANDROID_AND_ON_DEVICE.md)에 정리했습니다.
+세션 ID를 입력하면 해당 기기의 탐지 현황·이동 경로·24시간 이벤트 내역을 실시간으로 확인할 수 있습니다.
 
-## 핵심 문서
+---
 
-| 문서 | 용도 |
-|---|---|
-| [docs/INDEX.md](docs/INDEX.md) | 강사님/팀원용 문서 인덱스 |
-| [docs/01_PROJECT_OVERVIEW.md](docs/01_PROJECT_OVERVIEW.md) | 프로젝트 목적, MVP, 구조 |
-| [docs/02_RUN_AND_SETUP.md](docs/02_RUN_AND_SETUP.md) | 로컬 실행, Android 실행, GCP 배포 |
-| [docs/03_SERVER_AND_GCP.md](docs/03_SERVER_AND_GCP.md) | 서버 구조와 Cloud Run 운영 |
-| [docs/04_ANDROID_AND_ON_DEVICE.md](docs/04_ANDROID_AND_ON_DEVICE.md) | Android 앱과 온디바이스 추론 |
-| [docs/05_TEAM_PROGRESS.md](docs/05_TEAM_PROGRESS.md) | 팀 역할과 진행 요약 |
-| [docs/06_PRESENTATION_AND_QA.md](docs/06_PRESENTATION_AND_QA.md) | 발표 흐름과 예상 Q&A |
-| [docs/07_DEBUG_AND_VALIDATION.md](docs/07_DEBUG_AND_VALIDATION.md) | 디버그, 검증, 실패 사례 |
+## 주요 API
 
-## 개발 원칙
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| POST | `/detect` | 탐지 결과 JSON 수신 → DB 저장 + tracker 업데이트 |
+| POST | `/detect_json` | 탐지 결과 fire-and-forget 저장 (응답 미사용) |
+| POST | `/question` | 질문 응답 (tracker 누적 상태 조회) |
+| GET | `/api/policy` | policy.json 동기화 (ETag 캐싱) |
+| GET | `/status/{session_id}` | 세션 현재 상태 조회 |
+| GET | `/events/{session_id}` | SSE 실시간 스트림 |
+| GET | `/history/{session_id}` | 24시간 탐지 이벤트 내역 |
+| GET | `/routes/{session_id}` | 저장된 GPS 경로 목록 |
+| GET | `/dashboard` | 대시보드 HTML |
 
-1. 발표 전에는 기능 추가보다 검증을 우선합니다.
-2. README의 "동작 확인" 항목은 APK나 서버에서 바로 시연 가능해야 합니다.
-3. 서버 진입점은 `src.api.main:app` 하나로 고정합니다.
-4. GCP Cloud Run이 배포 기준입니다. 다른 서버 방식은 현재 발표 기준으로 설명하지 않습니다.
-5. 발표 MVP는 장애물 안내, 물건찾기, 물건 확인 3개로 고정합니다.
-6. 안전 앱이므로 거리, 신호등, 계단, 차량, SOS 기능은 검증 범위를 넘어 과장하지 않습니다.
+---
+
+## 프로젝트 구조
+
+```
+VoiceGuide/
+├── android/app/src/main/
+│   ├── assets/
+│   │   ├── yolo11n_320.tflite       # 온디바이스 추론 모델 (기본)
+│   │   ├── yolo26n_float32.tflite   # fallback 모델
+│   │   └── policy_default.json      # 기본 정책 (서버 policy 없을 때 사용)
+│   └── java/com/voiceguide/
+│       ├── MainActivity.kt          # 카메라·TTS·STT·서버 연동 총괄
+│       ├── TfliteYoloDetector.kt    # TFLite 추론 엔진
+│       ├── MvpPipeline.kt           # IoU 트래킹·EMA·위험도·진동 패턴
+│       ├── SentenceBuilder.kt       # 온디바이스 한국어 TTS 문장 생성
+│       ├── VoicePolicy.kt           # policy.json 파싱 및 캐시
+│       ├── VoiceGuideConstants.kt   # 방향·클래스 상수
+│       └── Detection.kt             # 탐지 결과 데이터 클래스
+│
+├── src/
+│   ├── api/
+│   │   ├── main.py                  # FastAPI 진입점
+│   │   ├── routes.py                # 라우터
+│   │   ├── db.py                    # SQLite/PostgreSQL 저장
+│   │   ├── tracker.py               # 서버측 EMA 추적기
+│   │   └── events.py                # SSE 브로드캐스트
+│   ├── nlg/
+│   │   ├── sentence.py              # 한국어 안내 문장 생성 (대시보드용)
+│   │   └── templates.py             # 방향·행동 문구 상수
+│   └── config/
+│       ├── policy.json              # 탐지 분류 기준 SSOT
+│       └── policy.py                # policy.json 로더
+│
+├── templates/dashboard.html         # 실시간 대시보드
+├── tests/                           # pytest 테스트
+├── tools/simulator.py               # 데모용 GPS 동선 시뮬레이터
+├── Dockerfile
+└── requirements.txt
+```
+
+---
+
+GitHub: https://github.com/coding-jhj/VoiceGuide
