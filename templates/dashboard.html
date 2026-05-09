@@ -245,13 +245,62 @@
     min-height: 0;
     background: var(--surface);
     border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: row;
+    overflow: hidden;
+  }
+  .analysis-half {
+    flex: 1;
+    min-width: 0;
     padding: 14px 18px;
-    overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 10px;
+    overflow-y: auto;
+  }
+  .analysis-half + .analysis-half {
+    border-left: 1px solid var(--border);
   }
   .analysis-panel .section-title { margin-bottom: 0; }
+  /* 경고안내 카드 */
+  .alert-notice-card {
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border: 1px solid var(--border);
+    animation: slideIn 0.25s ease;
+  }
+  .alert-notice-card.critical { border-color: var(--danger); background: rgba(239,68,68,0.06); }
+  .alert-notice-card.beep     { border-color: var(--warn);   background: rgba(251,146,60,0.06); }
+  .alert-notice-card.silent   { border-color: var(--safe);   background: rgba(74,222,128,0.06); }
+  .alert-notice-header { display: flex; align-items: center; gap: 8px; }
+  .alert-mode-badge {
+    font-size: 11px; font-weight: 700; padding: 2px 8px;
+    border-radius: 4px; color: #fff; flex-shrink: 0;
+  }
+  .alert-mode-badge.critical { background: var(--danger); }
+  .alert-mode-badge.beep     { background: var(--warn); }
+  .alert-mode-badge.silent   { background: var(--safe); }
+  .alert-sentence {
+    font-size: 13px; font-weight: 600; line-height: 1.5;
+    color: var(--text);
+  }
+  .alert-time { font-size: 11px; color: var(--muted); }
+  .alert-history { display: flex; flex-direction: column; gap: 6px; }
+  .alert-history-item {
+    font-size: 11px; color: var(--muted); padding: 6px 10px;
+    border-radius: 4px; background: var(--surface2);
+    border-left: 3px solid var(--border);
+  }
+  .alert-history-item.critical { border-left-color: var(--danger); }
+  .alert-history-item.beep     { border-left-color: var(--warn); }
+  .alert-history-item.silent   { border-left-color: var(--safe); }
+  .empty-alert {
+    color: var(--muted); font-size: 12px;
+    display: flex; align-items: center; gap: 6px;
+  }
   #riskBarChart {
     display: flex;
     flex-direction: column;
@@ -666,9 +715,20 @@
   </div>
 
   <div class="analysis-panel">
-    <div class="section-title">실시간 위험도 분석</div>
-    <div id="riskBarChart">
-      <div style="color:var(--muted); font-size:12px;">탐지 데이터 대기 중...</div>
+    <!-- 왼쪽: 실시간 위험도 분석 -->
+    <div class="analysis-half">
+      <div class="section-title">실시간 위험도 분석</div>
+      <div id="riskBarChart">
+        <div style="color:var(--muted); font-size:12px;">탐지 데이터 대기 중...</div>
+      </div>
+    </div>
+    <!-- 오른쪽: 경고안내 -->
+    <div class="analysis-half">
+      <div class="section-title">경고안내</div>
+      <div id="alertLatest">
+        <div class="empty-alert">탐지 대기 중...</div>
+      </div>
+      <div id="alertHistory" class="alert-history" style="display:none;"></div>
     </div>
   </div>
   </div><!-- /center-column -->
@@ -766,29 +826,109 @@ function escapeHtml(value) {
 const ICONS = {
   '사람':   '🚶', '자전거':   '🚲', '자동차':   '🚗', '오토바이': '🏍',
   '버스':   '🚌', '기차':     '🚂', '트럭':     '🚛', '의자':     '🪑',
-  '소파':   '🛋',  '침대':     '🛏',  '테이블':   '🪞', '계단':     '🪜',
+  '소파':   '🛋',  '침대':     '🛏',  '테이블':  '🪞', '계단':     '🪜',
   '신호등': '🚦', '칼':       '🔪', '가위':     '✂️',  '개':       '🐕',
   '고양이': '🐈',  '말':       '🐎', '화분':     '🪴', '병':       '🍶',
-  '컵':     '☕',  '우산':     '☂️',  '배낭':     '🎒', '핸드백':   '👜',
+  '컵':     '☕',  '우산':     '☂️',  '배낭':    '🎒', '핸드백':   '👜',
   '여행가방':'🧳',  '책':       '📚',
 };
-function getIcon(name) { return ICONS[name] || '📦'; }
+// 특정 물체는 SVG 아이콘으로 더 정확하게 표현
+const ICON_SVG = {
+  '벤치': `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="26" height="26">
+    <rect x="2"  y="13" width="28" height="3" rx="1.5" fill="#c8874a"/>
+    <rect x="2"  y="17" width="28" height="3" rx="1.5" fill="#c8874a"/>
+    <rect x="5"  y="20" width="3"  height="8" rx="1.5" fill="#7a5230"/>
+    <rect x="24" y="20" width="3"  height="8" rx="1.5" fill="#7a5230"/>
+    <rect x="2"  y="7"  width="28" height="3" rx="1.5" fill="#c8874a"/>
+    <rect x="2"  y="10" width="28" height="3" rx="1.5" fill="#c8874a"/>
+    <rect x="6"  y="7"  width="3"  height="13" rx="1.5" fill="#7a5230"/>
+    <rect x="23" y="7"  width="3"  height="13" rx="1.5" fill="#7a5230"/>
+  </svg>`,
+};
+function getIcon(name) {
+  if (ICON_SVG[name]) return ICON_SVG[name];
+  return ICONS[name] || '📦';
+}
 
 // ── 위험도 판단 ───────────────────────────────────────
-// 서버(db 히스토리·API)와 동일: risk_score ≥0.7 위험, ≥0.4 주의, 그 외 안전
+// 서버 policy.json 카테고리와 동일 기준
 const RISK_CRITICAL = 0.7;
-const RISK_BEEP = 0.4;
+const RISK_BEEP     = 0.4;
+
+const CRITICAL_KO = ['자동차','오토바이','버스','트럭','기차','자전거','곰','코끼리','계단'];
+const ANIMAL_KO   = ['개','말','고양이'];
+const CAUTION_KO  = ['칼','가위','유리잔','야구 방망이','배낭','핸드백','여행가방','공'];
 
 function getRisk(obj) {
   const d  = obj.distance_m ?? 99;
   const kn = obj.class_ko ?? '';
-  if (['자동차','오토바이','버스','트럭','기차','자전거'].includes(kn) && d < 8) return 'critical';
-  if (['개','말','고양이'].includes(kn) && d < 3)  return 'critical';
-  if (kn === '계단')  return 'critical';
-  if (['칼','가위'].includes(kn) && d < 3)         return 'critical';
-  if (d < 0.5)        return 'critical';
-  if (d < 1.0)        return 'beep';
+  if (CRITICAL_KO.includes(kn))               return 'critical';
+  if (ANIMAL_KO.includes(kn) && d < 3)        return 'critical';
+  if (CAUTION_KO.includes(kn))                return 'beep';
+  if (d < 0.5)                                return 'critical';
+  if (d < 1.0)                                return 'beep';
   return 'silent';
+}
+
+// ── 경고안내 ────────────────────────────────────────
+const _alertHistory = [];   // { sentence, alertMode, time }
+const ALERT_HISTORY_MAX = 5;
+
+function _koParticle(name) {
+  // 한글 마지막 자모 받침(종성) 여부: (코드 - 0xAC00) % 28 != 0 이면 받침 있음
+  const code = name.charCodeAt(name.length - 1);
+  return (code >= 0xAC00 && code <= 0xD7A3 && (code - 0xAC00) % 28 !== 0) ? '이' : '가';
+}
+
+function _buildAlertSentence(objects) {
+  if (!objects || objects.length === 0) return null;
+  const top  = [...objects].sort((a, b) => (b.risk_score ?? 0) - (a.risk_score ?? 0))[0];
+  const name = top.class_ko ?? '물체';
+  const dir  = top.direction ?? '';
+  const tier = riskTierForObject(top);
+  const ig   = _koParticle(name);
+  const loc  = dir ? `${dir} 방향에` : '정면에';
+  if (tier === 'critical') return `위험! ${dir ? dir + ' ' : ''}${name}! 조심! 멈추세요!`;
+  if (tier === 'beep')     return `${loc} ${name}${ig} 있어요. 조심하세요.`;
+  return `${loc} ${name}${ig} 있어요.`;
+}
+
+function renderAlertNotice(sentence, alertMode) {
+  const latestEl  = document.getElementById('alertLatest');
+  const historyEl = document.getElementById('alertHistory');
+  if (!latestEl) return;
+
+  if (!sentence) {
+    latestEl.innerHTML = '<div class="empty-alert">탐지 대기 중...</div>';
+    return;
+  }
+
+  const labelMap = { critical: '위험', beep: '주의', silent: '안전' };
+  const label = labelMap[alertMode] ?? '—';
+  const now   = new Date().toLocaleTimeString('ko-KR');
+
+  latestEl.innerHTML = `
+    <div class="alert-notice-card ${alertMode}">
+      <div class="alert-notice-header">
+        <span class="alert-mode-badge ${alertMode}">${label}</span>
+        <span class="alert-time">${now}</span>
+      </div>
+      <div class="alert-sentence">${escapeHtml(sentence)}</div>
+    </div>`;
+
+  // 히스토리 누적 (silent 제외)
+  if (alertMode !== 'silent') {
+    _alertHistory.unshift({ sentence, alertMode, time: now });
+    if (_alertHistory.length > ALERT_HISTORY_MAX) _alertHistory.pop();
+    if (_alertHistory.length > 1) {
+      historyEl.style.display = 'flex';
+      historyEl.innerHTML = _alertHistory.slice(1).map(h =>
+        `<div class="alert-history-item ${h.alertMode}">
+           <span style="color:var(--muted);margin-right:6px;">${h.time}</span>${escapeHtml(h.sentence)}
+         </div>`
+      ).join('');
+    }
+  }
 }
 
 function riskLabel(r) {
@@ -970,9 +1110,16 @@ function renderGps(gps, track) {
 }
 
 // ── 폴링 ─────────────────────────────────────────────
-let prevObjectCount = 0;
-let eventSource = null;
-let pollTimer = null;
+const OBJECT_HOLD_MS = 30_000;   // 탐지 후 최소 30초 유지
+let prevObjectCount  = 0;
+let eventSource      = null;
+let pollTimer        = null;
+let _objClearTimer   = null;
+
+function _scheduleObjectClear() {
+  if (_objClearTimer) clearTimeout(_objClearTimer);
+  _objClearTimer = setTimeout(() => { renderObjects([]); _objClearTimer = null; }, OBJECT_HOLD_MS);
+}
 
 async function poll() {
   const sessionId = document.getElementById('sessionId').value.trim() || '__default__';
@@ -987,7 +1134,21 @@ async function poll() {
     const resolvedSession = data.session_id ?? sessionId;
     text.textContent = data.gps ? `연결됨 · ${resolvedSession}` : '연결됨 · 세션 선택 필요';
 
-    renderObjects(data.objects);
+    const pollObjs = data.objects ?? [];
+    if (pollObjs.length > 0) {
+      // 새 objects 있음 → 표시 + 타이머 리셋
+      renderObjects(pollObjs);
+      _scheduleObjectClear();
+      const sentence = _buildAlertSentence(pollObjs);
+      const tier = riskTierForObject(pollObjs[0]);
+      const mode = tier === 'critical' ? 'critical' : tier === 'beep' ? 'beep' : 'silent';
+      renderAlertNotice(sentence, mode);
+    } else if (_objClearTimer === null) {
+      // 타이머 없고 objects도 없음 → 소거
+      renderObjects([]);
+    }
+    // 타이머 진행 중이면 빈 응답이 와도 표시 유지
+
     renderGps(data.gps, data.track);
 
     // 팀원 위치 업데이트 (실패해도 무시)
@@ -997,17 +1158,16 @@ async function poll() {
       .catch(() => {});
 
     // 새 물체 감지 시 토스트
-    const currCount = (data.objects ?? []).length;
+    const currCount = pollObjs.length;
     if (currCount > prevObjectCount && prevObjectCount >= 0) {
-      const names = (data.objects ?? []).map(o => o.class_ko).join(', ');
+      const names = pollObjs.map(o => o.class_ko).join(', ');
       if (names) showToast(`🔍 탐지: ${names}`);
     }
     prevObjectCount = currCount;
 
-    const objCount = (data.objects ?? []).length;
     document.getElementById('lastUpdate').innerHTML =
       '마지막 업데이트: ' + new Date().toLocaleTimeString('ko-KR') +
-      `<br>탐지: ${objCount}개`;
+      `<br>탐지: ${currCount}개`;
   } catch (e) {
     dot.className  = 'pulse-dot offline';
     text.textContent = '서버 연결 끊김';
@@ -1021,7 +1181,28 @@ function applyPushedStatus(data, sessionId) {
   const resolvedSession = data.session_id ?? sessionId;
   text.textContent = data.gps ? `연결됨 · ${resolvedSession}` : '연결됨 · 세션 선택 필요';
 
-  renderObjects(data.objects);
+  const objs = data.objects ?? [];
+  const isDetectEvent = 'latest_event' in data;  // 실제 탐지 이벤트 여부
+
+  if (objs.length > 0) {
+    // 탐지 결과 있음 → 표시하고 12초 유지 타이머 재설정
+    renderObjects(objs);
+    _scheduleObjectClear();
+  } else if (isDetectEvent) {
+    // 탐지 이벤트인데 물체 없음 → 명시적 소거
+    if (_objClearTimer) { clearTimeout(_objClearTimer); _objClearTimer = null; }
+    renderObjects([]);
+  }
+  // GPS-only 이벤트(latest_event 없음, objects 빈 배열) → 기존 표시 유지
+
+  // 경고안내: SSE 탐지 이벤트에 서버가 생성한 sentence 사용
+  if (isDetectEvent) {
+    const ev = data.latest_event ?? {};
+    const sentence = ev.sentence || (objs.length > 0 ? _buildAlertSentence(objs) : null);
+    const alertMode = ev.alert_mode || (objs.length > 0 ? (riskTierForObject(objs[0]) === 'critical' ? 'critical' : riskTierForObject(objs[0]) === 'beep' ? 'beep' : 'silent') : 'silent');
+    if (sentence) renderAlertNotice(sentence, alertMode);
+  }
+
   renderGps(data.gps, data.track);
 
   // 경로 저장 완료 신호 수신 시 콤보박스 목록 새로고침
@@ -1032,17 +1213,16 @@ function applyPushedStatus(data, sessionId) {
     .then(d => renderTeamLocations(d.locations ?? [], resolvedSession))
     .catch(() => {});
 
-  const currCount = (data.objects ?? []).length;
+  const currCount = objs.length;
   if (currCount > prevObjectCount && prevObjectCount >= 0) {
-    const names = (data.objects ?? []).map(o => o.class_ko).join(', ');
+    const names = objs.map(o => o.class_ko).join(', ');
     if (names) showToast(`감지: ${names}`);
   }
   prevObjectCount = currCount;
 
-  const objCount = (data.objects ?? []).length;
   document.getElementById('lastUpdate').innerHTML =
     '마지막 업데이트: ' + new Date().toLocaleTimeString('ko-KR') +
-    `<br>감지: ${objCount}개`;
+    `<br>감지: ${currCount}개`;
 }
 
 function connectEventStream() {
@@ -1106,6 +1286,9 @@ function selectSession(s) {
   document.getElementById('sessionId').value = s;
   document.getElementById('sessionList').style.display = 'none';
   prevObjectCount = 0; mapCentered = false;
+  if (_objClearTimer) { clearTimeout(_objClearTimer); _objClearTimer = null; }
+  _alertHistory.length = 0;
+  renderAlertNotice(null, 'silent');
   if (marker)    { map.removeLayer(marker);    marker    = null; }
   if (trackLine) { map.removeLayer(trackLine); trackLine = null; }
   if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
@@ -1118,6 +1301,9 @@ function selectSession(s) {
 document.getElementById('sessionId').addEventListener('change', () => {
   prevObjectCount = 0;
   mapCentered     = false;
+  if (_objClearTimer) { clearTimeout(_objClearTimer); _objClearTimer = null; }
+  _alertHistory.length = 0;
+  renderAlertNotice(null, 'silent');
   if (marker)    { map.removeLayer(marker);    marker    = null; }
   if (trackLine) { map.removeLayer(trackLine); trackLine = null; }
   if (routeLine) { map.removeLayer(routeLine); routeLine = null; }

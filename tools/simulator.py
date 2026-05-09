@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # ── 설정 (여기만 수정하면 됩니다) ──────────────────────────────────────────────
 
 SERVER_URL    = "https://voiceguide-1063164560758.asia-northeast3.run.app"
-SESSION_ID    = "demo-device-02"        # 대시보드 세션 ID 입력창에 이 값 사용
+SESSION_ID    = "demo-device-03"        # 대시보드 세션 ID 입력창에 이 값 사용
 API_KEY       = ""                      # .env의 API_KEY 값 (없으면 빈 문자열)
 INTERVAL      = 1.0                     # 좌표 전송 간격 (초)
 STEPS_PER_LEG = 20                      # 구간당 보간 점수 — 14구간×21×1초 ≈ 5분

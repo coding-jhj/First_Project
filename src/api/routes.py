@@ -116,11 +116,13 @@ async def _publish_dashboard_event(session_id: str, payload: dict, gps: dict | N
         "gps": gps,
         "track": track or [],
         "latest_event": {
-            "event_id": payload.get("event_id"),
+            "event_id":   payload.get("event_id"),
             "request_id": payload.get("request_id"),
-            "objects": payload.get("objects", []),
-            "hazards": payload.get("hazards", []),
-            "scene": payload.get("scene", {}),
+            "sentence":   payload.get("sentence", ""),
+            "alert_mode": payload.get("alert_mode", "silent"),
+            "objects":    payload.get("objects", []),
+            "hazards":    payload.get("hazards", []),
+            "scene":      payload.get("scene", {}),
         },
     })
 
@@ -206,10 +208,27 @@ def _distance_from_bbox(obj: dict) -> float:
     return round(min(15.0, max(0.1, (calib / area) ** 0.5)), 1)
 
 
-def _risk_from_object(obj: dict) -> float:
+def _risk_from_object(obj: dict, critical_ko: set, caution_ko: set, everyday_ko: set,
+                      animal_ko: set, thresholds: dict) -> float:
+    """VoiceGuide 정책 카테고리 기반 위험도 점수(0~1) 계산."""
     if obj.get("risk_score") is not None:
         return float(obj["risk_score"])
-    dist = float(obj.get("distance_m", 15.0))
+    name = obj.get("class_ko", "")
+    dist = float(obj.get("distance_m", 99.0))
+    # critical_ko (차량·위험물체·계단) → 항상 위험
+    if name in critical_ko:
+        return 0.85
+    # 동물 → 거리 임계치 기반
+    if name in animal_ko:
+        animal_m = float(thresholds.get("animal_critical_m", 3.0))
+        return 0.85 if dist < animal_m else 0.35
+    # caution_ko → 주의
+    if name in caution_ko:
+        return 0.55
+    # everyday_ko → 안전
+    if name in everyday_ko:
+        return 0.15
+    # 그 외(사람 등) → 거리·bbox 면적 기반
     bbox = obj.get("bbox_norm_xywh") or [0, 0, 0.1, 0.1]
     area = float(bbox[2]) * float(bbox[3]) if len(bbox) >= 4 else 0.01
     distance_score = max(0.0, min(1.0, (7.0 - dist) / 7.0))
@@ -218,11 +237,14 @@ def _risk_from_object(obj: dict) -> float:
 
 
 def _normalize_objects(raw_objects: list[dict]) -> list[dict]:
-    from src.config.policy import get_policy
+    from src.config.policy import get_policy, alert_thresholds
     classes = get_policy().get("classes", {})
-    vehicle_ko = set(classes.get("vehicle_ko", []))
-    animal_ko = set(classes.get("animal_ko", []))
+    vehicle_ko  = set(classes.get("vehicle_ko", []))
+    animal_ko   = set(classes.get("animal_ko", []))
     critical_ko = set(classes.get("critical_ko", []))
+    caution_ko  = set(classes.get("caution_ko", []))
+    everyday_ko = set(classes.get("everyday_ko", []))
+    thresholds  = alert_thresholds()
 
     objects = []
     for raw in raw_objects:
@@ -251,7 +273,7 @@ def _normalize_objects(raw_objects: list[dict]) -> list[dict]:
             "is_dangerous": bool(raw.get("is_dangerous", class_ko in critical_ko)),
         }
         obj["distance_m"] = _distance_from_bbox({**raw, "bbox_norm_xywh": bbox})
-        obj["risk_score"] = _risk_from_object(obj)
+        obj["risk_score"] = _risk_from_object(obj, critical_ko, caution_ko, everyday_ko, animal_ko, thresholds)
         objects.append(obj)
     return sorted(objects, key=lambda x: x.get("risk_score", 0), reverse=True)[:8]
 

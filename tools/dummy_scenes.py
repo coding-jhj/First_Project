@@ -47,22 +47,22 @@ CONF_THRESH = 0.30
 # bbox_norm_xywh: [x_center_approx, y_top, width, height] (정규화된 좌표)
 _DUMMY_RESULTS: dict[str, list[dict]] = {
     SCENE_BUS: [
-        {"class_ko": "버스",    "confidence": 0.91, "bbox_norm_xywh": [0.05, 0.30, 0.60, 0.55]},  # 위험
-        {"class_ko": "자전거",  "confidence": 0.78, "bbox_norm_xywh": [0.65, 0.50, 0.12, 0.35]},  # 위험
-        {"class_ko": "사람",    "confidence": 0.85, "bbox_norm_xywh": [0.70, 0.40, 0.15, 0.50]},  # 위험
-        {"class_ko": "배낭",    "confidence": 0.66, "bbox_norm_xywh": [0.72, 0.60, 0.08, 0.25]},  # 주의
-        {"class_ko": "벤치",    "confidence": 0.55, "bbox_norm_xywh": [0.10, 0.65, 0.25, 0.20]},  # 안전
+        {"class_ko": "버스",    "confidence": 0.91, "bbox_norm_xywh": [0.05, 0.30, 0.60, 0.55]},  # critical_ko
+        {"class_ko": "자전거",  "confidence": 0.78, "bbox_norm_xywh": [0.65, 0.50, 0.12, 0.35]},  # critical_ko
+        {"class_ko": "사람",    "confidence": 0.85, "bbox_norm_xywh": [0.70, 0.40, 0.15, 0.50]},  # 거리 기반
+        {"class_ko": "배낭",    "confidence": 0.66, "bbox_norm_xywh": [0.72, 0.60, 0.08, 0.25]},  # caution_ko
+        {"class_ko": "벤치",    "confidence": 0.55, "bbox_norm_xywh": [0.10, 0.65, 0.25, 0.20]},  # everyday_ko
     ],
     SCENE_PERSON: [
-        {"class_ko": "사람",      "confidence": 0.94, "bbox_norm_xywh": [0.20, 0.10, 0.35, 0.70]},  # 위험
-        {"class_ko": "핸드백",    "confidence": 0.73, "bbox_norm_xywh": [0.35, 0.55, 0.10, 0.20]},  # 주의
-        {"class_ko": "여행가방",  "confidence": 0.68, "bbox_norm_xywh": [0.60, 0.60, 0.15, 0.30]},  # 주의
-        {"class_ko": "우산",      "confidence": 0.59, "bbox_norm_xywh": [0.55, 0.15, 0.08, 0.50]},  # 안전
+        {"class_ko": "사람",      "confidence": 0.94, "bbox_norm_xywh": [0.20, 0.10, 0.35, 0.70]},  # 거리 기반
+        {"class_ko": "핸드백",    "confidence": 0.73, "bbox_norm_xywh": [0.35, 0.55, 0.10, 0.20]},  # caution_ko
+        {"class_ko": "여행가방",  "confidence": 0.68, "bbox_norm_xywh": [0.60, 0.60, 0.15, 0.30]},  # caution_ko
+        {"class_ko": "우산",      "confidence": 0.59, "bbox_norm_xywh": [0.55, 0.15, 0.08, 0.50]},  # everyday_ko
     ],
     SCENE_CAUTION: [
-        {"class_ko": "배낭",  "confidence": 0.80, "bbox_norm_xywh": [0.30, 0.25, 0.18, 0.35]},  # 주의
-        {"class_ko": "화분",  "confidence": 0.62, "bbox_norm_xywh": [0.70, 0.55, 0.12, 0.30]},  # 안전
-        {"class_ko": "의자",  "confidence": 0.55, "bbox_norm_xywh": [0.15, 0.50, 0.20, 0.35]},  # 안전
+        {"class_ko": "배낭",  "confidence": 0.80, "bbox_norm_xywh": [0.30, 0.25, 0.18, 0.35]},  # caution_ko
+        {"class_ko": "화분",  "confidence": 0.62, "bbox_norm_xywh": [0.70, 0.55, 0.12, 0.30]},  # everyday_ko
+        {"class_ko": "의자",  "confidence": 0.55, "bbox_norm_xywh": [0.15, 0.50, 0.20, 0.35]},  # everyday_ko
     ],
 }
 
