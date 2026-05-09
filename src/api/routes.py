@@ -538,9 +538,10 @@ async def save_gps_ping(
     db.save_gps(session_id, lat, lng)
     gps = db.get_last_gps(session_id)
     track = db.get_gps_track(session_id, limit=100)
+    _cur_objs = get_tracker(session_id).get_current_state(max_age_s=8.0) or []
     await events.publish(session_id, {
         "session_id": session_id,
-        "objects": [],
+        "objects": _cur_objs,
         "gps": gps,
         "track": track,
     })

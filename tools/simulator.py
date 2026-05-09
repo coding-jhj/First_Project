@@ -25,11 +25,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # ── 설정 (여기만 수정하면 됩니다) ──────────────────────────────────────────────
 
 SERVER_URL    = "https://voiceguide-1063164560758.asia-northeast3.run.app"
-SERIAL        = "SN-001"                # 데모 시리얼 넘버 (로깅용, 세션 ID와 무관)
 SESSION_ID    = "demo-device-02"        # 대시보드 세션 ID 입력창에 이 값 사용
 API_KEY       = ""                      # .env의 API_KEY 값 (없으면 빈 문자열)
 INTERVAL      = 1.0                     # 좌표 전송 간격 (초)
-STEPS_PER_LEG = 21                      # 구간당 보간 점수 — 14구간×21×1초 ≈ 5분
+STEPS_PER_LEG = 20                      # 구간당 보간 점수 — 14구간×21×1초 ≈ 5분
 DETECT_EVERY  = 5                       # N번째 GPS 전송마다 탐지 데이터 전송
 LOOP          = False                   # True 이면 경로를 반복 순환
 
@@ -42,51 +41,35 @@ ROUTE = [
     (37.653404, 127.043607, "출발: 아파트 입구"),
     (37.653331, 127.044015, "아파트내1"),
     (37.653539, 127.044069, "아파트내2"),
-    (37.653692, 127.043404, "아파트밖 골목길"),
-    (37.653371, 127.043303, "아파트밖 골목길2"),
-    (37.653091, 127.043114, "골목길1"),
-    (37.652998, 127.043355, "골목길2"),
-    (37.652929, 127.043605, "골목길3"),
-    (37.652859, 127.043738, "골목길4"),
-    (37.652768, 127.043840, "골목길5"),
-    (37.652573, 127.043941, "골목길6"),
-    (37.652442, 127.043966, "큰길"),
-    (37.652703, 127.045057, "큰길2"),
-    (37.652849, 127.045720, "상가 앞"),
+    (37.653281, 127.045065, "아파트밖 골목길"),
+    (37.652956, 127.045059, "아파트밖 골목길2"),
+    (37.652853, 127.045240, "상가옆1"),
+    (37.652854, 127.045359, "상가옆2"),
+    (37.652762, 127.045388, "큰길1"),
     (37.653078, 127.046838, "창동역 도착"),
 ]
 
 # ── 경로별 더미 장면 매핑 ────────────────────────────────────────────────────────
-# ultralytics 패키지에 내장된 테스트 이미지 사용 (설치만 되면 항상 존재)
-# bus.jpg    : 버스 + 사람이 포함된 도로 장면
-# zidane.jpg : 사람이 포함된 장면
 try:
     import ultralytics as _ul
-    _A      = Path(_ul.__file__).parent / "assets"
-    _BUS    = str(_A / "bus.jpg")
-    _PERSON = str(_A / "zidane.jpg")
-    _ASSETS_OK = _A.exists()
+    _ASSETS_OK = (Path(_ul.__file__).parent / "assets").exists()
 except Exception:
-    _BUS = _PERSON = ""
     _ASSETS_OK = False
 
-# key = ROUTE 인덱스, value = 테스트 이미지 경로 (None = 탐지 없음)
+try:
+    from dummy_scenes import SCENE_BUS, SCENE_PERSON, SCENE_CAUTION
+except Exception:
+    SCENE_BUS = SCENE_PERSON = SCENE_CAUTION = None
+
+# key = ROUTE leg 인덱스(0~6), value = 장면 상수 (None = 탐지 없음)
 WAYPOINT_SCENES: dict[int, str | None] = {
-    0:  None,      # 출발: 아파트 입구 — 탐지 없음
-    1:  _PERSON,   # 아파트내1 — 사람 탐지
-    2:  None,
-    3:  None,
-    4:  _PERSON,   # 아파트밖 골목길2 — 사람/가방 탐지
-    5:  _BUS,      # 골목길1 — 다중 물체 (버스·사람)
-    6:  None,
-    7:  _PERSON,   # 골목길3 — 사람 가까이
-    8:  None,
-    9:  None,
-    10: None,
-    11: _BUS,      # 큰길 — 차도 장면 (버스·자동차)
-    12: None,
-    13: _PERSON,   # 상가 앞 — 사람
-    14: _BUS,      # 창동역 도착 — 버스 + 사람
+    0: None,           # 출발: 아파트 입구 — 탐지 없음
+    1: SCENE_PERSON,   # 아파트내1 — 사람·핸드백·여행가방·우산
+    2: SCENE_CAUTION,  # 아파트내2 — 배낭·화분·의자 (주의·안전)
+    3: None,           # 아파트밖 골목길
+    4: SCENE_PERSON,   # 아파트밖 골목길2 — 사람·여행가방
+    5: SCENE_BUS,      # 큰길1 — 버스·자전거·배낭·벤치
+    6: SCENE_BUS,      # 창동역 도착 — 버스·자전거
 }
 
 # ───────────────────────────────────────────────────────────────────────────────
@@ -240,7 +223,7 @@ def run():
 
     print(f"\nVoiceGuide GPS 시뮬레이터 — 데모 모드")
     print(f"  서버     : {SERVER_URL}")
-    print(f"  세션 ID  : {SESSION_ID}  [시리얼: {SERIAL}]")
+    print(f"  세션 ID  : {SESSION_ID}")
     print(f"  전송 간격: {INTERVAL}초  /  구간당 보간: {STEPS_PER_LEG}점")
     print(f"  총 좌표  : {len(dense)}개  →  예상 {int(total_sec // 60)}분 {int(total_sec % 60)}초")
     print(f"  탐지 전송: {DETECT_EVERY}번째 포인트마다")
