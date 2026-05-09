@@ -78,7 +78,7 @@ object VoicePolicy {
             Log.e("VoicePolicy", "서버 정책 JSON 파싱 실패! 원인: ${e.message}", e)
             return
         }
-
+        
         snap = next
         appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString(PREF_POLICY_JSON, json)

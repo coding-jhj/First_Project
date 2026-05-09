@@ -50,7 +50,7 @@ object SentenceBuilder {
             it.classKo in VoicePolicy.vehicleKo() &&
                 it.w * it.h > VoicePolicy.nearVehicleAreaRatio()
         }
-
+        
         if (nearVehicle != null) {
             val idx   = sortedByX.indexOf(nearVehicle)
             val clock = getStableClock(nearVehicle.classKo, nearVehicle.cx, idx)
@@ -96,7 +96,6 @@ object SentenceBuilder {
 
         val sortedByX = detections.sortedBy { it.cx }
         val found = detections.firstOrNull { it.classKo.contains(target) }
-
         if (found != null) {
             val idx     = sortedByX.indexOf(found)
             val clock   = getStableClock(found.classKo, found.cx, idx)
@@ -110,7 +109,6 @@ object SentenceBuilder {
                 d.w * d.h > targetArea * VoicePolicy.findHazardAreaMultiplier() &&
                 d.w * d.h > VoicePolicy.findHazardAreaRatio()
             }
-
             return if (closerHazard != null) {
                 val hIdx     = sortedByX.indexOf(closerHazard)
                 val hClock   = getStableClock(closerHazard.classKo, closerHazard.cx, hIdx)
