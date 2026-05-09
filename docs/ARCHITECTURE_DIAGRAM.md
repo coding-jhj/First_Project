@@ -16,52 +16,7 @@ VoiceGuide는 **사용자 안전에 필요한 판단과 안내를 Android에서 
 
 ## 2. 전체 구조
 
-```mermaid
-%%{init: {"flowchart": {"nodeSpacing": 130, "rankSpacing": 170, "curve": "basis", "padding": 40}, "themeVariables": {"fontSize": "26px", "fontFamily": "Inter, Noto Sans KR, Arial", "primaryTextColor": "#111827", "lineColor": "#374151"}}}%%
-flowchart LR
-    User["사용자<br/>보행 중 실시간 안내"] --> App["Android 앱<br/>로컬 안전 판단"]
-
-    subgraph Android["Android - Kotlin / CameraX"]
-        Camera["CameraX<br/>ImageAnalysis<br/>카메라 프레임 입력"]
-        Detector["TfliteYoloDetector<br/>YOLO TFLite<br/>온디바이스 추론"]
-        Stabilizer["후처리 파이프라인<br/>NMS / vote<br/>IoU tracking / EMA"]
-        LocalGuide["로컬 안내 출력<br/>SentenceBuilder<br/>TTS / 진동 / UI"]
-        PolicyClient["VoicePolicy<br/>정책 캐시<br/>fallback policy"]
-    end
-
-    subgraph Server["FastAPI 서버"]
-        Routes["routes.py<br/>API 라우터<br/>JSON 정규화"]
-        Tracker["SessionTracker<br/>서버 측 EMA<br/>접근 변화 감지"]
-        NLG["src/nlg<br/>서버 문장 생성<br/>질문 응답 보조"]
-        Writer["DB writer<br/>queue / batch<br/>비동기 저장"]
-        SSE["SSE events<br/>대시보드<br/>실시간 갱신"]
-    end
-
-    subgraph Storage["Storage"]
-        DB["SQLite 또는 PostgreSQL<br/>events / detections<br/>gps / routes"]
-        Dashboard["templates/dashboard.html<br/>Leaflet + SSE<br/>실시간 모니터링"]
-    end
-
-    App --> Camera --> Detector --> Stabilizer --> LocalGuide
-    Stabilizer -->|POST /detect| Routes
-    App -->|POST /gps| Routes
-    Routes --> Tracker
-    Routes --> NLG
-    Routes --> Writer --> DB
-    Routes --> SSE --> Dashboard
-    Routes -->|GET /api/policy| PolicyClient
-    DB --> Dashboard
-
-    classDef android fill:#e8f5e9,stroke:#2e7d32,stroke-width:4px,color:#111827,font-size:24px;
-    classDef server fill:#e3f2fd,stroke:#1565c0,stroke-width:4px,color:#111827,font-size:24px;
-    classDef storage fill:#fff8e1,stroke:#f9a825,stroke-width:4px,color:#111827,font-size:24px;
-    classDef output fill:#fce4ec,stroke:#ad1457,stroke-width:4px,color:#111827,font-size:24px;
-    class Camera,Detector,Stabilizer,PolicyClient android;
-    class Routes,Tracker,NLG,Writer,SSE server;
-    class DB,Dashboard storage;
-    class LocalGuide output;
-    linkStyle default stroke:#374151,stroke-width:4px;
-```
+![VoiceGuide 전체 구조](image/architecture-overview.png)
 
 ---
 
