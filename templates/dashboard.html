@@ -893,6 +893,14 @@ function _buildAlertSentence(objects) {
   return `${loc} ${name}${ig} 있어요.`;
 }
 
+function clearAlert() {
+  _alertHistory.length = 0;
+  const latestEl  = document.getElementById('alertLatest');
+  const historyEl = document.getElementById('alertHistory');
+  if (latestEl)  latestEl.innerHTML = '<div class="empty-alert">탐지 대기 중...</div>';
+  if (historyEl) { historyEl.style.display = 'none'; historyEl.innerHTML = ''; }
+}
+
 function renderAlertNotice(sentence, alertMode) {
   const latestEl  = document.getElementById('alertLatest');
   const historyEl = document.getElementById('alertHistory');
@@ -1111,14 +1119,21 @@ function renderGps(gps, track) {
 
 // ── 폴링 ─────────────────────────────────────────────
 const OBJECT_HOLD_MS = 30_000;   // 탐지 후 최소 30초 유지
+const GPS_IDLE_MS    = 60_000;   // 60초간 GPS 없음 → 세션 종료로 간주, 경고안내 소거
 let prevObjectCount  = 0;
 let eventSource      = null;
 let pollTimer        = null;
 let _objClearTimer   = null;
+let _gpsIdleTimer    = null;
 
 function _scheduleObjectClear() {
   if (_objClearTimer) clearTimeout(_objClearTimer);
   _objClearTimer = setTimeout(() => { renderObjects([]); _objClearTimer = null; }, OBJECT_HOLD_MS);
+}
+
+function _scheduleGpsIdle() {
+  if (_gpsIdleTimer) clearTimeout(_gpsIdleTimer);
+  _gpsIdleTimer = setTimeout(() => { clearAlert(); _gpsIdleTimer = null; }, GPS_IDLE_MS);
 }
 
 async function poll() {
@@ -1149,6 +1164,7 @@ async function poll() {
     }
     // 타이머 진행 중이면 빈 응답이 와도 표시 유지
 
+    if (data.gps && Number.isFinite(Number(data.gps?.lat))) _scheduleGpsIdle();
     renderGps(data.gps, data.track);
 
     // 팀원 위치 업데이트 (실패해도 무시)
@@ -1203,6 +1219,7 @@ function applyPushedStatus(data, sessionId) {
     if (sentence) renderAlertNotice(sentence, alertMode);
   }
 
+  if (data.gps && Number.isFinite(Number(data.gps?.lat))) _scheduleGpsIdle();
   renderGps(data.gps, data.track);
 
   // 경로 저장 완료 신호 수신 시 콤보박스 목록 새로고침
@@ -1287,6 +1304,7 @@ function selectSession(s) {
   document.getElementById('sessionList').style.display = 'none';
   prevObjectCount = 0; mapCentered = false;
   if (_objClearTimer) { clearTimeout(_objClearTimer); _objClearTimer = null; }
+  if (_gpsIdleTimer)  { clearTimeout(_gpsIdleTimer);  _gpsIdleTimer  = null; }
   _alertHistory.length = 0;
   renderAlertNotice(null, 'silent');
   if (marker)    { map.removeLayer(marker);    marker    = null; }
@@ -1302,6 +1320,7 @@ document.getElementById('sessionId').addEventListener('change', () => {
   prevObjectCount = 0;
   mapCentered     = false;
   if (_objClearTimer) { clearTimeout(_objClearTimer); _objClearTimer = null; }
+  if (_gpsIdleTimer)  { clearTimeout(_gpsIdleTimer);  _gpsIdleTimer  = null; }
   _alertHistory.length = 0;
   renderAlertNotice(null, 'silent');
   if (marker)    { map.removeLayer(marker);    marker    = null; }

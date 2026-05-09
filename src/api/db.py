@@ -887,6 +887,19 @@ def get_history_24h(session_id: str, limit: int = 50) -> dict:
             return "beep"
         return "safe"
 
+    def _filter_by_risk(objects: list, event_risk: str) -> list:
+        """이벤트 위험도와 동일 등급의 물체만 반환 (최대 3개).
+
+        예) event_risk="critical" → risk_score >= 0.7 물체만 추림
+            event_risk="beep"     → 0.4 <= risk_score < 0.7 물체만 추림
+            event_risk="safe"     → risk_score < 0.4 물체만 추림
+
+        fallback(objects[:1]): _event_risk는 이벤트 내 최고 위험도로 결정되므로
+        이론상 matched가 빈 경우는 없음. 방어 코드로만 존재."""
+        matched = [o for o in objects
+                   if _risk_level(float(o.get("risk_score", 0))) == event_risk]
+        return (matched or objects[:1])[:3]
+
     events = []
     with _conn() as conn:
         if _IS_POSTGRES:
@@ -905,11 +918,12 @@ def get_history_24h(session_id: str, limit: int = 50) -> dict:
                 # psycopg3 + dict_row: JSONB 컬럼은 이미 Python list로 파싱됨
                 objs = row["objects_json"] if isinstance(row["objects_json"], list) \
                        else json.loads(row["objects_json"] or "[]")
+                risk = _event_risk(objs)
                 events.append({
                     "event_id":  row["event_id"],
                     "timestamp": str(row["timestamp"]),
-                    "objects":   objs[:3],       # 대시보드 표시용 상위 3개만
-                    "risk":      _event_risk(objs),
+                    "objects":   _filter_by_risk(objs, risk),
+                    "risk":      risk,
                 })
         else:
             # SQLite: Python으로 24시간 전 시점을 계산해 ISO 문자열 비교
@@ -924,11 +938,12 @@ def get_history_24h(session_id: str, limit: int = 50) -> dict:
             ).fetchall()
             for row in rows:
                 objs = json.loads(row[2] or "[]")
+                risk = _event_risk(objs)
                 events.append({
                     "event_id":  row[0],
                     "timestamp": row[1],
-                    "objects":   objs[:3],
-                    "risk":      _event_risk(objs),
+                    "objects":   _filter_by_risk(objs, risk),
+                    "risk":      risk,
                 })
 
     # 위험도별 건수 집계
