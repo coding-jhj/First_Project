@@ -109,6 +109,41 @@ def test_spaces_snapshot_endpoint():
     assert response.json() == {"saved": True}
 
 
+def test_status_includes_risk_score_after_detect():
+    """대시보드 실시간 위험도: /detect 후 tracker 상태에 risk_score(0~1)가 포함되는지."""
+    payload = {
+        "device_id": "dash_risk_dev",
+        "wifi_ssid": "dash_risk_wifi",
+        "mode": "장애물",
+        "camera_orientation": "front",
+        "objects": [
+            {
+                "class_ko": "사람",
+                "confidence": 0.9,
+                "bbox_norm_xywh": [0.25, 0.25, 0.4, 0.45],
+            },
+            {
+                "class_ko": "의자",
+                "confidence": 0.85,
+                "bbox_norm_xywh": [0.6, 0.55, 0.08, 0.1],
+            },
+        ],
+    }
+    dr = client.post("/detect", json=payload)
+    assert dr.status_code == 200
+    session_id = dr.json()["session_id"]
+    sr = client.get(f"/status/{session_id}")
+    assert sr.status_code == 200
+    objects = sr.json().get("objects") or []
+    assert len(objects) >= 1
+    for o in objects:
+        assert "risk_score" in o
+        rs = float(o["risk_score"])
+        assert 0.0 <= rs <= 1.0
+    ranked = sorted(objects, key=lambda x: float(x.get("risk_score", 0)), reverse=True)
+    assert ranked[0]["class_ko"] == "사람"
+
+
 def test_protected_status_requires_api_key(monkeypatch):
     # API_KEY 설정 시 X-API-Key 헤더 없이 접근하면 401 반환, 헤더 포함 시 200 반환
     monkeypatch.setattr(routes, "_API_KEY", "test-secret")
