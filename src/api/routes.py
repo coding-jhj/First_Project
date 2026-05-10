@@ -311,19 +311,24 @@ async def detect(
     _t_tracker = _time.monotonic()
     tracker = get_tracker(session_id)
     objects, motion_changes = tracker.update(objects)
+    # voting 필터가 모두 걸러낸 경우 pre-tracker 원본을 DB 히스토리 저장에 사용
+    _save_objs = objects or current_objects
     nlg_objects = current_objects if mode in {"찾기", "질문", "들고있는것"} and current_objects else objects
     _tracker_ms = int((_time.monotonic() - _t_tracker) * 1000)
 
-    should_persist = _should_persist_frame(session_id, objects, mode)
+    should_persist = _should_persist_frame(session_id, _save_objs, mode)
     previous = db.get_snapshot(session_id) if should_persist else None
     space_changes = _space_changes(objects, previous) if previous and objects else []
     if objects and should_persist:
         db.save_snapshot(session_id, objects)
         _mark_persisted(session_id, objects)
+    elif should_persist and _save_objs:
+        # tracker가 모두 필터링한 경우에도 시그니처 업데이트 → 중복 저장 방지
+        _mark_persisted(session_id, _save_objs)
 
     all_changes = motion_changes + space_changes
     db_enqueued = False
-    if should_persist and objects:
+    if should_persist and _save_objs:
         db_enqueued = db.enqueue_detection_event(
             event_id=event_id,
             request_id=request_id,
@@ -331,7 +336,7 @@ async def detect(
             device_id=device_id,
             wifi_ssid=wifi_ssid,
             mode=mode,
-            objects=objects,
+            objects=_save_objs,
             hazards=hazards,
             scene=scene,
             raw_payload=payload,
