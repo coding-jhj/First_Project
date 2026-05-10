@@ -6,6 +6,7 @@
 <title>VoiceGuide 대시보드</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
 <style>
   :root {
     --bg: #0f1117;
@@ -771,6 +772,7 @@ const markerIcon = L.divIcon({
 let marker    = null;
 let trackLine = null;
 let routeLine = null;  // 저장된 경로 표시용 (주황색)
+let heatLayer = null;  // 위험 구간 히트맵 레이어
 let mapCentered = false;
 const teamMarkers = {};  // session_id → Leaflet marker
 
@@ -1119,21 +1121,113 @@ function renderGps(gps, track) {
 
 // ── 폴링 ─────────────────────────────────────────────
 const OBJECT_HOLD_MS = 30_000;   // 탐지 후 최소 30초 유지
-const GPS_IDLE_MS    = 60_000;   // 60초간 GPS 없음 → 세션 종료로 간주, 경고안내 소거
+const GPS_IDLE_MS    = 30_000;   // 60초간 GPS 없음 → 세션 종료로 간주, 경고안내 소거
 let prevObjectCount  = 0;
 let eventSource      = null;
 let pollTimer        = null;
 let _objClearTimer   = null;
 let _gpsIdleTimer    = null;
+let _heatmapTimer    = null;
+let _cachedGpsKey    = null;   // 페이지 로드 직후 서버에서 받은 첫 GPS (캐시된 값)
+let _liveGpsActive   = false;  // 위치가 실제로 변경됐을 때만 true (활성 추적 중)
+let _heatmapData     = [];     // 서버에서 받아온 히트맵 포인트 (lat, lng, intensity)
+let _heatmapVisible  = false;  // 현재 지도에 히트맵이 표시 중인지 여부
 
 function _scheduleObjectClear() {
   if (_objClearTimer) clearTimeout(_objClearTimer);
   _objClearTimer = setTimeout(() => { renderObjects([]); _objClearTimer = null; }, OBJECT_HOLD_MS);
 }
 
-function _scheduleGpsIdle() {
+let _heatmapGen  = 0;          // 세대 카운터 — 중단 후 날아온 응답을 무시하기 위해 사용
+let _currentGps  = null;       // 가장 최근 수신된 GPS 좌표 {lat, lng}
+
+// 현재 위치 반경 이 거리(m) 이내의 포인트만 지도에 표시
+const HEATMAP_RADIUS_M = 50;
+
+/** Haversine 공식으로 두 GPS 좌표 사이 거리(m)를 반환 */
+function _haversineM(lat1, lng1, lat2, lng2) {
+  const R = 6371000, f = Math.PI / 180;
+  const φ1 = lat1 * f, φ2 = lat2 * f;
+  const Δφ = (lat2 - lat1) * f, Δλ = (lng2 - lng1) * f;
+  const a = Math.sin(Δφ/2)**2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ/2)**2;
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/**
+ * GPS 위치 기준으로 반경 HEATMAP_RADIUS_M 이내 포인트만 걸러 렌더링한다.
+ * GPS 업데이트마다 호출 → 지나친 구간은 사라지고 다가오는 구간만 나타남.
+ */
+function _checkHeatmapProximity(lat, lng) {
+  if (!_liveGpsActive || _heatmapData.length === 0) {
+    if (_heatmapVisible) { _heatmapVisible = false; renderHeatmap([]); }
+    return;
+  }
+
+  // 현재 위치 반경 내 포인트만 필터링
+  const nearby = _heatmapData.filter(
+    p => _haversineM(lat, lng, p.lat, p.lng) <= HEATMAP_RADIUS_M
+  );
+
+  if (nearby.length > 0) {
+    _heatmapVisible = true;
+    renderHeatmap(nearby);      // 반경 내 포인트만 표시 (GPS 이동마다 갱신)
+  } else if (_heatmapVisible) {
+    _heatmapVisible = false;
+    renderHeatmap([]);          // 반경 내 포인트 없음 → 히트맵 숨김
+  }
+}
+
+function _startHeatmapPolling() {
+  if (_heatmapTimer) return;
+  fetchHeatmap();  // 백그라운드에서 데이터 취득 시작
+  _heatmapTimer = setInterval(fetchHeatmap, HISTORY_POLL_MS);
+}
+
+function _stopHeatmapPolling(clear = false) {
+  _heatmapGen++;  // 진행 중인 fetchHeatmap 응답을 무효화
+  if (_heatmapTimer) { clearInterval(_heatmapTimer); _heatmapTimer = null; }
+  _heatmapData    = [];
+  _heatmapVisible = false;
+  if (clear) renderHeatmap([]);
+}
+
+function _resetLiveGpsState() {
+  _liveGpsActive = false;
+  _cachedGpsKey  = null;
+  _currentGps    = null;
+}
+
+/**
+ * GPS 이벤트 수신 시 호출. lat/lng를 받아 위치 변경 여부를 판단한다.
+ * - 첫 수신(=서버 캐시): 위치 저장만 하고 히트맵은 시작하지 않음
+ * - 위치가 바뀐 순간(=실제 이동): 히트맵 폴링 시작
+ */
+function _scheduleGpsIdle(lat, lng) {
+  const key = `${Number(lat).toFixed(5)},${Number(lng).toFixed(5)}`;
+
+  if (_cachedGpsKey === null) {
+    // 세션 내 첫 GPS → 서버 캐시일 가능성 있음, 위치만 기억
+    _cachedGpsKey = key;
+  } else if (!_liveGpsActive && key !== _cachedGpsKey) {
+    // 위치가 달라짐 → 장치가 실제로 움직이고 있음
+    _liveGpsActive = true;
+  }
+
+  _currentGps = { lat, lng };  // 항상 최신 GPS 저장 (fetchHeatmap 갱신 시 재평가용)
+
   if (_gpsIdleTimer) clearTimeout(_gpsIdleTimer);
-  _gpsIdleTimer = setTimeout(() => { clearAlert(); _gpsIdleTimer = null; }, GPS_IDLE_MS);
+  if (_liveGpsActive) {
+    _startHeatmapPolling();           // 백그라운드 데이터 폴링 시작 (최초 1회만 실행)
+    _checkHeatmapProximity(lat, lng); // GPS 업데이트마다 반경 내 포인트 재계산
+  }
+
+  _gpsIdleTimer = setTimeout(() => {
+    clearAlert();
+    _gpsIdleTimer = null;
+    _resetLiveGpsState();
+    const sel = document.getElementById('routeSelect');
+    if (!sel || !sel.value) _stopHeatmapPolling(true);
+  }, GPS_IDLE_MS);
 }
 
 async function poll() {
@@ -1164,7 +1258,7 @@ async function poll() {
     }
     // 타이머 진행 중이면 빈 응답이 와도 표시 유지
 
-    if (data.gps && Number.isFinite(Number(data.gps?.lat))) _scheduleGpsIdle();
+    if (data.gps && Number.isFinite(Number(data.gps?.lat))) _scheduleGpsIdle(data.gps.lat, data.gps.lng);
     renderGps(data.gps, data.track);
 
     // 팀원 위치 업데이트 (실패해도 무시)
@@ -1219,7 +1313,7 @@ function applyPushedStatus(data, sessionId) {
     if (sentence) renderAlertNotice(sentence, alertMode);
   }
 
-  if (data.gps && Number.isFinite(Number(data.gps?.lat))) _scheduleGpsIdle();
+  if (data.gps && Number.isFinite(Number(data.gps?.lat))) _scheduleGpsIdle(data.gps.lat, data.gps.lng);
   renderGps(data.gps, data.track);
 
   // 경로 저장 완료 신호 수신 시 콤보박스 목록 새로고침
@@ -1310,8 +1404,10 @@ function selectSession(s) {
   if (marker)    { map.removeLayer(marker);    marker    = null; }
   if (trackLine) { map.removeLayer(trackLine); trackLine = null; }
   if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+  _resetLiveGpsState();
+  _stopHeatmapPolling(true);  // 세션 전환 시 히트맵 제거
   connectEventStream();
-  refreshHistory();
+  fetchHistory();
   loadRouteList();
 }
 
@@ -1326,6 +1422,8 @@ document.getElementById('sessionId').addEventListener('change', () => {
   if (marker)    { map.removeLayer(marker);    marker    = null; }
   if (trackLine) { map.removeLayer(trackLine); trackLine = null; }
   if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+  _resetLiveGpsState();
+  _stopHeatmapPolling(true);  // 세션 변경 시 히트맵 제거
   connectEventStream();
   loadRouteList();
 });
@@ -1374,7 +1472,11 @@ async function loadRouteList() {
 
 async function loadRouteTrack(routeId) {
   if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
-  if (!routeId) return;
+  if (!routeId) {
+    // 경로 선택 해제 — 라이브 GPS가 없으면 히트맵 제거
+    if (!_gpsIdleTimer) _stopHeatmapPolling(true);
+    return;
+  }
   const sessionId = document.getElementById('sessionId').value.trim() || '__default__';
 
   let coords = [];
@@ -1410,6 +1512,8 @@ async function loadRouteTrack(routeId) {
     smoothFactor: 1,
   }).addTo(map);
   map.fitBounds(routeLine.getBounds(), { padding: [40, 40] });
+  // 저장된 경로 선택 시 히트맵을 즉시 표시 (근접 여부 무관)
+  fetchHeatmap(true);
 }
 
 // ── 24시간 탐지 내역 ──────────────────────────────────
@@ -1501,6 +1605,47 @@ setInterval(fetchHistory, HISTORY_POLL_MS);
 
 // 세션 변경 시 내역도 즉시 갱신
 function refreshHistory() { fetchHistory(); }
+
+// ── 위험 구간 히트맵 ──────────────────────────────────
+function renderHeatmap(points) {
+  if (!points || points.length === 0) {
+    if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
+    return;
+  }
+  const data = points.map(p => [p.lat, p.lng, p.intensity]);
+  if (!heatLayer) {
+    heatLayer = L.heatLayer(data, {
+      radius: 25, blur: 20, maxZoom: 17,
+      gradient: { 0.2: '#48bfe3', 0.5: '#f4a261', 1.0: '#e63946' },
+    }).addTo(map);
+  } else {
+    heatLayer.setLatLngs(data);
+  }
+}
+
+/**
+ * 서버에서 히트맵 데이터를 가져와 _heatmapData에 저장한다.
+ * forceShow=true 이면 근접 여부 무관하게 즉시 표시 (저장된 경로 선택 시 사용).
+ */
+async function fetchHeatmap(forceShow = false) {
+  const gen = _heatmapGen;  // 요청 시점의 세대 기록
+  const sessionId = document.getElementById('sessionId').value.trim() || '__default__';
+  try {
+    const res = await fetch(`${SERVER_BASE}/heatmap/${encodeURIComponent(sessionId)}`);
+    if (!res.ok || _heatmapGen !== gen) return;  // 중단됐으면 응답 무시
+    const data = await res.json();
+    if (_heatmapGen !== gen) return;             // 응답 파싱 후에도 재확인
+    _heatmapData = data.points ?? [];
+    if (forceShow) {
+      // 저장된 경로 보기: 근접 여부 무관하게 전체 표시
+      _heatmapVisible = true;
+      renderHeatmap(_heatmapData);
+    } else if (_currentGps) {
+      // 백그라운드 갱신: 현재 위치 기준으로 반경 재평가
+      _checkHeatmapProximity(_currentGps.lat, _currentGps.lng);
+    }
+  } catch (_) {}
+}
 
 // ── 현재 경로 저장 ───────────────────────────────────
 async function saveCurrentRoute() {

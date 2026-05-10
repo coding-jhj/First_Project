@@ -306,24 +306,30 @@ async def detect(
     scene = payload.get("scene", {})
     if not isinstance(scene, dict):
         scene = {}
-    _detect_ms = int(payload.get("client_perf", {}).get("infer_ms", 0) or 0)
+    client_perf = payload.get("client_perf") or {}
+    _detect_ms = int(client_perf.get("infer_ms", 0) or 0)
 
     _t_tracker = _time.monotonic()
     tracker = get_tracker(session_id)
     objects, motion_changes = tracker.update(objects)
+    # voting 필터가 모두 걸러낸 경우 pre-tracker 원본을 DB 히스토리 저장에 사용
+    _save_objs = objects or current_objects
     nlg_objects = current_objects if mode in {"찾기", "질문", "들고있는것"} and current_objects else objects
     _tracker_ms = int((_time.monotonic() - _t_tracker) * 1000)
 
-    should_persist = _should_persist_frame(session_id, objects, mode)
+    should_persist = _should_persist_frame(session_id, _save_objs, mode)
     previous = db.get_snapshot(session_id) if should_persist else None
     space_changes = _space_changes(objects, previous) if previous and objects else []
     if objects and should_persist:
         db.save_snapshot(session_id, objects)
         _mark_persisted(session_id, objects)
+    elif should_persist and _save_objs:
+        # tracker가 모두 필터링한 경우에도 시그니처 업데이트 → 중복 저장 방지
+        _mark_persisted(session_id, _save_objs)
 
     all_changes = motion_changes + space_changes
     db_enqueued = False
-    if should_persist and objects:
+    if should_persist and _save_objs:
         db_enqueued = db.enqueue_detection_event(
             event_id=event_id,
             request_id=request_id,
@@ -331,7 +337,7 @@ async def detect(
             device_id=device_id,
             wifi_ssid=wifi_ssid,
             mode=mode,
-            objects=objects,
+            objects=_save_objs,
             hazards=hazards,
             scene=scene,
             raw_payload=payload,
@@ -400,6 +406,18 @@ async def detect(
         "db_queued": db_enqueued,
         "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
     }, _t0, request_id, _detect_ms, _tracker_ms)
+    if should_persist and _save_objs:
+        db.save_performance_metric(
+            session_id=session_id, device_id=device_id, event_id=event_id,
+            client_perf=client_perf,
+            server_perf=response_payload.get("perf", {}),
+            object_count=len(_save_objs),
+        )
+        db.save_alert_decision(
+            event_id=event_id, session_id=session_id,
+            alert_mode=alert_mode, objects=objects,
+            spoken_sentence=sentence,
+        )
     await _publish_dashboard_event(session_id, response_payload, db.get_last_gps(session_id), db.get_gps_track(session_id, limit=100))
     return response_payload
 
@@ -686,6 +704,18 @@ async def get_detection_history(session_id: str):
         "summary":      result["summary"],
         "events":       result["events"],
     }
+
+
+@router.get("/heatmap/{session_id}", dependencies=[Depends(_verify_api_key)])
+async def get_heatmap(session_id: str, hours: int = 24):
+    """위험 구간 히트맵 데이터 조회 — 대시보드 지도 오버레이 전용.
+
+    detection_events의 GPS 좌표 + risk_score를 집계해 히트맵 포인트 목록을 반환한다.
+    반환된 intensity(0~1)를 Leaflet.heat가 색상 강도로 표현한다.
+    """
+    req_session_id = _normalize_session_id(device_id=session_id)
+    points = db.get_heatmap_data(req_session_id, hours=hours)
+    return {"session_id": req_session_id, "hours": hours, "points": points}
 
 
 @router.get("/dashboard", dependencies=[Depends(_verify_api_key)])

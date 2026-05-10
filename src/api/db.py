@@ -160,6 +160,42 @@ def _init_sqlite():
             );
             CREATE INDEX IF NOT EXISTS idx_recent_detections_session_time
                 ON recent_detections (session_id, id DESC);
+            CREATE TABLE IF NOT EXISTS performance_metrics (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id     TEXT NOT NULL,
+                device_id      TEXT,
+                event_id       TEXT,
+                model_name     TEXT,
+                provider       TEXT,
+                fps            REAL,
+                infer_ms       INTEGER,
+                preprocess_ms  INTEGER,
+                postprocess_ms INTEGER,
+                process_ms     INTEGER,
+                tracker_ms     INTEGER,
+                nlg_ms         INTEGER,
+                object_count   INTEGER,
+                tts_latency_ms INTEGER,
+                memory_mb      REAL,
+                timestamp      TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_perf_session_time
+                ON performance_metrics (session_id, id DESC);
+            CREATE TABLE IF NOT EXISTS alert_decisions (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id          TEXT NOT NULL,
+                session_id        TEXT NOT NULL,
+                alert_mode        TEXT NOT NULL,
+                top_object        TEXT,
+                risk_score        REAL,
+                distance_m        REAL,
+                vibration_pattern TEXT,
+                spoken_sentence   TEXT,
+                reason            TEXT,
+                timestamp         TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_alert_session_time
+                ON alert_decisions (session_id, id DESC);
         """)
 
 
@@ -281,6 +317,50 @@ def _init_postgres():
                 "CREATE INDEX IF NOT EXISTS idx_recent_detections_session_time "
                 "ON recent_detections (session_id, id DESC)"
             )
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS performance_metrics (
+                    id             BIGSERIAL PRIMARY KEY,
+                    session_id     TEXT NOT NULL,
+                    device_id      TEXT,
+                    event_id       TEXT,
+                    model_name     TEXT,
+                    provider       TEXT,
+                    fps            DOUBLE PRECISION,
+                    infer_ms       INTEGER,
+                    preprocess_ms  INTEGER,
+                    postprocess_ms INTEGER,
+                    process_ms     INTEGER,
+                    tracker_ms     INTEGER,
+                    nlg_ms         INTEGER,
+                    object_count   INTEGER,
+                    tts_latency_ms INTEGER,
+                    memory_mb      DOUBLE PRECISION,
+                    timestamp      TIMESTAMPTZ NOT NULL
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_perf_session_time "
+                "ON performance_metrics (session_id, id DESC)"
+            )
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS alert_decisions (
+                    id                BIGSERIAL PRIMARY KEY,
+                    event_id          TEXT NOT NULL,
+                    session_id        TEXT NOT NULL,
+                    alert_mode        TEXT NOT NULL,
+                    top_object        TEXT,
+                    risk_score        DOUBLE PRECISION,
+                    distance_m        DOUBLE PRECISION,
+                    vibration_pattern TEXT,
+                    spoken_sentence   TEXT,
+                    reason            TEXT,
+                    timestamp         TIMESTAMPTZ NOT NULL
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alert_session_time "
+                "ON alert_decisions (session_id, id DESC)"
+            )
 
 
 # ── 공간 스냅샷 ───────────────────────────────────────────────────────────────
@@ -317,6 +397,8 @@ def get_snapshot(space_id: str, max_age_s: float | None = None) -> list[dict] | 
 
 _SNAPSHOT_KEEP = 20  # 공간별 스냅샷 최대 보관 수 (이 이상이면 오래된 것부터 삭제)
 _EVENT_KEEP = 200
+_PERF_KEEP  = 500   # 세션별 성능 로그 최대 보관 건수
+_ALERT_KEEP = 200   # 세션별 경고 결정 로그 최대 보관 건수
 _EVENT_QUEUE_MAX = int(os.getenv("DETECTION_EVENT_QUEUE_MAX", "512"))
 _EVENT_BATCH_SIZE = int(os.getenv("DETECTION_EVENT_BATCH_SIZE", "24"))
 _EVENT_FLUSH_INTERVAL_S = float(os.getenv("DETECTION_EVENT_FLUSH_INTERVAL_S", "0.25"))
@@ -952,6 +1034,183 @@ def get_history_24h(session_id: str, limit: int = 50) -> dict:
         summary[e["risk"]] += 1
 
     return {"events": events, "summary": summary}
+
+
+# ── 성능 로그 ─────────────────────────────────────────────────────────────────
+
+def _build_alert_reason(objects: list[dict], alert_mode: str) -> str:
+    """경고 발생 이유를 사람이 읽을 수 있는 문자열로 반환."""
+    if not objects:
+        return f"alert_mode={alert_mode}, 탐지 물체 없음"
+    top = objects[0]
+    cls  = top.get("class_ko", "")
+    risk = float(top.get("risk_score", 0))
+    dist = float(top.get("distance_m", 99))
+    vibe = top.get("vibration_pattern", "NONE")
+    if top.get("is_vehicle") and risk >= 0.55:
+        return f"차량({cls}), risk={risk:.2f}, dist={dist:.1f}m → {vibe}"
+    if risk >= 0.75:
+        return f"위험 물체({cls}), risk={risk:.2f}, dist={dist:.1f}m → {vibe}"
+    if risk >= 0.55:
+        return f"주의 물체({cls}), risk={risk:.2f}, dist={dist:.1f}m → {vibe}"
+    if risk >= 0.35:
+        return f"물체({cls}), risk={risk:.2f}, dist={dist:.1f}m → {vibe}"
+    return f"물체({cls}), risk={risk:.2f}, dist={dist:.1f}m → 경보 없음"
+
+
+def save_performance_metric(
+    *,
+    session_id: str,
+    device_id: str,
+    event_id: str,
+    client_perf: dict,
+    server_perf: dict,
+    object_count: int,
+) -> None:
+    """Android 전송 성능 데이터 + 서버 계산 성능을 performance_metrics 테이블에 저장."""
+    ts = datetime.now().isoformat()
+    row = (
+        session_id,
+        device_id or "",
+        event_id,
+        client_perf.get("model_name"),
+        client_perf.get("provider"),
+        client_perf.get("fps"),
+        client_perf.get("infer_ms"),
+        client_perf.get("preprocess_ms"),
+        client_perf.get("postprocess_ms"),
+        server_perf.get("total_ms"),
+        server_perf.get("tracker_ms"),
+        server_perf.get("nlg_ms"),
+        object_count,
+        client_perf.get("tts_latency_ms"),
+        client_perf.get("memory_mb"),
+        ts,
+    )
+    with _conn() as conn:
+        if _IS_POSTGRES:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO performance_metrics "
+                    "(session_id, device_id, event_id, model_name, provider, fps, "
+                    " infer_ms, preprocess_ms, postprocess_ms, process_ms, tracker_ms, "
+                    " nlg_ms, object_count, tts_latency_ms, memory_mb, timestamp) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    row,
+                )
+                cur.execute(
+                    "DELETE FROM performance_metrics WHERE session_id = %s AND id NOT IN "
+                    "(SELECT id FROM performance_metrics WHERE session_id = %s ORDER BY id DESC LIMIT %s)",
+                    (session_id, session_id, _PERF_KEEP),
+                )
+        else:
+            conn.execute(
+                "INSERT INTO performance_metrics "
+                "(session_id, device_id, event_id, model_name, provider, fps, "
+                " infer_ms, preprocess_ms, postprocess_ms, process_ms, tracker_ms, "
+                " nlg_ms, object_count, tts_latency_ms, memory_mb, timestamp) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                row,
+            )
+            conn.execute(
+                "DELETE FROM performance_metrics WHERE session_id = ? AND id NOT IN "
+                "(SELECT id FROM performance_metrics WHERE session_id = ? ORDER BY id DESC LIMIT ?)",
+                (session_id, session_id, _PERF_KEEP),
+            )
+
+
+def save_alert_decision(
+    *,
+    event_id: str,
+    session_id: str,
+    alert_mode: str,
+    objects: list[dict],
+    spoken_sentence: str,
+) -> None:
+    """경고 결정 내역(alert_mode + 이유)을 alert_decisions 테이블에 저장."""
+    ts = datetime.now().isoformat()
+    top = objects[0] if objects else {}
+    row = (
+        event_id,
+        session_id,
+        alert_mode,
+        top.get("class_ko"),
+        top.get("risk_score"),
+        top.get("distance_m"),
+        top.get("vibration_pattern"),
+        spoken_sentence,
+        _build_alert_reason(objects, alert_mode),
+        ts,
+    )
+    with _conn() as conn:
+        if _IS_POSTGRES:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO alert_decisions "
+                    "(event_id, session_id, alert_mode, top_object, risk_score, "
+                    " distance_m, vibration_pattern, spoken_sentence, reason, timestamp) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    row,
+                )
+                cur.execute(
+                    "DELETE FROM alert_decisions WHERE session_id = %s AND id NOT IN "
+                    "(SELECT id FROM alert_decisions WHERE session_id = %s ORDER BY id DESC LIMIT %s)",
+                    (session_id, session_id, _ALERT_KEEP),
+                )
+        else:
+            conn.execute(
+                "INSERT INTO alert_decisions "
+                "(event_id, session_id, alert_mode, top_object, risk_score, "
+                " distance_m, vibration_pattern, spoken_sentence, reason, timestamp) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                row,
+            )
+            conn.execute(
+                "DELETE FROM alert_decisions WHERE session_id = ? AND id NOT IN "
+                "(SELECT id FROM alert_decisions WHERE session_id = ? ORDER BY id DESC LIMIT ?)",
+                (session_id, session_id, _ALERT_KEEP),
+            )
+
+
+def get_heatmap_data(session_id: str, hours: int = 24) -> list[dict]:
+    """detection_events의 GPS + risk_score를 집계해 히트맵 포인트 목록을 반환.
+
+    반환: [{"lat": float, "lng": float, "intensity": float}, ...]
+    intensity는 해당 이벤트 내 물체들의 최대 risk_score (0~1).
+    lat/lng가 없는 이벤트는 제외.
+    """
+    points: list[dict] = []
+    with _conn() as conn:
+        if _IS_POSTGRES:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT lat, lng, objects_json FROM detection_events "
+                    "WHERE session_id = %s AND lat IS NOT NULL AND lng IS NOT NULL "
+                    "  AND timestamp >= NOW() - INTERVAL '%s hours' "
+                    "ORDER BY id DESC LIMIT 500",
+                    (session_id, hours),
+                )
+                rows = cur.fetchall()
+            for row in rows:
+                objs = row["objects_json"] if isinstance(row["objects_json"], list) \
+                       else json.loads(row["objects_json"] or "[]")
+                intensity = max((float(o.get("risk_score", 0)) for o in objs), default=0.0)
+                points.append({"lat": row["lat"], "lng": row["lng"], "intensity": intensity})
+        else:
+            from datetime import timedelta
+            cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+            rows = conn.execute(
+                "SELECT lat, lng, objects_json FROM detection_events "
+                "WHERE session_id = ? AND lat IS NOT NULL AND lng IS NOT NULL "
+                "  AND timestamp >= ? "
+                "ORDER BY id DESC LIMIT 500",
+                (session_id, cutoff),
+            ).fetchall()
+            for row in rows:
+                objs = json.loads(row[2] or "[]")
+                intensity = max((float(o.get("risk_score", 0)) for o in objs), default=0.0)
+                points.append({"lat": row[0], "lng": row[1], "intensity": intensity})
+    return points
 
 
 def save_gps_route(session_id: str, name: str | None = None) -> str | None:
