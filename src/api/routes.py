@@ -306,7 +306,8 @@ async def detect(
     scene = payload.get("scene", {})
     if not isinstance(scene, dict):
         scene = {}
-    _detect_ms = int(payload.get("client_perf", {}).get("infer_ms", 0) or 0)
+    client_perf = payload.get("client_perf") or {}
+    _detect_ms = int(client_perf.get("infer_ms", 0) or 0)
 
     _t_tracker = _time.monotonic()
     tracker = get_tracker(session_id)
@@ -405,6 +406,18 @@ async def detect(
         "db_queued": db_enqueued,
         "depth_source": objects[0].get("depth_source", "bbox") if objects else "bbox",
     }, _t0, request_id, _detect_ms, _tracker_ms)
+    if should_persist and _save_objs:
+        db.save_performance_metric(
+            session_id=session_id, device_id=device_id, event_id=event_id,
+            client_perf=client_perf,
+            server_perf=response_payload.get("perf", {}),
+            object_count=len(_save_objs),
+        )
+        db.save_alert_decision(
+            event_id=event_id, session_id=session_id,
+            alert_mode=alert_mode, objects=objects,
+            spoken_sentence=sentence,
+        )
     await _publish_dashboard_event(session_id, response_payload, db.get_last_gps(session_id), db.get_gps_track(session_id, limit=100))
     return response_payload
 
@@ -691,6 +704,18 @@ async def get_detection_history(session_id: str):
         "summary":      result["summary"],
         "events":       result["events"],
     }
+
+
+@router.get("/heatmap/{session_id}", dependencies=[Depends(_verify_api_key)])
+async def get_heatmap(session_id: str, hours: int = 24):
+    """위험 구간 히트맵 데이터 조회 — 대시보드 지도 오버레이 전용.
+
+    detection_events의 GPS 좌표 + risk_score를 집계해 히트맵 포인트 목록을 반환한다.
+    반환된 intensity(0~1)를 Leaflet.heat가 색상 강도로 표현한다.
+    """
+    req_session_id = _normalize_session_id(device_id=session_id)
+    points = db.get_heatmap_data(req_session_id, hours=hours)
+    return {"session_id": req_session_id, "hours": hours, "points": points}
 
 
 @router.get("/dashboard", dependencies=[Depends(_verify_api_key)])

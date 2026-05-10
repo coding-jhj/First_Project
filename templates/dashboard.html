@@ -6,6 +6,7 @@
 <title>VoiceGuide 대시보드</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
 <style>
   :root {
     --bg: #0f1117;
@@ -771,6 +772,7 @@ const markerIcon = L.divIcon({
 let marker    = null;
 let trackLine = null;
 let routeLine = null;  // 저장된 경로 표시용 (주황색)
+let heatLayer = null;  // 위험 구간 히트맵 레이어
 let mapCentered = false;
 const teamMarkers = {};  // session_id → Leaflet marker
 
@@ -1500,7 +1502,37 @@ fetchHistory();
 setInterval(fetchHistory, HISTORY_POLL_MS);
 
 // 세션 변경 시 내역도 즉시 갱신
-function refreshHistory() { fetchHistory(); }
+function refreshHistory() { fetchHistory(); fetchHeatmap(); }
+
+// ── 위험 구간 히트맵 ──────────────────────────────────
+function renderHeatmap(points) {
+  if (!points || points.length === 0) {
+    if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null; }
+    return;
+  }
+  const data = points.map(p => [p.lat, p.lng, p.intensity]);
+  if (!heatLayer) {
+    heatLayer = L.heatLayer(data, {
+      radius: 25, blur: 20, maxZoom: 17,
+      gradient: { 0.2: '#48bfe3', 0.5: '#f4a261', 1.0: '#e63946' },
+    }).addTo(map);
+  } else {
+    heatLayer.setLatLngs(data);
+  }
+}
+
+async function fetchHeatmap() {
+  const sessionId = document.getElementById('sessionId').value.trim() || '__default__';
+  try {
+    const res = await fetch(`${SERVER_BASE}/heatmap/${encodeURIComponent(sessionId)}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    renderHeatmap(data.points ?? []);
+  } catch (_) {}
+}
+
+fetchHeatmap();
+setInterval(fetchHeatmap, HISTORY_POLL_MS);
 
 // ── 현재 경로 저장 ───────────────────────────────────
 async function saveCurrentRoute() {
