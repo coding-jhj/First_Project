@@ -13,9 +13,6 @@
 | 장애물 탐지 (장애물 모드) | ✅ 동작 |
 | 위험도 기반 진동 패턴 (NONE/SHORT/DOUBLE/URGENT) | ✅ 동작 |
 | 음성 안내 문장 TTS | ✅ 동작 |
-| 물건 찾기 모드 ("의자 찾아줘") | ✅ 동작 |
-| 질문 응답 모드 ("지금 뭐 있어?") | ✅ 동작 |
-| 들고있는것 모드 | ✅ 동작 |
 | 서버 전송 + DB 저장 | ✅ 동작 |
 | 대시보드 실시간 현황 | ✅ 동작 |
 | 대시보드 24시간 탐지 내역 | ✅ 동작 |
@@ -57,7 +54,7 @@ FastAPI 서버 (GCP Cloud Run)
 |---|---|
 | Android | Kotlin, CameraX, TensorFlow Lite |
 | 온디바이스 모델 | yolo11n_320.tflite (기본), yolo26n_float32.tflite (fallback) |
-| TTS / STT | Android 내장 |
+| TTS | Android 내장 |
 | 백엔드 | Python 3.10+, FastAPI |
 | DB | SQLite (로컬) / PostgreSQL Supabase (운영) |
 | 배포 | GCP Cloud Run |
@@ -78,7 +75,12 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 ### 배포된 서버
 
 ```
+대시보드:
+https://voiceguide-1063164560758.asia-northeast3.run.app/dashboard
+
+루트:
 https://voiceguide-1063164560758.asia-northeast3.run.app
+GET /            →  /dashboard로 이동
 GET /health      →  서버 + DB 상태 확인
 GET /dashboard   →  실시간 대시보드
 ```
@@ -113,12 +115,12 @@ GET /dashboard
 |---|---|---|
 | POST | `/detect` | 탐지 결과 JSON 수신 → DB 저장 + tracker 업데이트 |
 | POST | `/detect_json` | 탐지 결과 fire-and-forget 저장 (응답 미사용) |
-| POST | `/question` | 질문 응답 (tracker 누적 상태 조회) |
 | GET | `/api/policy` | policy.json 동기화 (ETag 캐싱) |
 | GET | `/status/{session_id}` | 세션 현재 상태 조회 |
 | GET | `/events/{session_id}` | SSE 실시간 스트림 |
 | GET | `/history/{session_id}` | 24시간 탐지 이벤트 내역 |
 | GET | `/routes/{session_id}` | 저장된 GPS 경로 목록 |
+| GET | `/dashboard/summary` | 전체 단말 24시간 탐지 통계 |
 | GET | `/dashboard` | 대시보드 HTML |
 
 ---
@@ -133,7 +135,7 @@ VoiceGuide/
 │   │   ├── yolo26n_float32.tflite   # fallback 모델
 │   │   └── policy_default.json      # 기본 정책 (서버 policy 없을 때 사용)
 │   └── java/com/voiceguide/
-│       ├── MainActivity.kt          # 카메라·TTS·STT·서버 연동 총괄
+│       ├── MainActivity.kt          # 카메라·TTS·서버 연동 총괄
 │       ├── TfliteYoloDetector.kt    # TFLite 추론 엔진
 │       ├── MvpPipeline.kt           # IoU 트래킹·EMA·위험도·진동 패턴
 │       ├── SentenceBuilder.kt       # 온디바이스 한국어 TTS 문장 생성

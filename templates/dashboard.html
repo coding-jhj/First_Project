@@ -162,6 +162,65 @@
   .stat-card.warn .stat-value    { color: var(--warn); }
   .stat-card.safe .stat-value    { color: var(--safe); }
 
+  .global-summary-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .global-stat-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 6px;
+    text-align: center;
+  }
+  .global-stat-value {
+    font-size: 17px;
+    font-weight: 800;
+    line-height: 1;
+    margin-bottom: 3px;
+  }
+  .global-stat-label { font-size: 9px; color: var(--muted); }
+  .global-stat-card.danger .global-stat-value { color: var(--danger); }
+  .global-stat-card.warn .global-stat-value { color: var(--warn); }
+  .global-stat-card.safe .global-stat-value { color: var(--safe); }
+  .session-summary-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 112px;
+    overflow-y: auto;
+  }
+  .session-summary-item {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 9px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .session-summary-item:hover {
+    border-color: var(--accent);
+    background: #252943;
+  }
+  .session-summary-id {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text);
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .session-summary-meta {
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   /* 탐지 물체 목록 */
   .objects-list {
     flex: 1;
@@ -591,6 +650,32 @@
 
     <!-- ▲ 상단: 실시간 현황 (기존과 동일) -->
     <div class="panel-top">
+
+      <!-- 전체 단말 통계 -->
+      <div class="panel-section">
+        <div class="section-title">전체 단말 24시간 통계</div>
+        <div class="global-summary-grid">
+          <div class="global-stat-card">
+            <div class="global-stat-value" id="globalSessions">0</div>
+            <div class="global-stat-label">단말</div>
+          </div>
+          <div class="global-stat-card">
+            <div class="global-stat-value" id="globalTotal">0</div>
+            <div class="global-stat-label">탐지</div>
+          </div>
+          <div class="global-stat-card danger">
+            <div class="global-stat-value" id="globalCritical">0</div>
+            <div class="global-stat-label">위험</div>
+          </div>
+          <div class="global-stat-card warn">
+            <div class="global-stat-value" id="globalBeep">0</div>
+            <div class="global-stat-label">주의</div>
+          </div>
+        </div>
+        <div class="session-summary-list" id="sessionSummaryList">
+          <div style="font-size:11px;color:var(--muted);">전체 단말 통계 불러오는 중...</div>
+        </div>
+      </div>
 
       <!-- 통계 카드 -->
       <div class="panel-section">
@@ -1365,11 +1450,17 @@ async function loadSessions() {
   box.style.display = 'block';
   box.innerHTML = '<div style="padding:10px 14px;font-size:12px;color:var(--muted)">불러오는 중...</div>';
   try {
-    const res  = await fetch(`${SERVER_BASE}/sessions`);
-    const data = await res.json();
-    const sessions = data.sessions ?? [];
+    const [res, summaryRes] = await Promise.all([
+      fetch(`${SERVER_BASE}/sessions`),
+      fetch(`${SERVER_BASE}/dashboard/summary`),
+    ]);
+    const data = res.ok ? await res.json() : {};
+    const summaryData = summaryRes.ok ? await summaryRes.json() : {};
+    const gpsSessions = data.sessions ?? [];
+    const eventSessions = (summaryData.sessions ?? []).map(s => s.session_id).filter(Boolean);
+    const sessions = [...new Set([...gpsSessions, ...eventSessions])];
     if (sessions.length === 0) {
-      box.innerHTML = '<div style="padding:10px 14px;font-size:12px;color:var(--muted)">GPS 데이터 없음<br>앱에서 분석을 시작하세요</div>';
+      box.innerHTML = '<div style="padding:10px 14px;font-size:12px;color:var(--muted)">단말 데이터 없음<br>앱에서 분석을 시작하세요</div>';
     } else {
       box.innerHTML = sessions.map(s => `
         <div class="session-option" data-session="${escapeHtml(s)}" style="
@@ -1520,6 +1611,58 @@ async function loadRouteTrack(routeId) {
 // 폴링 주기: 30초 (앱의 /detect 호출 주기와 완전히 별개)
 // 앱 FPS에 영향 없음 — 브라우저만 이 API를 호출함
 const HISTORY_POLL_MS = 30_000;
+const SUMMARY_POLL_MS = 30_000;
+
+async function fetchDashboardSummary() {
+  try {
+    const res = await fetch(`${SERVER_BASE}/dashboard/summary`);
+    if (!res.ok) return;
+    const data = await res.json();
+    renderDashboardSummary(data);
+  } catch (_) {
+    // 전체 통계는 부가 정보이므로 실패 시 현재 표시 유지
+  }
+}
+
+function renderDashboardSummary(data) {
+  const summary = data.summary ?? {};
+  const sessions = data.sessions ?? [];
+
+  document.getElementById('globalSessions').textContent = summary.sessions ?? 0;
+  document.getElementById('globalTotal').textContent = summary.total ?? 0;
+  document.getElementById('globalCritical').textContent = summary.critical ?? 0;
+  document.getElementById('globalBeep').textContent = summary.beep ?? 0;
+
+  const list = document.getElementById('sessionSummaryList');
+  if (!list) return;
+
+  if (sessions.length === 0) {
+    list.innerHTML = '<div style="font-size:11px;color:var(--muted);">최근 24시간 단말 통계 없음</div>';
+    return;
+  }
+
+  list.innerHTML = sessions.slice(0, 8).map(s => {
+    const sid = s.session_id ?? '__default__';
+    const shortId = sid.length > 18 ? `${sid.slice(0, 8)}…${sid.slice(-6)}` : sid;
+    const topObjects = (s.top_objects ?? [])
+      .map(o => `${escapeHtml(o.class_ko)} ${o.count}`)
+      .join(' · ') || '객체 없음';
+    return `
+      <div class="session-summary-item" data-session="${escapeHtml(sid)}">
+        <div class="session-summary-id">
+          <span title="${escapeHtml(sid)}">${escapeHtml(shortId)}</span>
+          <span style="color:var(--accent2);">${s.total ?? 0}건</span>
+        </div>
+        <div class="session-summary-meta">
+          위험 ${s.critical ?? 0} · 주의 ${s.beep ?? 0} · 안전 ${s.safe ?? 0} / ${topObjects}
+        </div>
+      </div>`;
+  }).join('');
+
+  list.querySelectorAll('.session-summary-item').forEach(el => {
+    el.addEventListener('click', () => selectSession(el.dataset.session));
+  });
+}
 
 /**
  * 서버의 /history/{sessionId} 를 호출해 24시간 내역을 가져온다.
@@ -1602,6 +1745,8 @@ function formatHistoryTime(isoStr) {
 // 페이지 로드 직후 1회 + 30초마다 반복 조회
 fetchHistory();
 setInterval(fetchHistory, HISTORY_POLL_MS);
+fetchDashboardSummary();
+setInterval(fetchDashboardSummary, SUMMARY_POLL_MS);
 
 // 세션 변경 시 내역도 즉시 갱신
 function refreshHistory() { fetchHistory(); }

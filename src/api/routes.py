@@ -675,6 +675,16 @@ async def get_team_locations():
             locations.append({"session_id": s, "lat": gps["lat"], "lng": gps["lng"]})
     return {"locations": locations}
 
+@router.get("/dashboard/summary", dependencies=[Depends(_verify_api_key)])
+async def get_dashboard_summary():
+    """전체 단말 기준 최근 24시간 탐지 통계.
+
+    대시보드가 선택 세션뿐 아니라 모든 단말의 총 탐지 건수와 세션별 요약을
+    보여주도록 제공한다. 데모 영상에서 클라이언트 화면과 대시보드의 세션이
+    서로 매칭되는지 설명할 때 사용한다.
+    """
+    return db.get_dashboard_summary_24h(limit=500)
+
 @router.get("/history/{session_id}", dependencies=[Depends(_verify_api_key)])
 async def get_detection_history(session_id: str):
     """최근 24시간 탐지 이벤트 내역 조회 — 대시보드 하단 패널 전용.

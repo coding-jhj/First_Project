@@ -1213,6 +1213,104 @@ def get_heatmap_data(session_id: str, hours: int = 24) -> list[dict]:
     return points
 
 
+def get_dashboard_summary_24h(limit: int = 200) -> dict:
+    """최근 24시간 전체 단말 탐지 통계 요약.
+
+    대시보드가 특정 세션 하나만 보여주면 "클라이언트와 서버가 매칭되는지"와
+    "모든 단말 통계"를 설명하기 어렵다. 이 함수는 최근 탐지 이벤트를 세션별로
+    묶어 전체 단말 수, 전체 탐지 수, 위험도별 건수, 세션별 최근 상태를 반환한다.
+    """
+    def _risk_level(risk_score: float) -> str:
+        if risk_score >= 0.7:
+            return "critical"
+        if risk_score >= 0.4:
+            return "beep"
+        return "safe"
+
+    def _event_risk(objects: list) -> str:
+        if not objects:
+            return "safe"
+        levels = [_risk_level(float(o.get("risk_score", 0))) for o in objects]
+        if "critical" in levels:
+            return "critical"
+        if "beep" in levels:
+            return "beep"
+        return "safe"
+
+    rows = []
+    with _conn() as conn:
+        if _IS_POSTGRES:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT session_id, timestamp, objects_json "
+                    "FROM detection_events "
+                    "WHERE timestamp >= NOW() - INTERVAL '24 hours' "
+                    "ORDER BY id DESC LIMIT %s",
+                    (limit,),
+                )
+                rows = cur.fetchall()
+        else:
+            from datetime import timedelta
+            cutoff = (datetime.now() - timedelta(hours=24)).isoformat()
+            rows = conn.execute(
+                "SELECT session_id, timestamp, objects_json "
+                "FROM detection_events "
+                "WHERE timestamp >= ? "
+                "ORDER BY id DESC LIMIT ?",
+                (cutoff, limit),
+            ).fetchall()
+
+    sessions: dict[str, dict] = {}
+    totals = {"sessions": 0, "total": 0, "critical": 0, "beep": 0, "safe": 0}
+
+    for row in rows:
+        if _IS_POSTGRES:
+            session_id = row["session_id"]
+            timestamp = str(row["timestamp"])
+            raw_objects = row["objects_json"]
+        else:
+            session_id = row[0]
+            timestamp = row[1]
+            raw_objects = row[2]
+
+        if not session_id:
+            continue
+
+        objects = raw_objects if isinstance(raw_objects, list) else json.loads(raw_objects or "[]")
+        risk = _event_risk(objects)
+
+        item = sessions.setdefault(session_id, {
+            "session_id": session_id,
+            "last_seen": timestamp,
+            "total": 0,
+            "critical": 0,
+            "beep": 0,
+            "safe": 0,
+            "top_objects": {},
+        })
+        item["total"] += 1
+        item[risk] += 1
+        # rows are newest first, so the first timestamp seen is the latest.
+        item["last_seen"] = item["last_seen"] or timestamp
+
+        totals["total"] += 1
+        totals[risk] += 1
+
+        for obj in objects:
+            name = obj.get("class_ko") or obj.get("class_name") or "알 수 없음"
+            item["top_objects"][name] = item["top_objects"].get(name, 0) + 1
+
+    result_sessions = []
+    for item in sessions.values():
+        top = sorted(item["top_objects"].items(), key=lambda kv: kv[1], reverse=True)[:3]
+        item["top_objects"] = [{"class_ko": name, "count": count} for name, count in top]
+        result_sessions.append(item)
+
+    result_sessions.sort(key=lambda s: s.get("last_seen") or "", reverse=True)
+    totals["sessions"] = len(result_sessions)
+    return {"summary": totals, "sessions": result_sessions}
+
+
 def save_gps_route(session_id: str, name: str | None = None) -> str | None:
     """gps_history의 현재 좌표를 하나의 완성 경로로 저장하고 gps_history를 초기화.
     저장된 좌표가 없으면 None 반환, 그 외에는 route_id 반환.

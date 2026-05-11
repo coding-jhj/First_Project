@@ -5,7 +5,7 @@ load_dotenv()  # .env 파일에서 DATABASE_URL, API_KEY 등 로드
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from src.api.routes import router
 from src.api import db
 
@@ -74,6 +74,12 @@ def _check_db() -> str:
         return "ok"
     except Exception as e:
         return f"error: {e}"
+
+
+@app.get("/")
+async def root():
+    """배포 URL 루트로 접속하면 대시보드로 안내한다."""
+    return RedirectResponse(url="/dashboard", status_code=307)
 
 
 # 예외가 나도 Android가 음성 안내를 받을 수 있도록 안전 응답 반환

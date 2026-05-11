@@ -21,6 +21,12 @@ def test_policy_endpoint():
     assert "vehicle_ko" in body["classes"]
 
 
+def test_root_redirects_to_dashboard():
+    r = client.get("/", follow_redirects=False)
+    assert r.status_code == 307
+    assert r.headers["location"] == "/dashboard"
+
+
 def test_detect_endpoint_exists():
     # /detect는 온디바이스 탐지 결과 JSON을 받는다.
     response = client.post("/detect", json={"device_id": "test_device", "objects": []})
@@ -142,6 +148,40 @@ def test_status_includes_risk_score_after_detect():
         assert 0.0 <= rs <= 1.0
     ranked = sorted(objects, key=lambda x: float(x.get("risk_score", 0)), reverse=True)
     assert ranked[0]["class_ko"] == "사람"
+
+
+def test_dashboard_summary_groups_recent_events_by_session():
+    payload = {
+        "device_id": "summary_device",
+        "wifi_ssid": "summary_wifi",
+        "mode": "장애물",
+        "camera_orientation": "front",
+        "objects": [
+            {
+                "class_ko": "자동차",
+                "confidence": 0.92,
+                "bbox_norm_xywh": [0.45, 0.45, 0.4, 0.45],
+            }
+        ],
+    }
+    dr = client.post("/detect", json=payload)
+    assert dr.status_code == 200
+    session_id = dr.json()["session_id"]
+
+    # /detect 저장은 background writer queue를 사용하므로 테스트에서 writer를 켜고 대기한다.
+    db.start_event_writer()
+    db._event_queue.join()
+
+    sr = client.get("/dashboard/summary")
+    assert sr.status_code == 200
+    body = sr.json()
+    assert body["summary"]["total"] >= 1
+
+    sessions = {s["session_id"]: s for s in body["sessions"]}
+    assert session_id in sessions
+    assert sessions[session_id]["total"] >= 1
+    assert sessions[session_id]["critical"] >= 1
+    assert sessions[session_id]["top_objects"][0]["class_ko"] == "자동차"
 
 
 def test_protected_status_requires_api_key(monkeypatch):
