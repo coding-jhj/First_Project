@@ -30,7 +30,7 @@ VoiceGuide는 서버 추론형 구조에서 온디바이스 우선 구조로 정
 | 후처리 | raw YOLO 출력과 end-to-end NMS 출력 모두 지원, NMS/IoU 중복 제거 |
 | 안정화 | 3프레임 vote, `MvpPipeline` IoU tracking, EMA smoothing, risk score |
 | 안내 | `SentenceBuilder.kt` 로컬 한국어 문장 생성, TTS, 진동 패턴, UI 표시 |
-| 모드 | 장애물, 찾기, 질문/확인, 들고있는것, 신호등, 다시읽기, 중지/재시작, 볼륨 제어 |
+| 모드 | 장애물 탐지, 위험도 기반 안내, TTS·진동, 서버 업로드 |
 | 서버 연동 | 백그라운드 `POST /detect`, GPS heartbeat `POST /gps` |
 | 위치 | 현재 GPS 전송, 이동 경로 저장 API 연동, 앱 내부 장소 저장/조회 |
 | 안전 보조 | 조도 센서 기반 어두운 환경 감지, 낙상 의심 후 확인 음성 |
@@ -43,12 +43,16 @@ VoiceGuide는 서버 추론형 구조에서 온디바이스 우선 구조로 정
 | `GET /api/policy` | `policy.json` 배포, ETag 캐싱, Android client 제한 |
 | `POST /detect` | 현재 주 경로. Android 객체 JSON 정규화, tracker 업데이트, NLG, DB enqueue |
 | `POST /detect_json` | 구형 detections 포맷 수신, `recent_detections` 저장 |
-| `POST /question` | 최근 tracker/DB 상태 기반 질문 응답 |
 | `POST /gps` | 현재 위치 저장 및 대시보드 이벤트 publish |
+| `POST /gps/route/save` | 현재 GPS track을 저장 경로로 확정 |
+| `GET /routes/{session_id}` | 저장된 GPS 경로 목록 조회 |
+| `GET /routes/{session_id}/{route_id}` | 특정 GPS 경로 좌표 조회 |
 | `GET /status/{session_id}` | 현재 객체, GPS, track, latest_event 조회 |
 | `GET /events/{session_id}` | SSE 실시간 대시보드 스트림 |
 | `GET /sessions` | 최근 GPS session 목록 조회 |
 | `GET /team-locations` | 최근 팀 위치 조회 |
+| `GET /history/{session_id}` | 최근 24시간 탐지 이벤트 내역 |
+| `GET /dashboard/summary` | 전체 단말 기준 최근 24시간 탐지 통계 |
 | `GET /dashboard` | HTML 대시보드 |
 
 ### DB/대시보드
@@ -59,10 +63,10 @@ VoiceGuide는 서버 추론형 구조에서 온디바이스 우선 구조로 정
 | `detections` | 이벤트별 객체 상세 저장 |
 | `snapshots` | session별 최근 공간 상태 |
 | `gps_history` | 현재 이동 경로 좌표 |
-| `recent_detections` | `/detect_json` 호환 및 질문 복원 보조 |
+| `recent_detections` | `/detect_json` 호환 보조 |
 | `saved_locations` | DB 헬퍼는 존재하나 현재 라우터에는 `/locations` 엔드포인트 없음 |
 
-`feature/jaehyun` 기준으로 `/history/{session_id}`, `/routes/{session_id}`, `/gps/route/save`는 아직 구현되어 있지 않습니다.
+현재 코드 기준으로 `/history/{session_id}`, `/routes/{session_id}`, `/gps/route/save`, `/dashboard/summary`가 구현되어 있습니다.
 
 ---
 
@@ -121,7 +125,7 @@ python -m pytest tests/ -v -m "not integration"
 최근 실행 결과:
 
 ```text
-22 passed, 9 deselected
+24 passed, 9 deselected
 ```
 
 주요 회귀 테스트:
@@ -131,7 +135,7 @@ python -m pytest tests/ -v -m "not integration"
 - `/detect_json` 저장 및 `recent_detections` 회귀
 - `/spaces/snapshot`
 - API key 보호 라우트
-- 한국어 NLG 조사/거리/찾기 문장
+- 한국어 NLG 조사/거리 문장
 - 서버 런타임 import
 
 `tests/test_server.py`의 integration 테스트는 실제 `localhost:8000` 서버가 떠 있어야 합니다.
@@ -154,6 +158,9 @@ python -m pytest tests/test_server.py -v -m integration
 - `/gps`
 - `/team-locations`
 - `/sessions`
+- `/history/{session_id}`
+- `/routes/{session_id}`
+- `/dashboard/summary`
 - `/dashboard`
 
 실행:
@@ -175,7 +182,7 @@ python test_simulation.py
 
 2. TTS/UI 안정성
    - `ttsBusy`, `pendingStatusText`, `speakCooldownUntil` 흐름은 개선되어 있으나 실기에서 중복 발화와 UI 깜빡임 재확인 필요
-   - 질문 직후 periodic 안내 억제(`suppressPeriodicUntil`) 동작 검증 필요
+   - 중복 발화와 UI 깜빡임 재확인 필요
 
 3. 서버 비동기 저장 검증
    - `/detect`는 DB 저장을 enqueue합니다. 대시보드/이력 조회에서 writer queue 지연과 drop count 확인 필요
@@ -191,10 +198,13 @@ python test_simulation.py
    - Android에는 `sendDetectionsJson()` 구형 경로 함수가 남아 있습니다.
    - 현재 주 경로인 `/detect`만 유지할지, 외부 테스트/호환을 위해 계속 둘지 결정해야 합니다.
 
-6. 대시보드/이력 API 정리
+6. 대시보드 통계/시연 흐름 정리
    - SSE `/events/{session_id}`
    - `/team-locations`
-   - `/history/{session_id}` 및 `/routes/{session_id}`는 아직 라우터에 없으므로 구현하거나 문서에서 제외 유지
+   - `/history/{session_id}`
+   - `/routes/{session_id}`
+   - `/dashboard/summary`
+   - 데모 영상에서는 Android 클라이언트 세션과 대시보드 세션별 통계가 매칭되는 장면을 보여줘야 함
 
 ### 낮음
 
