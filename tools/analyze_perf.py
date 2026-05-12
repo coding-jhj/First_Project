@@ -298,38 +298,110 @@ def chart_stats_table(stats: pd.DataFrame, df: pd.DataFrame, out: Path):
     plt.close(fig)
     print(f"  저장: {fpath}")
 
+# ── PPT 헤드라인 카드 ─────────────────────────────────────────────────────────
+def chart_headline(df: pd.DataFrame, out: Path):
+    """PPT 한 장 삽입용 핵심 수치 카드 (1920×1080)."""
+    e2e_mean  = df["e2e"].mean()
+    infer_mean = df["infer"].mean()
+    fps       = 1000 / e2e_mean
+    p95       = df["e2e"].quantile(0.95)
+    n         = len(df)
+
+    fig = plt.figure(figsize=(FIG_W, FIG_H), dpi=DPI, facecolor="#0F2B4C")
+    cards = [
+        (f"{e2e_mean:.1f} ms",  "E2E 평균 지연",       C_E2E),
+        (f"{infer_mean:.1f} ms","YOLO 추론 평균",       C_INFER),
+        (f"{fps:.1f} fps",      "추정 FPS",             C_TOT),
+        (f"{p95:.0f} ms",       "E2E P95",              C_OH),
+    ]
+    for i, (val, label, color) in enumerate(cards):
+        ax = fig.add_axes([0.04 + i * 0.245, 0.18, 0.21, 0.60])
+        ax.set_facecolor(color)
+        ax.axis("off")
+        ax.text(0.5, 0.62, val,   transform=ax.transAxes,
+                ha="center", va="center", fontsize=48, fontweight="bold",
+                color="white")
+        ax.text(0.5, 0.28, label, transform=ax.transAxes,
+                ha="center", va="center", fontsize=18, color="white", alpha=0.9)
+
+    fig.text(0.5, 0.90,
+             f"VoiceGuide  실측 성능  —  {df['model'].iloc[0]}  /  {df['provider'].iloc[0]}",
+             ha="center", fontsize=22, fontweight="bold", color="white")
+    fig.text(0.5, 0.10,
+             f"샘플 {n}프레임  |  Samsung SM-F936N  |  TFLite-XNNPACK",
+             ha="center", fontsize=14, color="#AAAAAA")
+
+    fpath = out / "00_headline.png"
+    fig.savefig(fpath, dpi=DPI, bbox_inches="tight", facecolor="#0F2B4C")
+    plt.close(fig)
+    print(f"  saved: {fpath}")
+
+
 # ── 메인 ──────────────────────────────────────────────────────────────────────
+# 사용법
+#   기본 (perf_log.txt 자동 탐색):  python tools/analyze_perf.py
+#   파일 지정:                       python tools/analyze_perf.py path/to/log.txt
+#   출력 폴더 지정:                   python tools/analyze_perf.py log.txt --out my_report
+
 def main():
-    parser = argparse.ArgumentParser(description="VG_PERF 로그 분석 → PPT 차트 생성")
-    parser.add_argument("log_file", help="adb logcat으로 수집한 .txt 파일 경로")
+    # 프로젝트 루트의 perf_log.txt 를 기본값으로 사용
+    default_log = Path(__file__).parent.parent / "perf_log.txt"
+
+    parser = argparse.ArgumentParser(
+        description="VG_PERF 로그 분석 -> PPT 차트 생성",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+로그 수집 방법 (Android Studio Logcat 또는 adb):
+  adb logcat -s VG_PERF > perf_log.txt
+
+생성 파일:
+  perf_report/00_headline.png       PPT 핵심 수치 카드
+  perf_report/01_pipeline_breakdown.png  단계별 소요시간
+  perf_report/02_e2e_histogram.png  E2E 지연 분포
+  perf_report/03_timeline.png       프레임별 타임라인
+  perf_report/04_stats_table.png    통계 요약 테이블
+  perf_report/summary_stats.csv     수치 원본
+""",
+    )
+    parser.add_argument(
+        "log_file", nargs="?", default=str(default_log),
+        help=f"로그 txt 파일 경로 (기본: {default_log})",
+    )
     parser.add_argument("--out", default="perf_report", help="출력 폴더 (기본: perf_report)")
     args = parser.parse_args()
+
+    log_path = Path(args.log_file)
+    if not log_path.exists():
+        print(f"[ERROR] 파일을 찾을 수 없습니다: {log_path}")
+        print("  -> perf_log.txt 를 프로젝트 루트에 두거나 경로를 직접 지정하세요.")
+        sys.exit(1)
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n[1/5] 로그 파싱: {args.log_file}")
-    df = parse_log(args.log_file)
+    print(f"\n[1/5] log parsing: {log_path}")
+    df = parse_log(str(log_path))
     if df.empty:
-        print("❌ VG_PERF 라인을 찾을 수 없습니다.")
+        print("[ERROR] VG_PERF 라인을 찾을 수 없습니다.")
         sys.exit(1)
-    print(f"  → {len(df)}개 프레임 파싱 완료")
+    print(f"  -> {len(df)} frames parsed")
 
-    print("\n[2/5] 통계 계산")
+    print("\n[2/5] stats")
     stats = compute_stats(df)
     csv_path = out / "summary_stats.csv"
     stats.to_csv(csv_path, encoding="utf-8-sig")
-    print(f"  저장: {csv_path}")
+    print(f"  saved: {csv_path}")
     print(stats.to_string())
 
-    print("\n[3/5] 차트 생성")
+    print("\n[3/5] charts")
+    chart_headline(df, out)
     chart_breakdown(df, out)
     chart_histogram(df, out)
     chart_timeline(df, out)
     chart_stats_table(stats, df, out)
 
-    print(f"\n[완료] 출력 폴더: {out.resolve()}")
-    print(f"   FPS 추정: {1000 / df['e2e'].mean():.1f} fps (e2e 평균 기준)")
+    print(f"\n[done] output: {out.resolve()}")
+    print(f"  FPS: {1000 / df['e2e'].mean():.1f} fps  |  e2e mean: {df['e2e'].mean():.1f} ms")
 
 if __name__ == "__main__":
     main()
