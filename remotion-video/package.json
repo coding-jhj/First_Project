@@ -1,0 +1,21 @@
+{
+  "name": "voiceguide-remotion-demo",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts VoiceGuideDemo out/voiceguide-demo.mp4",
+    "preview": "remotion preview src/index.ts"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.459",
+    "remotion": "^4.0.459",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.1.9",
+    "typescript": "^5.9.2"
+  }
+}

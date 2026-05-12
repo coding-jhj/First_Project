@@ -69,6 +69,13 @@ android/local.properties
 서버_DB_수정/dict[str
 서버_DB_수정/RoadGlass
 
+# remotion-video 렌더링 산출물 (용량 큼 — 별도 공유)
+remotion-video/out/
+remotion-video/debug-frames/
+remotion-video/source-check/
+remotion-video/node_modules/
+remotion-video/public/assets/demo.mp4
+
 # vision_ML/ (Phase 4 Vision·ML 작업 트리 — 중첩 빌드·로컬 설정)
 vision_ML/android/app/build/
 vision_ML/android/.gradle/
