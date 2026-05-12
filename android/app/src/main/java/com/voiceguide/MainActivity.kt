@@ -1150,7 +1150,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
 
             val requestId = nextRequestId()
             Log.d("VG_FLOW", "request_id=$requestId route=$route mode=$currentMode stream=${imageProxy.width}x${imageProxy.height} format=${imageProxy.format} rotation=${imageProxy.imageInfo.rotationDegrees}")
-            if (route == "on_device") processOnDevice(imageProxy, requestId)
+            if (route == "on_device") processOnDevice(imageProxy, requestId, tFrameArrival = now)
             else {
                 handleFail()
             }
@@ -1268,8 +1268,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         processOnDeviceInternal(imageFile, null, requestId, 0L, overrideMode)
     }
 
-    private fun processOnDevice(imageProxy: ImageProxy, requestId: String, overrideMode: String? = null) {
-        processOnDeviceInternal(null, imageProxy, requestId, 0L, overrideMode)
+    private fun processOnDevice(imageProxy: ImageProxy, requestId: String, overrideMode: String? = null, tFrameArrival: Long = 0L) {
+        processOnDeviceInternal(null, imageProxy, requestId, 0L, overrideMode, tFrameArrival)
     }
 
     private fun processOnDeviceInternal(
@@ -1277,7 +1277,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         imageProxy: ImageProxy?,
         requestId: String,
         initialPreprocessMs: Long,
-        overrideMode: String? = null
+        overrideMode: String? = null,
+        tFrameArrival: Long = 0L
     ) {
         val work = Runnable {
             var bmp: android.graphics.Bitmap? = null
@@ -1336,9 +1337,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 val dedupMs = detectorResult.postprocessMs + mvpMs
 
                 val totalMs = preprocessMs + inferMs + dedupMs
+                val e2eMs = if (tFrameArrival > 0L) System.currentTimeMillis() - tFrameArrival else -1L
                 // 구조화 성능 로그 — Logcat에서 tag:VG_PERF 로 필터
                 android.util.Log.d("VG_PERF",
-                    "request_id|$requestId|route|on_device|model|${detector.modelName}|provider|${detector.executionProvider}|preprocess|$preprocessMs|infer|$inferMs|postprocess|$dedupMs|mvp|${if (shouldRunMvp) "run" else "skip"}|total|$totalMs|objs|${voted.size}")
+                    "request_id|$requestId|route|on_device|model|${detector.modelName}|provider|${detector.executionProvider}|preprocess|$preprocessMs|infer|$inferMs|postprocess|$dedupMs|mvp|${if (shouldRunMvp) "run" else "skip"}|total|$totalMs|e2e|$e2eMs|objs|${voted.size}")
 
                 // FPS < 10 이면 경고 로그
                 val estimatedFps = if (totalMs > 0) 1000f / totalMs else 0f
