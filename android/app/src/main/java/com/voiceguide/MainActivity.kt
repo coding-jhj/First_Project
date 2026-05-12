@@ -271,6 +271,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     @Volatile private var currentMode = "장애물"  // 현재 활성 모드
     @Volatile private var findTarget  = ""        // 찾기 모드에서 탐색할 물체 이름
     private var sttStartTime = 0L                 // STT 시작 시각 (지연 측정용)
+    @Volatile private var waitingBusNumber: String = ""  // 버스 대기 모드에서 기다리는 버스 번호
 
     // ── 조도 센서 (빛 감지) ────────────────────────────────────────────
     @Volatile private var lastLux = 100f  // 이전 프레임 밝기 (lux 단위)
@@ -1932,6 +1933,29 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 }
                 locationPermissionCallback = null
             }
+        }
+    }
+
+    private fun startBusWaiting(text: String) {
+        val number = text.replace("버스대기", "").replace("번", "").trim()
+        waitingBusNumber = number
+        if (number.isEmpty()) {
+            speak("몇 번 버스를 기다릴까요?")
+        } else {
+            speak("${number}번 버스를 기다릴게요. 버스가 보이면 알려드릴게요.")
+        }
+    }
+
+    private fun scheduleMedicineReminder(text: String) {
+        speak("약 알림 기능은 현재 준비 중이에요.")
+    }
+
+    private fun checkBusArrival(detections: List<Detection>) {
+        if (waitingBusNumber.isEmpty()) return
+        val busDetected = detections.any { it.classKo == "버스" || it.classKo == "bus" }
+        if (busDetected) {
+            speak("버스가 왔어요! ${waitingBusNumber}번 버스인지 확인해 주세요.")
+            waitingBusNumber = ""
         }
     }
 }
