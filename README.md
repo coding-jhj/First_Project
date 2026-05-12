@@ -78,12 +78,12 @@ uvicorn src.api.main:app --host 0.0.0.0 --port 8000
 
 ### 배포된 서버
 
-```
-https://voiceguide-1063164560758.asia-northeast3.run.app
+**대시보드:** https://voiceguide-1063164560758.asia-northeast3.run.app/dashboard
 
-GET  /           →  /dashboard 리다이렉트
-GET  /health     →  서버 + DB 상태 확인
+```
 GET  /dashboard  →  실시간 대시보드
+GET  /health     →  서버 + DB 상태 확인
+GET  /           →  /dashboard 리다이렉트
 ```
 
 ---
