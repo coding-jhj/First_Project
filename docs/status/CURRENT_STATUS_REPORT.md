@@ -64,7 +64,7 @@ VoiceGuide는 서버 추론형 구조에서 온디바이스 우선 구조로 정
 | `snapshots` | session별 최근 공간 상태 |
 | `gps_history` | 현재 이동 경로 좌표 |
 | `recent_detections` | `/detect_json` 호환 보조 |
-| `saved_locations` | DB 헬퍼는 존재하나 현재 라우터에는 `/locations` 엔드포인트 없음 |
+| `saved_locations` | `/locations/save`, `/locations`, `/locations/find/{label}`, `/locations/{label}` DELETE 라우터 구현 완료 |
 
 현재 코드 기준으로 `/history/{session_id}`, `/routes/{session_id}`, `/gps/route/save`, `/dashboard/summary`가 구현되어 있습니다.
 
@@ -190,9 +190,10 @@ python test_simulation.py
 
 ### 중간
 
-4. `/locations` 서버 라우트 정리
-   - `db.py`에는 `save_location/get_locations/find_location/delete_location`가 있으나 `routes.py`에는 노출되지 않습니다.
-   - Android가 현재 `SharedPreferences`를 쓰므로, 서버 동기화를 할지 제거할지 결정해야 합니다.
+4. `/locations` 서버 라우트 ✅ 완료
+   - `POST /locations/save`, `GET /locations`, `GET /locations/find/{label}`, `DELETE /locations/{label}` 구현 완료.
+   - Android `SharedPreferences`와 병행 사용 가능 (서버 동기화 선택적).
+   - 모든 응답에 `sentence` 필드 포함 → TTS 바로 읽기 가능.
 
 5. `/detect_json` 경로 정리
    - Android에는 `sendDetectionsJson()` 구형 경로 함수가 남아 있습니다.

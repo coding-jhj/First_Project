@@ -505,7 +505,7 @@ def save_detection_event(
     lng: float | None = None,
 ) -> None:
     """온디바이스 탐지 결과 이벤트와 개별 객체 행을 함께 저장한다."""
-    ts = datetime.now(timezone.utc).isoformat()
+    ts = datetime.now().isoformat()
     objects_json = json.dumps(objects, ensure_ascii=False)
     hazards_json = json.dumps(hazards, ensure_ascii=False)
     scene_json = json.dumps(scene, ensure_ascii=False)
@@ -626,7 +626,7 @@ def get_latest_detection_event(session_id: str) -> dict | None:
 
 
 def save_snapshot(space_id: str, objects: list[dict]):
-    ts  = datetime.now(timezone.utc).isoformat()          # ISO 8601 형식 타임스탬프
+    ts  = datetime.now().isoformat()          # ISO 8601 형식 타임스탬프
     obj = json.dumps(objects, ensure_ascii=False)  # 한국어 유지하여 JSON 직렬화
     with _conn() as conn:
         if _IS_POSTGRES:
@@ -655,7 +655,7 @@ def save_snapshot(space_id: str, objects: list[dict]):
 # ── 개인 장소 저장 ────────────────────────────────────────────────────────────
 
 def save_location(label: str, wifi_ssid: str):
-    ts = datetime.now(timezone.utc).isoformat()
+    ts = datetime.now().isoformat()
     with _conn() as conn:
         if _IS_POSTGRES:
             with conn.cursor() as cur:
@@ -730,7 +730,7 @@ def find_location(label: str) -> dict | None:
 # ── GPS 위치 이력 ─────────────────────────────────────────────────────────────
 
 def save_gps(session_id: str, lat: float, lng: float):
-    ts = datetime.now(timezone.utc).isoformat()
+    ts = datetime.now().isoformat()
     with _conn() as conn:
         if _IS_POSTGRES:
             with conn.cursor() as cur:
@@ -847,7 +847,7 @@ def save_detections(
     """폰에서 온 탐지 결과 리스트를 DB에 저장."""
     if not detections:
         return
-    ts = datetime.now(timezone.utc).isoformat()
+    ts = datetime.now().isoformat()
     with _conn() as conn:
         if _IS_POSTGRES:
             rows = [
@@ -1010,7 +1010,7 @@ def get_history_24h(session_id: str, limit: int = 50) -> dict:
         else:
             # SQLite: Python으로 24시간 전 시점을 계산해 ISO 문자열 비교
             from datetime import timedelta
-            cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+            cutoff = (datetime.now() - timedelta(hours=24)).isoformat()
             rows = conn.execute(
                 "SELECT event_id, timestamp, objects_json "
                 "FROM detection_events "
@@ -1068,7 +1068,7 @@ def save_performance_metric(
     object_count: int,
 ) -> None:
     """Android 전송 성능 데이터 + 서버 계산 성능을 performance_metrics 테이블에 저장."""
-    ts = datetime.now(timezone.utc).isoformat()
+    ts = datetime.now().isoformat()
     row = (
         session_id,
         device_id or "",
@@ -1128,7 +1128,7 @@ def save_alert_decision(
     spoken_sentence: str,
 ) -> None:
     """경고 결정 내역(alert_mode + 이유)을 alert_decisions 테이블에 저장."""
-    ts = datetime.now(timezone.utc).isoformat()
+    ts = datetime.now().isoformat()
     top = objects[0] if objects else {}
     row = (
         event_id,
@@ -1198,7 +1198,7 @@ def get_heatmap_data(session_id: str, hours: int = 24) -> list[dict]:
                 points.append({"lat": row["lat"], "lng": row["lng"], "intensity": intensity})
         else:
             from datetime import timedelta
-            cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+            cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
             rows = conn.execute(
                 "SELECT lat, lng, objects_json FROM detection_events "
                 "WHERE session_id = ? AND lat IS NOT NULL AND lng IS NOT NULL "
@@ -1251,7 +1251,7 @@ def get_dashboard_summary_24h(limit: int = 200) -> dict:
                 rows = cur.fetchall()
         else:
             from datetime import timedelta
-            cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+            cutoff = (datetime.now() - timedelta(hours=24)).isoformat()
             rows = conn.execute(
                 "SELECT session_id, timestamp, objects_json "
                 "FROM detection_events "

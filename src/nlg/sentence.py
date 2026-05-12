@@ -295,7 +295,7 @@ def build_question_sentence(
     """
     parts = []
 
-   # 1. 위험물 긴급 경고
+    # 1. 위험물 긴급 경고
     if scene.get("danger_warning"):
         parts.append(scene["danger_warning"])
 

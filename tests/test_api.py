@@ -192,3 +192,49 @@ def test_protected_status_requires_api_key(monkeypatch):
 
     ok = client.get("/status/test_ssid", headers={"X-API-Key": "test-secret"})
     assert ok.status_code == 200  # 올바른 키로 통과
+
+
+# ── /locations 엔드포인트 테스트 ──────────────────────────────────────────────
+def test_locations_save_and_list():
+    """장소 저장 후 목록 조회 — sentence 필드 포함 확인."""
+    # 저장
+    r = client.post("/locations/save", json={"label": "테스트카페", "wifi_ssid": "CafeWifi"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["saved"] is True
+    assert "sentence" in body
+    assert "테스트카페" in body["sentence"]
+
+    # 목록 조회
+    r2 = client.get("/locations")
+    assert r2.status_code == 200
+    locs = r2.json()
+    assert "locations" in locs
+    assert "sentence" in locs
+    labels = [loc["label"] for loc in locs["locations"]]
+    assert "테스트카페" in labels
+
+
+def test_locations_find():
+    """장소 검색 — 부분 일치 확인."""
+    client.post("/locations/save", json={"label": "집앞편의점", "wifi_ssid": "ConvWifi"})
+    r = client.get("/locations/find/편의점")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["found"] is True
+    assert "sentence" in body
+
+
+def test_locations_save_empty_label():
+    """빈 label 저장 시 saved=False 반환."""
+    r = client.post("/locations/save", json={"label": "", "wifi_ssid": "SomeWifi"})
+    assert r.status_code == 200
+    assert r.json()["saved"] is False
+
+
+def test_locations_delete():
+    """장소 삭제 — deleted=True 반환."""
+    client.post("/locations/save", json={"label": "삭제테스트", "wifi_ssid": "DelWifi"})
+    r = client.delete("/locations/삭제테스트")
+    assert r.status_code == 200
+    assert r.json()["deleted"] is True

@@ -740,3 +740,132 @@ async def dashboard():
 async def save_space_snapshot(body: dict):
     db.save_snapshot(body.get("space_id", ""), body.get("objects", []))
     return {"saved": True}
+
+# ── 장소 저장 / 조회 / 검색 / 삭제 ──────────────────────────────────────────
+# Android 앱이 SharedPreferences 외에 서버에도 장소를 동기화할 수 있도록 제공.
+# db.py에 save_location / get_locations / find_location / delete_location 완비.
+@router.post("/locations/save", dependencies=[Depends(_verify_api_key)])
+async def save_location(body: dict):
+    """장소 저장: {"label": "집", "wifi_ssid": "HomeWifi"}"""
+    label    = (body.get("label") or "").strip()
+    wifi_ssid = (body.get("wifi_ssid") or "").strip()
+    if not label:
+        return {
+            "saved": False,
+            "sentence": "저장할 장소 이름이 없어요.",
+            "label": label,
+        }
+    db.save_location(label, wifi_ssid)
+    ig = _i_ga(label)
+    return {
+        "saved": True,
+        "sentence": f"{label}{ig} 저장됐어요.",
+        "label": label,
+        "wifi_ssid": wifi_ssid,
+    }
+
+@router.get("/locations", dependencies=[Depends(_verify_api_key)])
+async def list_locations(wifi_ssid: str = ""):
+    """저장된 장소 목록 조회. wifi_ssid 파라미터로 필터링 가능."""
+    locations = db.get_locations(wifi_ssid=wifi_ssid)
+    if not locations:
+        sentence = "저장된 장소가 없어요."
+    else:
+        names = ", ".join(loc["label"] for loc in locations[:5])
+        suffix = f" 외 {len(locations) - 5}곳" if len(locations) > 5 else ""
+        sentence = f"저장된 장소는 {names}{suffix} 이에요."
+    return {"locations": locations, "sentence": sentence}
+
+@router.get("/locations/find/{label}", dependencies=[Depends(_verify_api_key)])
+async def find_location(label: str):
+    """장소 검색: label 부분 일치 검색."""
+    result = db.find_location(label)
+    if result:
+        ig = _i_ga(label)
+        return {
+            "found": True,
+            "location": result,
+            "sentence": f"{label}{ig} 저장돼 있어요.",
+        }
+    ig = _i_ga(label)
+    return {
+        "found": False,
+        "location": None,
+        "sentence": f"{label}{ig} 저장된 장소에 없어요.",
+    }
+
+@router.delete("/locations/{label}", dependencies=[Depends(_verify_api_key)])
+async def delete_location(label: str):
+    """저장된 장소 삭제."""
+    db.delete_location(label)
+    from src.nlg.sentence import _i_ga as _ig
+    return {
+        "deleted": True,
+        "sentence": f"{label}을(를) 삭제했어요.",
+        "label": label,
+    }
+
+
+# ── 장소 저장 / 조회 / 검색 / 삭제 ──────────────────────────────────────────
+# Android 앱이 SharedPreferences 외에 서버에도 장소를 동기화할 수 있도록 제공.
+# db.py에 save_location / get_locations / find_location / delete_location 완비.
+@router.post("/locations/save", dependencies=[Depends(_verify_api_key)])
+async def save_location_endpoint(body: dict):
+    """장소 저장: {"label": "집", "wifi_ssid": "HomeWifi"}"""
+    label     = (body.get("label") or "").strip()
+    wifi_ssid = (body.get("wifi_ssid") or "").strip()
+    if not label:
+        return {
+            "saved": False,
+            "sentence": "저장할 장소 이름이 없어요.",
+            "label": label,
+        }
+    db.save_location(label, wifi_ssid)
+    ig = _i_ga(label)
+    return {
+        "saved": True,
+        "sentence": f"{label}{ig} 저장됐어요.",
+        "label": label,
+        "wifi_ssid": wifi_ssid,
+    }
+
+@router.get("/locations", dependencies=[Depends(_verify_api_key)])
+async def list_locations_endpoint(wifi_ssid: str = ""):
+    """저장된 장소 목록 조회. wifi_ssid 파라미터로 필터링 가능."""
+    locations = db.get_locations(wifi_ssid=wifi_ssid)
+    if not locations:
+        sentence = "저장된 장소가 없어요."
+    else:
+        names = ", ".join(loc["label"] for loc in locations[:5])
+        suffix = f" 외 {len(locations) - 5}곳" if len(locations) > 5 else ""
+        sentence = f"저장된 장소는 {names}{suffix} 이에요."
+    return {"locations": locations, "sentence": sentence}
+
+@router.get("/locations/find/{label}", dependencies=[Depends(_verify_api_key)])
+async def find_location_endpoint(label: str):
+    """장소 검색: label 부분 일치 검색."""
+    result = db.find_location(label)
+    if result:
+        ig = _i_ga(label)
+        return {
+            "found": True,
+            "location": result,
+            "sentence": f"{label}{ig} 저장돼 있어요.",
+        }
+    ig = _i_ga(label)
+    return {
+        "found": False,
+        "location": None,
+        "sentence": f"{label}{ig} 저장된 장소에 없어요.",
+    }
+
+@router.delete("/locations/{label}", dependencies=[Depends(_verify_api_key)])
+async def delete_location_endpoint(label: str):
+    """저장된 장소 삭제."""
+    db.delete_location(label)
+    eul_reul = "을" if (ord(label[-1]) - 0xAC00) % 28 != 0 else "를"
+    return {
+        "deleted": True,
+        "sentence": f"{label}{eul_reul} 삭제했어요.",
+        "label": label,
+    }

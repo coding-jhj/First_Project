@@ -288,6 +288,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
     private var fallCheckJob: java.util.Timer? = null
 
     // ── 약 복용 알림 ─────────────────────────────────────────────────────
+    // 약 복용 알림 타이머: 사용자가 "약 알림 설정해줘"라고 말하면 30분 후 알림
+    private var medicineReminderJob: java.util.Timer? = null
+    @Volatile private var medicineReminderMinutes = 30  // 기본 30분 후 알림
     // ── GPS 현재 위치 (서버 /detect 전송용) ──────────────────────────────────
     @Volatile private var currentLat = 0.0  // 현재 GPS 위도 (서버 /detect 전송용)
     @Volatile private var currentLng = 0.0  // 현재 GPS 경도
@@ -736,6 +739,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     speak("다시 시작할게요.")
                     handler.postDelayed({ requestPermissions() }, 800)
                 } else speak("이미 분석 중이에요.")
+            }
+            "버스대기" -> {
+                startBusWaiting(text)
+            }
+            "약알림" -> {
+                scheduleMedicineReminder(text)
             }
             "unknown" -> speak("다시 말씀해 주세요.")
             else -> {
@@ -1321,6 +1330,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     null
                 }
                 val voted = mvpFrame?.detections ?: rawDetections
+                // 버스 대기 모드: 탐지된 객체 중 버스가 있으면 알림
+                if (waitingBusNumber.isNotEmpty()) checkBusArrival(voted)
                 val mvpMs = if (shouldRunMvp) System.currentTimeMillis() - tMvp else 0L
                 val dedupMs = detectorResult.postprocessMs + mvpMs
 
