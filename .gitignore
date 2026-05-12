@@ -58,6 +58,9 @@ __tts_cache__/
 # SQLite DB (로컬 데이터)
 voiceguide.db
 
+# 원시 성능 로그 (분석 후 결과만 보존)
+perf_log.txt
+
 # Android 빌드 산출물
 android/app/build/
 android/.gradle/
