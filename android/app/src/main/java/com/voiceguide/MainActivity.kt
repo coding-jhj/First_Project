@@ -323,7 +323,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         private const val SILENCE_WARN_MS  = 6000L         // 6초 무응답 시 Watchdog 경고
         private const val FAIL_WARN_COUNT  = 3             // 연속 3회 실패 시 경고
         private const val GPS_SEND_INTERVAL_MS = 3000L     // 대시보드 위치 갱신 최소 간격
-        private const val MVP_UPDATE_INTERVAL_MS = 750L    // vote/debug/MVP/TTS/JSON 갱신 주기
+        private const val MVP_UPDATE_INTERVAL_MS = 750L    // vote/dedup/MVP/TTS/JSON 갱신 주기
         private const val SERVER_UPLOAD_INTERVAL_MS = 250L // 서버 JSON 최소 전송 간격
         private const val SERVER_FORCE_SEND_FRAMES = 5     // 변화가 없어도 N프레임마다 대시보드 갱신
         private const val SERVER_OBJECT_LIMIT = 5          // Android -> 서버 객체 수 상한
@@ -1325,7 +1325,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 val shouldRunMvp = shouldRunMvpUpdate(effectiveMode, overrideMode, now)
                 val tMvp = System.currentTimeMillis()
                 val mvpFrame = if (shouldRunMvp) {
-                    // YOLO postprocess(NMS)는 매 프레임, 안정화/vote/debug/MVP는 주기적으로만 수행한다.
+                    // YOLO postprocess(NMS)는 매 프레임, 안정화/vote/dedup/MVP는 주기적으로만 수행한다.
                     mvpPipeline.update(removeDuplicates(voteOnly(rawDetections)))
                 } else {
                     null
@@ -1334,13 +1334,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 // 버스 대기 모드: 탐지된 객체 중 버스가 있으면 알림
                 if (waitingBusNumber.isNotEmpty()) checkBusArrival(voted)
                 val mvpMs = if (shouldRunMvp) System.currentTimeMillis() - tMvp else 0L
-                val debugMs = detectorResult.postprocessMs + mvpMs
+                val dedupMs = detectorResult.postprocessMs + mvpMs
 
-                val totalMs = preprocessMs + inferMs + debugMs
+                val totalMs = preprocessMs + inferMs + dedupMs
                 val e2eMs = if (tFrameArrival > 0L) System.currentTimeMillis() - tFrameArrival else -1L
                 // 구조화 성능 로그 — Logcat에서 tag:VG_PERF 로 필터
                 android.util.Log.d("VG_PERF",
-                    "request_id|$requestId|route|on_device|model|${detector.modelName}|provider|${detector.executionProvider}|preprocess|$preprocessMs|infer|$inferMs|postprocess|$debugMs|mvp|${if (shouldRunMvp) "run" else "skip"}|total|$totalMs|e2e|$e2eMs|objs|${voted.size}")
+                    "request_id|$requestId|route|on_device|model|${detector.modelName}|provider|${detector.executionProvider}|preprocess|$preprocessMs|infer|$inferMs|postprocess|$dedupMs|mvp|${if (shouldRunMvp) "run" else "skip"}|total|$totalMs|e2e|$e2eMs|objs|${voted.size}")
 
                 // FPS < 10 이면 경고 로그
                 val estimatedFps = if (totalMs > 0) 1000f / totalMs else 0f
@@ -1362,7 +1362,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                                   "FPS    : ${fps}\n" +
                                   "전처리 : ${preprocessMs}ms\n" +
                                   "추론   : ${inferMs}ms\n" +
-                                  "후처리 : ${debugMs}ms\n" +
+                                  "후처리 : ${dedupMs}ms\n" +
                                   "전체   : ${totalMs}ms\n" +
                                   "탐지수 : raw=${rawDetections.size} → ${voted.size}"
                     }
@@ -1372,7 +1372,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 // imageFile은 finally에서 삭제 (catch의 서버 fallback이 먼저 파일 필요)
 
                 Log.d("VG_DETECT", "=== 탐지 결과 ===")
-                Log.d("VG_DETECT", "raw: ${rawDetections.size}개(yolo=${yoloDetections.size}) → debug: ${voted.size}개")
+                Log.d("VG_DETECT", "raw: ${rawDetections.size}개(yolo=${yoloDetections.size}) → dedup: ${voted.size}개")
                 voted.forEachIndexed { i, d ->
                     Log.d("VG_DETECT", "  [$i] ${d.classKo} | conf=${String.format("%.2f", d.confidence)} | cx=${String.format("%.2f", d.cx)} | w=${String.format("%.2f", d.w)} h=${String.format("%.2f", d.h)} | area=${String.format("%.3f", d.w * d.h)}")
                 }
@@ -1416,7 +1416,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         imgH = imgH,
                         decodeMs = preprocessMs,
                         inferMs = inferMs,
-                        debugMs = debugMs,
+                        dedupMs = dedupMs,
                         totalMs = totalMs,
                         fallbackSentence = "주변에 장애물이 없어요.",
                         fallbackAlertMode = "silent",
@@ -1450,16 +1450,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                         }
                         Log.d("VG_DETECT", "→ 음성 출력 (mode=$mode)")
                         performVibrationFeedback(stableMvpFrame.vibrationPattern)
-                        sendDetectionJsonToServer(voted, effectiveMode, requestId, imgW, imgH, preprocessMs, inferMs, debugMs, totalMs, sentence, mode)
+                        sendDetectionJsonToServer(voted, effectiveMode, requestId, imgW, imgH, preprocessMs, inferMs, dedupMs, totalMs, sentence, mode)
                     }
                     shouldBeep -> {
                         Log.d("VG_DETECT", "→ 비프음")
                         performVibrationFeedback(stableMvpFrame.vibrationPattern)
-                        sendDetectionJsonToServer(voted, effectiveMode, requestId, imgW, imgH, preprocessMs, inferMs, debugMs, totalMs, sentence, "beep")
+                        sendDetectionJsonToServer(voted, effectiveMode, requestId, imgW, imgH, preprocessMs, inferMs, dedupMs, totalMs, sentence, "beep")
                     }
                     else       -> {
                         Log.d("VG_DETECT", "→ 무음 (거리 멀거나 최근 안내 완료)")
-                        sendDetectionJsonToServer(voted, effectiveMode, requestId, imgW, imgH, preprocessMs, inferMs, debugMs, totalMs, sentence, "silent")
+                        sendDetectionJsonToServer(voted, effectiveMode, requestId, imgW, imgH, preprocessMs, inferMs, dedupMs, totalMs, sentence, "silent")
                     }
                 }
 
@@ -1482,7 +1482,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         imgH: Int,
         decodeMs: Long,
         inferMs: Long,
-        debugMs: Long,
+        dedupMs: Long,
         totalMs: Long,
         fallbackSentence: String,
         fallbackAlertMode: String,
@@ -1518,7 +1518,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                     imgH = imgH,
                     decodeMs = decodeMs,
                     inferMs = inferMs,
-                    debugMs = debugMs,
+                    dedupMs = dedupMs,
                     totalMs = totalMs,
                 )
             }.start()
@@ -1538,7 +1538,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
         imgH: Int,
         decodeMs: Long,
         inferMs: Long,
-        debugMs: Long,
+        dedupMs: Long,
         totalMs: Long,
     ) {
         try {
@@ -1580,7 +1580,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener, SensorEve
                 .put("client_perf", JSONObject()
                     .put("decode_ms", decodeMs)
                     .put("infer_ms", inferMs)
-                    .put("debug_ms", debugMs)
+                    .put("dedup_ms", dedupMs)
                     .put("total_ms", totalMs))
             if (hasValidLocation()) {
                 payload.put("lat", currentLat)
