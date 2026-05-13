@@ -86,6 +86,8 @@ GET  /health     →  서버 + DB 상태 확인
 GET  /           →  /dashboard 리다이렉트
 ```
 
+세션 ID를 입력하면 해당 기기의 탐지 현황 · 이동 경로 · 24시간 이벤트 내역을 실시간으로 확인합니다.
+
 ---
 
 ## Android 앱 실행
@@ -103,16 +105,6 @@ GET  /           →  /dashboard 리다이렉트
 cd android
 .\gradlew.bat assembleDebug
 ```
-
----
-
-## 대시보드
-
-```
-GET /dashboard
-```
-
-세션 ID를 입력하면 해당 기기의 탐지 현황 · 이동 경로 · 24시간 이벤트 내역을 실시간으로 확인합니다.
 
 ---
 
